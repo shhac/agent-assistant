@@ -1,0 +1,15 @@
+# Explicit model engines and effort
+
+Date: 2026-09-14. Status: implemented. Runtime checked: Codex CLI 0.154.0; Go dependency versions remained pinned in go.mod.
+
+The assistant and local worker broker gained separate `model` and `worker_model` profiles. Both fresh profiles defaulted to `codex / gpt-6-astra / high`. Profile fields included engine, exact model identifier, reasoning effort and Codex executable; the API engine also used provider URL, credential environment reference and output-token limit. Existing configuration without an explicit engine retained its API provider and billing path. Legacy workers retained their historical 4,096-token limit independently of the assistant's cap.
+
+Codex acted as an authenticated inference transport. Each invocation ran in an empty temporary workspace with built-in tools disabled, ignored user configuration and rules, and returned a schema-constrained action proposal. The existing Go loop remained responsible for validating and executing actions. The PA's tools remained coordination-only; a worker's file and command proposals went through the isolated Docker broker.
+
+Before inference, the adapter read the installed CLI's bundled model catalog and checked the exact model and supported effort. A local rejecting provider checked the actual request's model, effort and absence of native tools, using the same HOME/CODEX_HOME as inference. An incompatible CLI failed closed. The provider transport disabled automatic retries, and subprocess cancellation stopped its process group. Temporary output and diagnostics did not become public logs.
+
+The installed CLI still loaded global AGENTS instructions despite its project-instruction cap. A fixture exposed this behavior. The integration therefore rejected homes containing nonempty global AGENTS files before any inference and recommended a dedicated persistent CODEX_HOME with its own normal login. It did not copy credentials or risk losing rotated authentication tokens in a temporary home.
+
+Codex exposed no per-request output-token cap through this integration. Its process timeout and output-byte limit were distinct from the application's turn and call allowances. The API engine continued to send `max_completion_tokens` and, when selected, `reasoning_effort`. Astra's native API tool calls required Responses, so the default used Codex rather than the legacy Chat Completions adapter. See [official Astra guidance](https://developers.openai.com/api/docs/guides/latest-model) and [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+Verification used fake providers, synthetic persistent login data and fake streaming responses. It included the installed CLI's actual outbound request shape, retry suppression, malformed action rejection and cancellation. No paid model response or Tailscale route change was needed. The launch path kept local HTTP on 127.0.0.1:8340 and published private Tailscale HTTPS on port 8443 with the configured owner allowlist.

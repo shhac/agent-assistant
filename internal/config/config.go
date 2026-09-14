@@ -19,13 +19,14 @@ import (
 const DefaultAssistantName = "Milo"
 
 type Config struct {
-	Assistant Assistant `json:"assistant"`
-	Dashboard Dashboard `json:"dashboard"`
-	Model     Model     `json:"model"`
-	Slack     Slack     `json:"slack"`
-	Linear    Linear    `json:"linear"`
-	Limits    Limits    `json:"limits"`
-	Workers   []Worker  `json:"workers"`
+	Assistant   Assistant `json:"assistant"`
+	Dashboard   Dashboard `json:"dashboard"`
+	Model       Model     `json:"model"`
+	WorkerModel Model     `json:"worker_model"`
+	Slack       Slack     `json:"slack"`
+	Linear      Linear    `json:"linear"`
+	Limits      Limits    `json:"limits"`
+	Workers     []Worker  `json:"workers"`
 }
 type Assistant struct {
 	Name        string `json:"name"`
@@ -38,6 +39,9 @@ type Dashboard struct {
 	AllowedUsers  []string `json:"allowed_users"`
 }
 type Model struct {
+	Engine    string `json:"engine"`
+	Effort    string `json:"effort"`
+	CodexBin  string `json:"codex_bin"`
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`
@@ -75,13 +79,18 @@ type FilePaths struct {
 
 func Default() Config {
 	return Config{
-		Assistant: Assistant{Name: DefaultAssistantName, Personality: "Calm, concise and proactive. Bring clear recommendations and evidence; handle the chasing."},
-		Dashboard: Dashboard{Addr: "127.0.0.1:8340", Tailscale: "off", TailscalePort: 8443, AllowedUsers: []string{}},
-		Model:     Model{BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096},
-		Slack:     Slack{BotTokenEnv: "SLACK_BOT_TOKEN", AppTokenEnv: "SLACK_APP_TOKEN"},
-		Linear:    Linear{APIKeyEnv: "LINEAR_API_KEY", TeamIDs: []string{}},
-		Limits:    Limits{MaxModelCallsPerDay: 100, MaxModelTurns: 8, MaxAgents: 4, MaxDepth: 3, MaxRecoveries: 2, CheckInMinutes: 30}, Workers: []Worker{},
+		Assistant:   Assistant{Name: DefaultAssistantName, Personality: "Calm, concise and proactive. Bring clear recommendations and evidence; handle the chasing."},
+		Dashboard:   Dashboard{Addr: "127.0.0.1:8340", Tailscale: "off", TailscalePort: 8443, AllowedUsers: []string{}},
+		Model:       defaultModel(),
+		WorkerModel: defaultModel(),
+		Slack:       Slack{BotTokenEnv: "SLACK_BOT_TOKEN", AppTokenEnv: "SLACK_APP_TOKEN"},
+		Linear:      Linear{APIKeyEnv: "LINEAR_API_KEY", TeamIDs: []string{}},
+		Limits:      Limits{MaxModelCallsPerDay: 100, MaxModelTurns: 8, MaxAgents: 4, MaxDepth: 3, MaxRecoveries: 2, CheckInMinutes: 30}, Workers: []Worker{},
 	}
+}
+
+func defaultModel() Model {
+	return Model{Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
 }
 
 func Paths() (FilePaths, error) {
@@ -108,6 +117,25 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
+	// Existing API configurations must retain their provider and billing path.
+	var sections map[string]json.RawMessage
+	if err := json.Unmarshal(data, &sections); err != nil {
+		return c, fmt.Errorf("decode config: %w", err)
+	}
+	legacyModel := false
+	if raw, exists := sections["model"]; exists {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return c, fmt.Errorf("decode model config: %w", err)
+		}
+		_, explicitEngine := fields["engine"]
+		legacyModel = !explicitEngine
+		if legacyModel {
+			c.Model.Engine = "openai-compatible"
+			c.Model.Model = ""
+			c.Model.Effort = ""
+		}
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(&c); err != nil {
@@ -115,6 +143,10 @@ func Load(path string) (Config, error) {
 	}
 	if err = dec.Decode(new(any)); err != io.EOF {
 		return c, errors.New("config must contain one JSON object")
+	}
+	if _, exists := sections["worker_model"]; legacyModel && !exists {
+		c.WorkerModel = c.Model
+		c.WorkerModel.MaxTokens = 4096 // Historical worker flag default, independent of the PA cap.
 	}
 	return c, c.Validate()
 }
@@ -194,13 +226,16 @@ func (c Config) Validate() error {
 	if c.Limits.CheckInMinutes < 1 || c.Limits.CheckInMinutes > 1440 {
 		return errors.New("limits.check_in_minutes must be between 1 and 1440")
 	}
-	if c.Model.MaxTokens < 128 || c.Model.MaxTokens > 131072 {
-		return errors.New("model.max_tokens must be between 128 and 131072")
+	if err := c.Model.Validate(); err != nil {
+		return fmt.Errorf("model: %w", err)
 	}
-	if err = validateEndpoint(c.Model.BaseURL); err != nil {
-		return fmt.Errorf("model.base_url: %w", err)
+	if err := c.WorkerModel.Validate(); err != nil {
+		return fmt.Errorf("worker_model: %w", err)
 	}
-	envs := []string{c.Model.APIKeyEnv, c.Slack.BotTokenEnv, c.Slack.AppTokenEnv, c.Linear.APIKeyEnv}
+	if c.WorkerModel.MaxTokens > 32768 {
+		return errors.New("worker_model.max_tokens must not exceed the worker broker limit of 32768")
+	}
+	envs := []string{c.Model.APIKeyEnv, c.WorkerModel.APIKeyEnv, c.Slack.BotTokenEnv, c.Slack.AppTokenEnv, c.Linear.APIKeyEnv}
 	ids := map[string]bool{}
 	for _, w := range c.Workers {
 		if w.ID == "" || ids[w.ID] {
@@ -224,6 +259,30 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+// Validate checks configuration syntax. The selected engine checks provider model
+// capabilities before inference rather than guessing from model name prefixes.
+func (m Model) Validate() error {
+	if m.Engine != "codex" && m.Engine != "openai-compatible" {
+		return errors.New("engine must be codex or openai-compatible")
+	}
+	switch m.Effort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	default:
+		return errors.New("effort must be empty, none, minimal, low, medium, high, xhigh, max or ultra")
+	}
+	if m.Engine == "codex" && strings.TrimSpace(m.CodexBin) == "" {
+		return errors.New("codex_bin is required for the codex engine")
+	}
+	if m.MaxTokens < 128 || m.MaxTokens > 131072 {
+		return errors.New("max_tokens must be between 128 and 131072")
+	}
+	if err := validateEndpoint(m.BaseURL); err != nil {
+		return fmt.Errorf("base_url: %w", err)
+	}
+	return nil
+}
+
 func validateEndpoint(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {

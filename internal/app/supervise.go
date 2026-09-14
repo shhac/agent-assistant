@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shhac/agent-assistant/internal/config"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/shhac/agent-assistant/internal/core"
@@ -124,10 +126,10 @@ func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt strin
 		return engine.Result{}, fmt.Errorf("%w: handling another message", ErrAssistantBusy)
 	}
 	cfg := a.Config()
-	if cfg.Model.Model == "" || (cfg.Model.APIKeyEnv != "" && os.Getenv(cfg.Model.APIKeyEnv) == "") {
+	if !modelAvailable(cfg.Model) {
 		return engine.Result{}, fmt.Errorf("%w: model is not configured", ErrAssistantBusy)
 	}
-	e, err := engine.New(engine.Config{Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, scope)
 	if err != nil {
@@ -141,7 +143,7 @@ func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt strin
 }
 func (a *App) HandleAgentQuestion(ctx context.Context, agent core.Agent, d worker.Decision) error {
 	cfg := a.Config()
-	if cfg.Model.Model == "" || (cfg.Model.APIKeyEnv != "" && os.Getenv(cfg.Model.APIKeyEnv) == "") {
+	if !modelAvailable(cfg.Model) {
 		_, err := a.Core.CreateDecision(ctx, core.DecisionInput{ProjectID: agent.ProjectID, AgentID: agent.ID, Title: d.Question, Context: d.Why + evidenceText(d.Evidence) + "\nAutomatic resolution requires an available assistant model.", Recommendation: d.Recommendation, Choices: d.Options})
 		return err
 	}
@@ -209,4 +211,17 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 		err = a.Core.CompleteEvent(ctx, key)
 	}
 	return result, err
+}
+
+// Availability is a local preflight only; Codex owns its existing login and does
+// not need the API credential configured for the optional HTTP engine.
+func modelAvailable(m config.Model) bool {
+	if m.Model == "" {
+		return false
+	}
+	if m.Engine == "codex" {
+		_, err := exec.LookPath(m.CodexBin)
+		return err == nil
+	}
+	return m.APIKeyEnv == "" || os.Getenv(m.APIKeyEnv) != ""
 }

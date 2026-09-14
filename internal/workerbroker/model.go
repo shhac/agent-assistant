@@ -1,75 +1,37 @@
 package workerbroker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"time"
+
+	"github.com/shhac/agent-assistant/internal/engine"
 )
 
 func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMessage, error) {
-	body, _ := json.Marshal(map[string]any{"model": b.cfg.Model, "messages": messages, "tools": workerTools(), "parallel_tool_calls": false, "tool_choice": "required", "max_completion_tokens": b.cfg.MaxOutputTokens})
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, b.cfg.ModelEndpoint, bytes.NewReader(body))
+	message, _, err := engine.Complete(ctx, engine.Config{
+		Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin,
+		Endpoint: b.cfg.ModelEndpoint, Model: b.cfg.Model, APIKeyEnv: b.cfg.APIKeyEnv,
+		MaxOutputTokens: b.cfg.MaxOutputTokens, Timeout: 5 * time.Minute, HTTPClient: b.cfg.HTTPClient,
+	}, messages, workerTools())
 	if err != nil {
-		return modelMessage{}, errors.New("cannot create worker model request")
+		return modelMessage{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if b.cfg.APIKeyEnv != "" {
-		key := os.Getenv(b.cfg.APIKeyEnv)
-		if key == "" {
-			return modelMessage{}, errors.New("worker model credential is unavailable")
-		}
-		req.Header.Set("Authorization", "Bearer "+key)
+	seen, allowed := map[string]bool{}, map[string]bool{}
+	for _, tool := range workerTools() {
+		allowed[tool.Function.Name] = true
 	}
-	client := b.cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 90 * time.Second}
-	}
-	copyClient := *client
-	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := copyClient.Do(req)
-	if err != nil {
-		return modelMessage{}, errors.New("worker model request failed or timed out; usage is uncertain and the request was not retried")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return modelMessage{}, fmt.Errorf("worker model returned HTTP %d; request was not retried", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
-	if err != nil || len(raw) > 2*1024*1024 {
-		return modelMessage{}, errors.New("worker model response exceeded limit")
-	}
-	var result struct {
-		Choices []struct {
-			Message      modelMessage `json:"message"`
-			FinishReason string       `json:"finish_reason"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 || result.Choices[0].Message.Role != "assistant" {
-		return modelMessage{}, errors.New("invalid worker model response")
-	}
-	if result.Choices[0].FinishReason == "length" {
-		return modelMessage{}, errors.New("worker model output allowance exhausted; no partial action executed")
-	}
-	message := result.Choices[0].Message
-	seen := map[string]bool{}
 	for _, call := range message.ToolCalls {
-		if call.ID == "" || seen[call.ID] || call.Type != "function" || !json.Valid([]byte(call.Function.Arguments)) {
-			return modelMessage{}, errors.New("invalid worker tool call")
+		if call.ID == "" || seen[call.ID] || call.Type != "function" || !allowed[call.Function.Name] || !json.Valid([]byte(call.Function.Arguments)) {
+			return modelMessage{}, errors.New("invalid worker tool call; no action executed")
 		}
 		seen[call.ID] = true
 	}
 	return message, nil
 }
-func workerTools() []map[string]any {
-	return []map[string]any{
+func workerTools() []engine.Tool {
+	return []engine.Tool{
 		workerTool("read_file", "Read a relative text file inside the isolated workspace.", []string{"path"}, nil),
 		workerTool("write_file", "Write a relative text file inside the isolated workspace.", []string{"path", "content"}, nil),
 		workerTool("run_command", "Run an offline build, test or inspection command inside the isolated Docker container. Never install dependencies or contact remote services.", []string{"command"}, nil),
@@ -77,7 +39,7 @@ func workerTools() []map[string]any {
 		workerTool("finish", "Report an acceptance summary after actual changes and checks. The daemon collects patch and command evidence for independent PA review.", []string{"summary"}, nil),
 	}
 }
-func workerTool(name, description string, fields, arrays []string) map[string]any {
+func workerTool(name, description string, fields, arrays []string) engine.Tool {
 	props := map[string]any{}
 	required := []string{}
 	for _, field := range fields {
@@ -88,7 +50,7 @@ func workerTool(name, description string, fields, arrays []string) map[string]an
 		props[field] = map[string]any{"type": "array", "items": map[string]string{"type": "string"}}
 		required = append(required, field)
 	}
-	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": description, "strict": true, "parameters": map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}}}
+	return engine.Tool{Type: "function", Function: engine.Function{Name: name, Description: description, Strict: true, Parameters: map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}}}
 }
 
 // repairTranscript supplies uncertainty results for persisted calls interrupted

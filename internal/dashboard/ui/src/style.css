@@ -29,6 +29,7 @@ body {
 }
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -43,6 +44,7 @@ button:disabled {
 button,
 a,
 input,
+select,
 textarea {
   outline-offset: 4px;
 }
@@ -54,6 +56,7 @@ button {
   border: 0;
 }
 input,
+select,
 textarea {
   color: #edf0e9;
   background: #141a17;
@@ -64,6 +67,7 @@ textarea {
   line-height: 1.6;
 }
 input:focus,
+select:focus,
 textarea:focus {
   outline: 2px solid #738e65;
   outline-offset: 1px;
@@ -1980,9 +1984,13 @@ code {
   margin-top: 14px;
 }
 .config-field-group {
+  border: 0;
+  padding: 0;
+  min-width: 0;
   margin-top: 22px;
 }
-.config-field-group h3 {
+.config-field-group h3,
+.config-field-group legend {
   font-size: 12px;
   margin-bottom: 16px;
 }
@@ -1995,7 +2003,8 @@ code {
   display: block;
   margin-top: 6px;
 }
-.config-field-group input {
+.config-field-group input,
+.config-field-group select {
   font-size: 12px;
 }
 @media (max-width: 700px) {

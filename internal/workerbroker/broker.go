@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	"github.com/shhac/agent-assistant/internal/engine"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,22 +34,21 @@ type Broker struct {
 var pinned = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|[^\s]+@sha256:[a-f0-9]{64})$`)
 
 func New(cfg Config) (*Broker, error) {
-	if cfg.ProjectID == "" || cfg.StateDir == "" || cfg.Workspace == "" || cfg.Model == "" || cfg.ModelEndpoint == "" {
+	if cfg.ProjectID == "" || cfg.StateDir == "" || cfg.Workspace == "" || cfg.Model == "" {
 		return nil, errors.New("worker broker requires state directory, dedicated workspace, project ID, model and endpoint")
 	}
 	if !pinned.MatchString(cfg.Image) {
 		return nil, errors.New("worker image must be pinned as sha256:<digest> or repository@sha256:<digest>")
 	}
-	u, err := url.Parse(cfg.ModelEndpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("invalid worker model endpoint")
+	if _, err := engine.New(engine.Config{Engine: cfg.Engine, Effort: cfg.Effort, CodexBin: cfg.CodexBin, Endpoint: cfg.ModelEndpoint, Model: cfg.Model}, engine.ExecutorFunc(func(context.Context, string, json.RawMessage) (any, error) {
+		return nil, errors.New("worker initialization does not execute tools")
+	})); err != nil {
+		return nil, err
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")) {
-		return nil, errors.New("worker model endpoint requires HTTPS except on loopback")
-	}
-	if cfg.APIKeyEnv != "" && os.Getenv(cfg.APIKeyEnv) == "" {
+	if cfg.Engine != "codex" && cfg.APIKeyEnv != "" && os.Getenv(cfg.APIKeyEnv) == "" {
 		return nil, errors.New("worker model credential environment variable is not set")
 	}
+	var err error
 	if cfg.TokenEnv == "" || os.Getenv(cfg.TokenEnv) == "" {
 		return nil, errors.New("worker broker authentication token environment variable is required")
 	}
@@ -333,7 +332,7 @@ func (b *Broker) update(id string, fn func(*storedRun) error) error {
 	return nil
 }
 func (b *Broker) Info() map[string]any {
-	return map[string]any{"project_id": b.cfg.ProjectID, "image": b.cfg.Image, "workspace": b.cfg.Workspace, "capabilities": []string{"implement", "review"}, "manager": false, "network": "none"}
+	return map[string]any{"engine": b.cfg.Engine, "model": b.cfg.Model, "effort": b.cfg.Effort, "project_id": b.cfg.ProjectID, "image": b.cfg.Image, "workspace": b.cfg.Workspace, "capabilities": []string{"implement", "review"}, "manager": false, "network": "none"}
 }
 func (b *Broker) terminal(id, status, summary string, evidence []string) {
 	_ = b.update(id, func(r *storedRun) error {

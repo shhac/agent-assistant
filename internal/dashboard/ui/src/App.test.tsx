@@ -247,6 +247,75 @@ describe("owner dashboard flows", () => {
     expect(saved.workers[0].capabilities).not.toContain("coordinate");
     expect(saved.workers[0].api_key_env).toBe("WORKER_TOKEN");
   });
+  it("saves independent engine and effort profiles without changing provider credentials", async () => {
+    const model = {
+      engine: "codex",
+      model: "gpt-6-astra",
+      effort: "high",
+      codex_bin: "codex",
+      base_url: "https://api.example.test/v1",
+      api_key_env: "PA_KEY",
+      max_tokens: 4096,
+    };
+    const config = {
+      assistant: state.assistant,
+      model,
+      worker_model: { ...model, api_key_env: "WORKER_KEY" },
+    };
+    respond = (path) => ({ body: path === "/api/config" ? config : state });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
+    expect(await screen.findByLabelText("Assistant engine")).toHaveProperty(
+      "value",
+      "codex",
+    );
+    expect(screen.getByLabelText("Assistant model identifier")).toHaveProperty(
+      "value",
+      "gpt-6-astra",
+    );
+    expect(screen.getByLabelText(/^Assistant reasoning effort/)).toHaveProperty(
+      "value",
+      "high",
+    );
+    expect(
+      screen.queryByLabelText(/^Assistant maximum output tokens per call/),
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText("Worker engine"), {
+      target: { value: "openai-compatible" },
+    });
+    fireEvent.change(screen.getByLabelText("Worker model identifier"), {
+      target: { value: "provider-model" },
+    });
+    fireEvent.change(screen.getByLabelText(/^Worker reasoning effort/), {
+      target: { value: "low" },
+    });
+    expect(
+      screen.getByLabelText(/^Worker API key environment variable/),
+    ).toHaveProperty("value", "WORKER_KEY");
+    expect(
+      screen.getByLabelText(/^Worker maximum output tokens per call/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.path === "/api/config" && c.options?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const saved = JSON.parse(
+      calls.find(
+        (c) => c.path === "/api/config" && c.options?.method === "PUT",
+      )!.options!.body as string,
+    );
+    expect(saved.model).toEqual(model);
+    expect(saved.worker_model).toEqual({
+      ...config.worker_model,
+      engine: "openai-compatible",
+      model: "provider-model",
+      effort: "low",
+    });
+  });
   it("requires an inspection note, preserves it after failure, and never retries interrupted work", async () => {
     state.pending_operations = [
       {

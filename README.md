@@ -4,7 +4,7 @@ A personal AI assistant that remembers context, coordinates project agents, foll
 
 ## Run it
 
-Requires Go 1.26.4 or newer. Node is only needed when developing or rebuilding the dashboard; its compiled assets are included in the repository.
+Building requires Go 1.26.4 or newer. `make build` writes the gitignored `./agent-assistant` binary. Node is only needed when developing or rebuilding the dashboard; its compiled assets are included in the repository. The default model engine requires a compatible Codex CLI installed and logged in on the daemon host.
 
 ```sh
 make build
@@ -16,15 +16,36 @@ Demo mode uses fictional data and disables external integrations. Without an exp
 For your own assistant:
 
 ```sh
+export CODEX_HOME="$HOME/.local/state/agent-assistant/codex"
+codex login
 ./agent-assistant init
 ./agent-assistant config set assistant.name Quill
-./agent-assistant config set model.model '<provider-model-id>'
-# Set OPENAI_API_KEY in the daemon environment, or change model.api_key_env.
+# Fresh configuration defaults to codex / gpt-6-astra / high.
 ./agent-assistant doctor
 ./agent-assistant serve --open
 ```
 
-The model endpoint is configurable and uses the OpenAI-compatible Chat Completions tool-calling protocol. A local model can use a loopback HTTP endpoint; remote endpoints require HTTPS. Choose a model that supports function tools and strict schemas. No model identifier is silently chosen for you.
+Choose engine, model and reasoning effort in **Settings → Model and connection setup**, independently for the assistant (`model`) and local coding workers (`worker_model`). Both fresh profiles default to `codex / gpt-6-astra / high`.
+
+```sh
+./agent-assistant config set model.engine codex
+./agent-assistant config set model.model gpt-6-astra
+./agent-assistant config set model.effort high
+# Worker settings are independent:
+./agent-assistant config set worker_model.engine codex
+./agent-assistant config set worker_model.model gpt-6-astra
+./agent-assistant config set worker_model.effort high
+```
+
+The `codex` engine uses the configured `codex_bin` and the saved login in the daemon's `CODEX_HOME`. Use a dedicated persistent Codex home as shown above. Keep the same environment when launching the daemon and local worker broker. Codex proposes structured actions with its built-in tools disabled; the Go daemon authorizes and executes the allowed coordination tools. Local coding workers use the same model transport but send their file and command actions through the isolated Docker broker. Account access and usage limits still apply.
+
+Codex currently loads global `AGENTS.md` / `AGENTS.override.md` even when project instructions are disabled. The adapter refuses a Codex home containing nonempty global instruction files before inference. It leaves your usual Codex setup untouched; the dedicated home isolates the PA without weakening its tool boundaries.
+
+The `openai-compatible` engine uses Chat Completions with `reasoning_effort`. Configure `base_url`, `api_key_env` and an exact provider model that supports function tools and strict schemas. Remote endpoints require HTTPS; loopback HTTP is allowed for local providers. Astra's native API tool calling requires Responses, so use the Codex engine for this default. Unsupported selections fail rather than silently substituting another model.
+
+Reasoning effort is separate from execution limits. API engines enforce `max_tokens` through `max_completion_tokens`. Codex does not expose a per-request output-token cap here; process time/output bounds and the daemon's model-turn/call limits apply instead. The selected Codex home's saved login selects the account used for inference; API credential references are not required for this engine. This integration never copies login tokens between homes.
+
+Existing configuration with a `model` section but no `engine` keeps the previous API engine and provider. A missing `worker_model` in that legacy configuration inherits its previous assistant API profile once on load. To switch an existing setup, set the engine/model/effort explicitly using the commands above. Changes to the assistant profile apply to subsequent requests; restart a running worker broker to use its changed profile.
 
 Configuration defaults to `~/.config/agent-assistant/config.json`; state defaults to `~/.local/state/agent-assistant/state.db`. XDG overrides and explicit `--config` / `--state` flags are supported. Configuration contains credential **environment variable names**, never secret values. Run `config show` to inspect all effective defaults.
 
@@ -52,9 +73,13 @@ Local access uses a single-use, five-minute pairing code exchanged for an HttpOn
 Install and log into Tailscale on the existing daemon host, and enable HTTPS for its tailnet. Configure the exact owner identities permitted to open the dashboard:
 
 ```sh
+export CODEX_HOME="$HOME/.local/state/agent-assistant/codex"
+# Run codex login with this CODEX_HOME once, if not already signed in.
 ./agent-assistant config set dashboard.allowed_users '["owner@example.test"]'
-./agent-assistant serve --tailscale serve --tailscale-port 8443 --open
+./agent-assistant serve --http 127.0.0.1:8340 --tailscale serve --tailscale-port 8443 --open
 ```
+
+Port **8443 is the private Tailscale HTTPS port**; local HTTP remains on **127.0.0.1:8340**. Use your actual Tailscale login in `allowed_users`. The daemon prints the resulting `https://<machine>.<tailnet>.ts.net:8443` address.
 
 The daemon binds loopback, derives the machine's HTTPS address using the family Tailscale helper, and checks route ownership before changing anything. It refuses occupied routes, preserves other services' configuration, and removes its route on clean shutdown only if the route still matches. Background routes left by a crash are reconciled on restart. Public Funnel is not supported. Tailnet access alone does not grant owner authority; the dashboard checks the configured user allowlist.
 
@@ -86,7 +111,7 @@ External brokers remain trusted enforcement boundaries. They must provide idempo
 
 The PA has no shell, code-writing, deployment, production-data, or purchase tool. Worker commissions carry immutable deployment, production-data-access, and purchase prohibitions. A broker must enforce those outside its prompts. Inference and approved worker execution are permitted operating usage.
 
-The current limits bound concurrent execution, delegation depth, recovery attempts, model turns, output tokens, and durable model-call reservations per UTC day. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, account headroom polling, quiet hours/digests, transcript-retention controls, avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
+The current limits bound concurrent execution, delegation depth, recovery attempts, model turns and durable model-call reservations per UTC day. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, account headroom polling, quiet hours/digests, transcript-retention controls, avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
 
 Completion requires recorded evidence and no unfinished descendants or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
 

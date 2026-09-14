@@ -3,6 +3,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
 	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/engine"
 	libcli "github.com/shhac/lib-agent-cli/cli"
 	_ "github.com/shhac/lib-agent-cli/yaml"
 	output "github.com/shhac/lib-agent-output"
@@ -47,7 +50,7 @@ func NewRoot(version string) *cobra.Command {
 		if err := config.Save(o.configPath, config.Default()); err != nil {
 			return err
 		}
-		return o.emit(map[string]string{"config": o.configPath, "next": "Choose model.model and configure its credential environment; run agent-assistant serve --open"})
+		return o.emit(map[string]string{"config": o.configPath, "next": "Run codex login, then agent-assistant serve --open; defaults are codex/gpt-6-astra/high"})
 	}}
 	root.AddCommand(init)
 	root.AddCommand(&cobra.Command{Use: "status", Short: "Read daemon state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
@@ -136,8 +139,37 @@ func NewRoot(version string) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		checks := []map[string]any{{"name": "config", "ok": true}, {"name": "model", "ok": cfg.Model.Model != "", "hint": "set model.model to a model supported by your provider"}}
-		for _, ref := range []string{cfg.Model.APIKeyEnv, cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv, cfg.Linear.APIKeyEnv} {
+		checks := []map[string]any{{"name": "config", "ok": true}, {"name": "model", "ok": cfg.Model.Model != "", "engine": cfg.Model.Engine, "model": cfg.Model.Model, "effort": cfg.Model.Effort}}
+		refs := []string{cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv, cfg.Linear.APIKeyEnv}
+		if cfg.Model.Engine == "codex" {
+			isolationErr := engine.ValidateCodexHome()
+			isolationHint := "Use a dedicated persistent CODEX_HOME, then run codex login there."
+			if isolationErr != nil {
+				isolationHint = isolationErr.Error()
+			}
+			checks = append(checks, map[string]any{"name": "codex instruction isolation", "ok": isolationErr == nil, "hint": isolationHint})
+			binary, lookupErr := exec.LookPath(cfg.Model.CodexBin)
+			checks = append(checks, map[string]any{"name": "codex executable", "ok": lookupErr == nil, "hint": "install Codex or set model.codex_bin"})
+			if lookupErr == nil {
+				ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+				probe := exec.CommandContext(ctx, binary, "login", "status")
+				// Match the inference transport: use Codex's stored login, not
+				// unrelated provider keys inherited from the daemon environment.
+				probe.Env = []string{"PATH=" + os.Getenv("PATH")}
+				for _, key := range []string{"HOME", "CODEX_HOME"} {
+					if value := os.Getenv(key); value != "" {
+						probe.Env = append(probe.Env, key+"="+value)
+					}
+				}
+				probe.Stdout, probe.Stderr = io.Discard, io.Discard
+				loginErr := probe.Run()
+				cancel()
+				checks = append(checks, map[string]any{"name": "codex login", "ok": loginErr == nil, "hint": "run codex login in the daemon account; no inference was invoked"})
+			}
+		} else {
+			refs = append(refs, cfg.Model.APIKeyEnv)
+		}
+		for _, ref := range refs {
 			if ref != "" {
 				checks = append(checks, map[string]any{"name": ref, "ok": os.Getenv(ref) != "", "hint": "set in the daemon environment if using this integration"})
 			}

@@ -1,3 +1,4 @@
+import { ModelSettings } from "./ModelSettings";
 import {
   useCallback,
   useEffect,
@@ -1769,19 +1770,18 @@ function ConfigurationFields({
           Enter environment variable names for credentials. Never paste a token
           or API key. Connection changes may require restarting the daemon.
         </p>
-        <div className="config-field-group">
-          <h3>Assistant model</h3>
-          {field("model", "model", "Model identifier")}
-          {field("model", "base_url", "Provider API base URL", { type: "url" })}
-          {field("model", "api_key_env", "API key environment variable", {
-            env: true,
-          })}
-          {field("model", "max_tokens", "Maximum output tokens per call", {
-            type: "number",
-            min: 128,
-            max: 131072,
-          })}
-        </div>
+        <ModelSettings
+          config={config}
+          onChange={onChange}
+          group="model"
+          title="Assistant"
+        />
+        <ModelSettings
+          config={config}
+          onChange={onChange}
+          group="worker_model"
+          title="Worker"
+        />
         <div className="config-field-group">
           <h3>Slack</h3>
           {field("slack", "owner_user_id", "Your Slack user ID")}

@@ -18,6 +18,10 @@ import (
 // Config contains references to credentials, never their values. Endpoint is the
 // full chat-completions URL. HTTP is permitted only on loopback for local models.
 type Config struct {
+	Engine   string
+	Effort   string
+	CodexBin string
+	codexRun func(context.Context, string, []string, string, []string, string) ([]byte, error)
 	// BeforeRequest reserves durable capacity before each potentially billable call.
 	BeforeRequest   func(context.Context) error
 	Endpoint        string
@@ -90,15 +94,23 @@ var ErrNotConfigured = errors.New("model is not configured: set endpoint, model 
 var ErrTurnLimit = errors.New("assistant reached its model-turn limit; completed actions are preserved")
 
 func New(cfg Config, executor ToolExecutor) (*Engine, error) {
-	if cfg.Endpoint == "" || cfg.Model == "" {
+	if cfg.Engine == "" {
+		cfg.Engine = "openai-compatible"
+	}
+	if cfg.Engine != "codex" && cfg.Engine != "openai-compatible" {
+		return nil, errors.New("unsupported model engine")
+	}
+	if cfg.Model == "" || (cfg.Engine != "codex" && cfg.Endpoint == "") {
 		return nil, ErrNotConfigured
 	}
-	u, err := url.Parse(cfg.Endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("model endpoint must be an absolute URL without credentials, query or fragment")
-	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
-		return nil, errors.New("model endpoint requires HTTPS except on loopback")
+	if cfg.Engine != "codex" {
+		u, err := url.Parse(cfg.Endpoint)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return nil, errors.New("model endpoint must be an absolute URL without credentials, query or fragment")
+		}
+		if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
+			return nil, errors.New("model endpoint requires HTTPS except on loopback")
+		}
 	}
 	if cfg.MaxTurns == 0 {
 		cfg.MaxTurns = 8
@@ -111,6 +123,9 @@ func New(cfg Config, executor ToolExecutor) (*Engine, error) {
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 90 * time.Second
+		if cfg.Engine == "codex" {
+			cfg.Timeout = 5 * time.Minute
+		}
 	}
 	if cfg.MaxTurns < 1 || cfg.MaxTurns > 32 || cfg.MaxOutputTokens < 1 || cfg.MaxContextBytes < 1024 || cfg.Timeout <= 0 {
 		return nil, errors.New("invalid model turn, token, context or timeout limit")
@@ -213,7 +228,26 @@ func (e *Engine) Chat(ctx context.Context, req Request) (Result, error) {
 	return result, ErrTurnLimit
 }
 
+// Complete performs one model invocation using exactly the supplied application tools.
+// It does not execute tools. Callers retain their own deterministic authorization loop.
+func Complete(ctx context.Context, cfg Config, messages []Message, tools []Tool) (Message, Usage, error) {
+	e, err := New(cfg, ExecutorFunc(func(context.Context, string, json.RawMessage) (any, error) { return nil, errors.New("no executor") }))
+	if err != nil {
+		return Message{}, Usage{}, err
+	}
+	return e.completeWithTools(ctx, messages, tools)
+}
+
 func (e *Engine) complete(ctx context.Context, messages []Message) (Message, Usage, error) {
+	return e.completeWithTools(ctx, messages, Tools())
+}
+func (e *Engine) completeWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, Usage, error) {
+	if e.cfg.Engine == "codex" {
+		return codexComplete(ctx, e.cfg, messages, tools)
+	}
+	return e.httpComplete(ctx, messages, tools)
+}
+func (e *Engine) httpComplete(ctx context.Context, messages []Message, tools []Tool) (Message, Usage, error) {
 	var empty Message
 	var usage Usage
 	token := ""
@@ -223,7 +257,11 @@ func (e *Engine) complete(ctx context.Context, messages []Message) (Message, Usa
 			return empty, usage, fmt.Errorf("model credential environment variable %s is not set", e.cfg.APIKeyEnv)
 		}
 	}
-	body, err := json.Marshal(map[string]any{"model": e.cfg.Model, "messages": messages, "tools": Tools(), "tool_choice": "auto", "parallel_tool_calls": false, "max_completion_tokens": e.cfg.MaxOutputTokens})
+	payloadBody := map[string]any{"model": e.cfg.Model, "messages": messages, "tools": tools, "tool_choice": "auto", "parallel_tool_calls": false, "max_completion_tokens": e.cfg.MaxOutputTokens}
+	if e.cfg.Effort != "" {
+		payloadBody["reasoning_effort"] = e.cfg.Effort
+	}
+	body, err := json.Marshal(payloadBody)
 	if err != nil {
 		return empty, usage, errors.New("cannot encode model request")
 	}

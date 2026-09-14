@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,9 @@ import (
 func testApp(t *testing.T) *App {
 	t.Helper()
 	cfg := config.Default()
+	cfg.Model.Engine = "openai-compatible"
+	cfg.Model.Effort = ""
+	cfg.Model.Model = ""
 	cfg.Assistant.Name = "Quill"
 	cfg.Model.APIKeyEnv = ""
 	s, err := core.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -91,5 +95,27 @@ func TestDemoCannotCallModel(t *testing.T) {
 	a.Demo = true
 	if _, err := a.Chat(context.Background(), "do work"); err == nil {
 		t.Fatal("demo invoked model")
+	}
+}
+
+func TestCodexAvailabilityDoesNotRequireAPIKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	cfg := config.Default()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Model.CodexBin = binary
+	if !modelAvailable(cfg.Model) {
+		t.Fatal("Codex incorrectly required API credentials")
+	}
+	cfg.Model.Engine = "openai-compatible"
+	if modelAvailable(cfg.Model) {
+		t.Fatal("API engine ignored missing configured credential")
+	}
+	cfg.Model.Engine = "codex"
+	cfg.Model.CodexBin = filepath.Join(t.TempDir(), "missing-codex")
+	if modelAvailable(cfg.Model) {
+		t.Fatal("missing Codex binary reported available")
 	}
 }

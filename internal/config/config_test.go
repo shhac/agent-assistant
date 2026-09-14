@@ -66,3 +66,83 @@ func TestXDGPaths(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+func TestModelDefaultsAndIndependentProfiles(t *testing.T) {
+	c := Default()
+	for name, profile := range map[string]Model{"assistant": c.Model, "worker": c.WorkerModel} {
+		if profile.Engine != "codex" || profile.Model != "gpt-6-astra" || profile.Effort != "high" || profile.CodexBin != "codex" {
+			t.Fatalf("%s defaults: %+v", name, profile)
+		}
+	}
+	c.WorkerModel.Model = "worker-model"
+	c.WorkerModel.Effort = "low"
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != c.Model || got.WorkerModel != c.WorkerModel {
+		t.Fatalf("profiles lost independence: %+v", got)
+	}
+}
+func TestLegacyAPIConfigRetainsProviderAndBillingPath(t *testing.T) {
+	for _, body := range []string{`{"model":{"model":"existing-model","base_url":"https://provider.example/v1","api_key_env":"EXISTING_KEY"}}`, `{"model":{}}`} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Model.Engine != "openai-compatible" || got.Model.Effort != "" || got.WorkerModel != got.Model {
+			t.Fatalf("legacy profile unexpectedly migrated: %+v", got)
+		}
+		if strings.Contains(body, "existing-model") && (got.Model.Model != "existing-model" || got.Model.APIKeyEnv != "EXISTING_KEY" || got.Model.BaseURL != "https://provider.example/v1") {
+			t.Fatal(got.Model)
+		}
+		if body == `{"model":{}}` && got.Model.Model != "" {
+			t.Fatal("unconfigured legacy model enabled inference")
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"assistant":{"name":"Juniper"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.Model.Engine != "codex" || got.Model.Model != "gpt-6-astra" || got.Model.Effort != "high" {
+		t.Fatal(got.Model, err)
+	}
+}
+func TestInvalidEngineAndEffortRejected(t *testing.T) {
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.Model.Engine = "unknown" },
+		func(c *Config) { c.Model.Effort = "maximumish" },
+		func(c *Config) { c.WorkerModel.Engine = "unknown" },
+		func(c *Config) { c.WorkerModel.Effort = "maximumish" },
+		func(c *Config) { c.Model.CodexBin = "" },
+	} {
+		c := Default()
+		mutate(&c)
+		if err := c.Validate(); err == nil {
+			t.Fatal("invalid engine configuration accepted")
+		}
+	}
+}
+
+func TestLegacyAssistantTokenCapDoesNotChangeWorkerCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"model":{"model":"existing-model","max_tokens":65536}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model.MaxTokens != 65536 || got.WorkerModel.MaxTokens != 4096 {
+		t.Fatalf("legacy limits changed: %+v", got)
+	}
+}

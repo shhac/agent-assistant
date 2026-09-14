@@ -25,6 +25,9 @@ func runtimeFixture(t *testing.T, handler http.HandlerFunc) (*App, *httptest.Ser
 	}
 	t.Cleanup(func() { store.Close() })
 	cfg := config.Default()
+	cfg.Model.Engine = "openai-compatible"
+	cfg.Model.Effort = ""
+	cfg.Model.Model = ""
 	cfg.Workers = []config.Worker{{ID: "fake", Name: "Fake broker", Endpoint: server.URL, Capabilities: []string{"coordinate", "implement"}}}
 	return New(core.NewService(store, cfg), cfg, filepath.Join(t.TempDir(), "config.json"), false), server
 }

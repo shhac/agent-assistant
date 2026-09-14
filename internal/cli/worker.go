@@ -17,7 +17,7 @@ import (
 )
 
 func registerWorker(root *cobra.Command, o *options) {
-	var workspace, project, image, socket, state, addr, tokenEnv, model string
+	var workspace, project, image, socket, state, addr, tokenEnv, model, engineName, effort string
 	var turns, tokens, concurrency int
 	worker := &cobra.Command{Use: "worker", Short: "Run an isolated coding-worker broker for an approved project"}
 	cmd := &cobra.Command{Use: "serve", Short: "Serve a private worker endpoint backed by an offline Docker sandbox", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
@@ -25,8 +25,22 @@ func registerWorker(root *cobra.Command, o *options) {
 		if err != nil {
 			return err
 		}
-		if model == "" {
-			model = cfg.Model.Model
+		profile := cfg.WorkerModel
+		if cmd.Flags().Changed("engine") {
+			profile.Engine = engineName
+		}
+		if cmd.Flags().Changed("model") {
+			profile.Model = model
+		}
+		if cmd.Flags().Changed("effort") {
+			profile.Effort = effort
+		}
+		if cmd.Flags().Changed("max-output-tokens") {
+			profile.MaxTokens = tokens
+		}
+		cfg.WorkerModel = profile
+		if err := cfg.Validate(); err != nil {
+			return err
 		}
 		if state == "" {
 			state = o.statePath + ".workers"
@@ -40,7 +54,7 @@ func registerWorker(root *cobra.Command, o *options) {
 			return err
 		}
 		defer listener.Close()
-		broker, err := workerbroker.New(workerbroker.Config{StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, ModelEndpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: model, APIKeyEnv: cfg.Model.APIKeyEnv, TokenEnv: tokenEnv, MaxTurns: turns, MaxOutputTokens: tokens, MaxConcurrent: concurrency})
+		broker, err := workerbroker.New(workerbroker.Config{StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, Engine: profile.Engine, Effort: profile.Effort, CodexBin: profile.CodexBin, ModelEndpoint: strings.TrimRight(profile.BaseURL, "/") + "/chat/completions", Model: profile.Model, APIKeyEnv: profile.APIKeyEnv, TokenEnv: tokenEnv, MaxTurns: turns, MaxOutputTokens: profile.MaxTokens, MaxConcurrent: concurrency})
 		if err != nil {
 			return err
 		}
@@ -91,9 +105,11 @@ func registerWorker(root *cobra.Command, o *options) {
 	cmd.Flags().StringVar(&state, "worker-state", "", "Private worker state directory (defaults beside assistant state)")
 	cmd.Flags().StringVar(&addr, "http", "127.0.0.1:8350", "Loopback worker API address")
 	cmd.Flags().StringVar(&tokenEnv, "token-env", "AGENT_ASSISTANT_WORKER_TOKEN", "Environment variable containing the broker API token")
-	cmd.Flags().StringVar(&model, "model", "", "Worker model (defaults to configured assistant model)")
+	cmd.Flags().StringVar(&model, "model", "", "Worker model (defaults to worker_model.model)")
+	cmd.Flags().StringVar(&engineName, "engine", "", "Worker engine (defaults to worker_model.engine)")
+	cmd.Flags().StringVar(&effort, "effort", "", "Reasoning effort (defaults to worker_model.effort)")
 	cmd.Flags().IntVar(&turns, "max-turns", 24, "Maximum cumulative model calls per worker session, including resumes")
-	cmd.Flags().IntVar(&tokens, "max-output-tokens", 4096, "Maximum output tokens per worker model request")
+	cmd.Flags().IntVar(&tokens, "max-output-tokens", 4096, "Maximum output tokens per worker model request (otherwise worker_model.max_tokens)")
 	cmd.Flags().IntVar(&concurrency, "max-concurrent", 1, "Maximum simultaneously executing local workers")
 	_ = cmd.MarkFlagRequired("workspace")
 	_ = cmd.MarkFlagRequired("project")

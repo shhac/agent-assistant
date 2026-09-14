@@ -464,7 +464,7 @@ func (a *App) reviewFinished(ctx context.Context) error {
 		if count == 0 || !ready {
 			continue
 		}
-		if err = a.once(ctx, "project-review:"+p.ID+":"+reviewRevision(snap, p.ID, a.Config().Model.Model), func() error {
+		if err = a.once(ctx, "project-review:"+p.ID+":"+reviewRevision(snap, p.ID, a.Config().Model.Engine+"/"+a.Config().Model.Model+"/"+a.Config().Model.Effort), func() error {
 			if a.Config().Model.Model == "" {
 				return a.Core.RecordActivity(ctx, p.ID, "project.review_ready", "All commissioned workers supplied evidence. Configure the PA model or review acceptance evidence before closing this project.")
 			}

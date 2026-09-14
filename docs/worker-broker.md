@@ -12,9 +12,9 @@ Known sensitive files and directories are excluded from the source copy: `.env*`
 
 ## Start the broker
 
-Configure the assistant's model endpoint, model and credential environment reference first. The worker reuses that provider configuration; `--model` may choose a different compatible model. Both providers must support Chat Completions function tools.
+Configure the independent `worker_model` profile in Settings or with `config set worker_model.<field>`. Fresh profiles use `codex / gpt-6-astra / high` with the login in the process's `CODEX_HOME`. `--engine`, `--model` and `--effort` override that profile for this broker process. The API engine uses `worker_model.base_url` and `worker_model.api_key_env`; the Codex engine uses `worker_model.codex_bin`. Changing the PA's model does not change a running worker broker.
 
-Set an independently generated broker API token in the environment variable `AGENT_ASSISTANT_WORKER_TOKEN` in both the broker and assistant processes. Set the configured model credential variable in the broker process as well. Keep actual tokens out of configuration files, command arguments and version control.
+Set an independently generated broker API token in the environment variable `AGENT_ASSISTANT_WORKER_TOKEN` in both the broker and assistant processes. For the API engine, set the configured model credential variable in the broker process as well. For Codex, export the same dedicated, persistent `CODEX_HOME` used by the assistant and log in there using `codex login`. Homes containing global AGENTS instruction files are rejected; credentials are never copied from your usual Codex home. Keep actual tokens out of configuration files, command arguments and version control.
 
 ```sh
 agent-assistant worker serve \
@@ -53,13 +53,13 @@ Each run gets its own copied workspace. The container has:
 - A non-root numeric user, 1 GiB memory limit, two CPUs and 128-process limit.
 - One copied workspace mount and a bounded 256 MiB temporary filesystem. Review-only workers receive a read-only workspace mount.
 
-Model HTTP requests happen in the Go broker on the host. The model sees narrowly defined worker tools: `read_file`, `write_file`, `run_command`, `ask_decision`, and `finish`. File writes and test commands are sent through `docker exec`; command strings are interpreted only by the container's shell. The Docker CLI receives a clean environment without inherited credentials. The PA's model does not receive these implementation tools.
+Model requests happen on the host through the selected engine. With Codex, a tool-disabled CLI proposes structured actions that the Go broker checks and executes; it cannot run commands itself. The model sees narrowly defined worker tools: `read_file`, `write_file`, `run_command`, `ask_decision`, and `finish`. File writes and test commands are sent through `docker exec`; command strings are interpreted only by the container's shell. The Docker CLI receives a clean environment without inherited credentials. The PA's model does not receive these implementation tools.
 
 The owner-supplied image and local Docker daemon are trusted infrastructure. This is container isolation, not a claim of a hardware security boundary against kernel or Docker vulnerabilities.
 
 ## Bounds and recovery
 
-`--max-turns` is the **cumulative model-request limit for a worker session**, including resumes, delivered messages and broker restarts. It is never reset by a resume. Output tokens are capped per request. Each execution attempt also has a 30-minute wall-clock bound; individual commands have a 60-second bound, with at most 128 commands per session. Source/artifact collection is limited to 10,000 source files, 64 MiB total and 2 MiB per file. Model context is limited to 128 KiB and command output to 64 KiB.
+`--max-turns` is the **cumulative model-request limit for a worker session**, including resumes, delivered messages and broker restarts. It is never reset by a resume. API output tokens are capped per request. Codex has no per-request token cap here; its process time and output bytes are bounded separately. Reasoning effort is independent of these limits. Each execution attempt also has a 30-minute wall-clock bound; individual commands have a 60-second bound, with at most 128 commands per session. Source/artifact collection is limited to 10,000 source files, 64 MiB total and 2 MiB per file. Model context is limited to 128 KiB and command output to 64 KiB.
 
 These are resource bounds, not a dollar estimate or a promise of free model inference. Model calls can cost money under the configured provider. No paid model call is automatically retried after an uncertain response.
 
