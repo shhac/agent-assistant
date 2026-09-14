@@ -61,6 +61,7 @@ type Limits struct {
 	CheckInMinutes      int `json:"check_in_minutes"`
 }
 type Worker struct {
+	ProjectID    string   `json:"project_id,omitempty"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	Endpoint     string   `json:"endpoint"`

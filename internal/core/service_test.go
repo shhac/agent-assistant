@@ -290,3 +290,151 @@ func TestBrokerTimestampIsNotPollingTime(t *testing.T) {
 		t.Fatal("polling refreshed worker liveness", v.Agents[0])
 	}
 }
+
+func TestRevokedProfileCannotResumeOrDispatch(t *testing.T) {
+	s, c := fixture(t)
+	p := newProject(t, s)
+	a := delegate(t, s, p, "")
+	start(t, s, a)
+	s.UpdateAgent(testContext, a.ID, AgentUpdate{Status: "interrupted", Summary: "Stopped"})
+	queued := delegate(t, s, p, "")
+	c.Workers[0].Capabilities = []string{"coordinate"}
+	s.UpdateConfig(c)
+	if _, err := s.PrepareResume(testContext, a.ID); err == nil {
+		t.Fatal("resumed revoked authority")
+	}
+	if _, err := s.BeginDispatch(testContext, queued.ID); err == nil {
+		t.Fatal("dispatched revoked authority")
+	}
+}
+func TestWaitingWorkerRetainsCapacityAndManagerWakeReservesIt(t *testing.T) {
+	s, c := fixture(t)
+	c.Limits.MaxAgents = 1
+	s.UpdateConfig(c)
+	p := newProject(t, s)
+	manager := delegate(t, s, p, "")
+	start(t, s, manager)
+	s.UpdateAgent(testContext, manager.ID, AgentUpdate{Status: "waiting", Summary: "Waiting for child"})
+	child, err := s.Delegate(testContext, DelegateInput{ProjectID: p.ID, ParentID: manager.ID, ProfileID: "test", Role: "worker", Task: "Work", AcceptanceCriteria: "Evidence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start(t, s, child)
+	s.UpdateAgent(testContext, child.ID, AgentUpdate{Status: "waiting", Summary: "Broker queue"})
+	if err = s.BeginInstruction(testContext, manager.ID); err == nil {
+		t.Fatal("manager wake exceeded capacity")
+	}
+}
+
+func TestSourceRefreshPreservesAcceptanceContract(t *testing.T) {
+	s, _ := fixture(t)
+	p, err := s.CreateProject(testContext, ProjectInput{Title: "Issue", SourceID: "linear:fixture", Description: "Initial source", AcceptanceCriteria: "Explicit acceptance contract"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.CreateProject(testContext, ProjectInput{Title: "Updated title", SourceID: p.SourceID, Description: "Updated source", AcceptanceCriteria: "Generic discovery placeholder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AcceptanceCriteria != p.AcceptanceCriteria || got.Title != "Updated title" {
+		t.Fatal(got)
+	}
+}
+func TestUnexecutedProjectCannotClaimCompletion(t *testing.T) {
+	s, _ := fixture(t)
+	p := newProject(t, s)
+	if err := s.CompleteProject(testContext, p.ID, []string{"The model says it is done"}); err == nil {
+		t.Fatal("completion fabricated without commissioned work")
+	}
+}
+func TestHeartbeatsDoNotCountAsSubstantiveProgress(t *testing.T) {
+	s, _ := fixture(t)
+	p := newProject(t, s)
+	a := delegate(t, s, p, "")
+	start(t, s, a)
+	first := s.now().UTC()
+	s.UpdateAgent(testContext, a.ID, AgentUpdate{Status: "running", Summary: "Working", UpdatedAt: first})
+	s.now = func() time.Time { return first.Add(2 * time.Hour) }
+	s.UpdateAgent(testContext, a.ID, AgentUpdate{Status: "running", Summary: "Working", UpdatedAt: s.now()})
+	v, _ := s.Snapshot(testContext)
+	if !v.Agents[0].LastProgressAt.Equal(first) || !v.Agents[0].LastUpdate.Equal(s.now()) {
+		t.Fatal(v.Agents[0])
+	}
+}
+func TestInterruptedSessionCannotBypassResumeViaInstruction(t *testing.T) {
+	s, _ := fixture(t)
+	p := newProject(t, s)
+	a := delegate(t, s, p, "")
+	start(t, s, a)
+	s.UpdateAgent(testContext, a.ID, AgentUpdate{Status: "interrupted", Summary: "Stopped"})
+	if err := s.BeginInstruction(testContext, a.ID); err == nil {
+		t.Fatal("instruction bypassed bounded recovery")
+	}
+}
+func TestPendingOperationInspectionIsVisibleAndDoesNotReplay(t *testing.T) {
+	s, _ := fixture(t)
+	p := newProject(t, s)
+	a := delegate(t, s, p, "")
+	key := "question:" + a.ID + ":fixture"
+	s.ClaimEvent(testContext, key)
+	v, _ := s.Snapshot(testContext)
+	if len(v.PendingOperations) != 1 || v.PendingOperations[0].ProjectID != p.ID || v.PendingOperations[0].Summary == "" {
+		t.Fatal(v.PendingOperations)
+	}
+	if err := s.AcknowledgeEvent(testContext, key, ""); err == nil {
+		t.Fatal("empty inspection accepted")
+	}
+	if err := s.AcknowledgeEvent(testContext, key, "Verified the broker received the question"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := s.ClaimEvent(testContext, key)
+	if fresh {
+		t.Fatal("acknowledgement replayed operation")
+	}
+}
+
+func TestRefinedSourceContractSurvivesSyncAndFreezesOnCommission(t *testing.T) {
+	s, _ := fixture(t)
+	p, err := s.CreateProject(testContext, ProjectInput{Title: "Imported issue", Description: "Vague source", AcceptanceCriteria: "Clarify acceptance", SourceID: "linear:refine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := DelegateInput{ProjectID: p.ID, ProfileID: "test", Role: "worker", Task: "Implement", AcceptanceCriteria: "Tests pass"}
+	if _, err = s.Delegate(testContext, in); err == nil {
+		t.Fatal("unrefined import commissioned")
+	}
+	p, err = s.RefineProject(testContext, p.ID, "Concrete scope", "Search finds fixtures; keyboard navigation passes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.CreateProject(testContext, ProjectInput{Title: p.Title, Description: "Refreshed source", AcceptanceCriteria: "Placeholder", SourceID: p.SourceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Description != "Concrete scope" || p.AcceptanceCriteria != "Search finds fixtures; keyboard navigation passes" || p.SourceDescription != "Refreshed source" {
+		t.Fatal(p)
+	}
+	if _, err = s.Delegate(testContext, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RefineProject(testContext, p.ID, "Different scope", "Different criteria"); err == nil {
+		t.Fatal("commissioned contract changed")
+	}
+}
+
+func TestProjectScopedWorkerCannotCrossProjects(t *testing.T) {
+	s, c := fixture(t)
+	p := newProject(t, s)
+	other := newProject(t, s)
+	c.Workers[0].ProjectID = p.ID
+	s.UpdateConfig(c)
+	if _, err := s.Delegate(testContext, DelegateInput{ProjectID: other.ID, ProfileID: "test", Role: "worker", Task: "Implement", AcceptanceCriteria: "Evidence"}); err == nil {
+		t.Fatal("cross-project profile accepted")
+	}
+	a := delegate(t, s, p, "")
+	c.Workers[0].ProjectID = other.ID
+	s.UpdateConfig(c)
+	if _, err := s.BeginDispatch(testContext, a.ID); err == nil {
+		t.Fatal("queued worker bypassed changed profile project scope")
+	}
+}

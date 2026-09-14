@@ -3,10 +3,13 @@ package core
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/shhac/agent-assistant/internal/config"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +51,13 @@ func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
 	v, err := s.store.Snapshot(ctx)
 	cfg := s.configuration()
 	v.Assistant = Assistant{Name: cfg.Assistant.Name, Personality: cfg.Assistant.Personality}
+	v.PendingOperations = []PendingOperation{}
+	for id, done := range v.Events {
+		if !done {
+			v.PendingOperations = append(v.PendingOperations, pendingOperation(v, id))
+		}
+	}
+	sort.Slice(v.PendingOperations, func(i, j int) bool { return v.PendingOperations[i].ID < v.PendingOperations[j].ID })
 	return v, err
 }
 func uid() string {
@@ -89,16 +99,21 @@ func (s *Service) CreateProject(ctx context.Context, in ProjectInput) (Project, 
 	if !required(in.Title, in.AcceptanceCriteria) {
 		return Project{}, errors.New("title and acceptance criteria are required")
 	}
-	out := Project{ID: uid(), Title: in.Title, Description: in.Description, AcceptanceCriteria: in.AcceptanceCriteria, Status: "ready", SourceID: in.SourceID, UpdatedAt: s.now().UTC()}
+	out := Project{ContractDefined: in.SourceID == "", SourceDescription: in.Description, ID: uid(), Title: in.Title, Description: in.Description, AcceptanceCriteria: in.AcceptanceCriteria, Status: "ready", SourceID: in.SourceID, UpdatedAt: s.now().UTC()}
 	err := s.store.update(ctx, func(v *Snapshot) error {
 		if in.SourceID != "" {
 			for i := range v.Projects {
 				p := &v.Projects[i]
 				if p.SourceID == in.SourceID {
-					p.Title = in.Title
-					p.Description = in.Description
-					p.AcceptanceCriteria = in.AcceptanceCriteria
-					p.UpdatedAt = s.now().UTC()
+					if p.Title != in.Title || p.SourceDescription != in.Description {
+						p.Title = in.Title
+						p.SourceDescription = in.Description
+						if !p.ContractDefined {
+							p.Description = in.Description
+						}
+						p.UpdatedAt = s.now().UTC()
+					}
+					// Source refreshes cannot replace the commissioned acceptance contract.
 					out = *p
 					return nil
 				}
@@ -120,6 +135,9 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 	profile, err := s.GetProfile(in.ProfileID)
 	if err != nil {
 		return Agent{}, err
+	}
+	if profile.ProjectID != "" && profile.ProjectID != in.ProjectID {
+		return Agent{}, errors.New("worker profile is scoped to another project")
 	}
 	if len(in.Capabilities) == 0 {
 		in.Capabilities = append([]string(nil), profile.Capabilities...)
@@ -154,6 +172,9 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 		}
 		if p.Status == "completed" {
 			return errors.New("completed project cannot receive new work")
+		}
+		if !p.ContractDefined {
+			return errors.New("define measurable acceptance criteria before commissioning discovered work")
 		}
 		if in.ParentID != "" {
 			parent := agent(v, in.ParentID)
@@ -208,7 +229,7 @@ func (s *Service) BeginDispatch(ctx context.Context, id string) (Agent, error) {
 		if a.Status != "queued" {
 			return fmt.Errorf("dispatch requires queued state: %w", ErrConflict)
 		}
-		if _, err := s.GetProfile(a.ProfileID); err != nil {
+		if err := s.dispatchAuthority(v, a); err != nil {
 			return err
 		}
 		if executingCount(v) >= s.configuration().Limits.MaxAgents {
@@ -313,6 +334,19 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 			}
 			a.BrokerUpdatedAt = in.UpdatedAt.UTC()
 		}
+		sourceTime := s.now().UTC()
+		if !in.UpdatedAt.IsZero() {
+			sourceTime = in.UpdatedAt.UTC()
+		}
+		progressRaw, _ := json.Marshal(struct {
+			Status, Summary string
+			Evidence        []string
+		}{in.Status, in.Summary, in.Evidence})
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256(progressRaw))
+		if a.ProgressFingerprint != fingerprint {
+			a.ProgressFingerprint = fingerprint
+			a.LastProgressAt = sourceTime
+		}
 		a.Status = in.Status
 		a.Summary = in.Summary
 		a.Evidence = append([]string{}, in.Evidence...)
@@ -363,6 +397,9 @@ func (s *Service) PrepareResume(ctx context.Context, id string) (Agent, error) {
 			if child.ParentID == id && !terminal(child.Status) {
 				return errors.New("reconcile descendants before retrying their manager")
 			}
+		}
+		if err := s.dispatchAuthority(v, a); err != nil {
+			return err
 		}
 		if a.ExternalID == "" {
 			return errors.New("cannot resume without an external session; reconcile first")
@@ -517,10 +554,20 @@ func (s *Service) CompleteProject(ctx context.Context, id string, evidence []str
 		if p.Status == "completed" {
 			return ErrConflict
 		}
+		completed := 0
 		for _, a := range v.Agents {
+			if a.ProjectID == id && a.Status == "completed" {
+				if len(a.Evidence) == 0 {
+					return errors.New("completed worker has no recorded evidence")
+				}
+				completed++
+			}
 			if a.ProjectID == id && !terminal(a.Status) {
 				return errors.New("project still has unfinished work")
 			}
+		}
+		if completed == 0 {
+			return errors.New("project completion requires evidence from completed commissioned work")
 		}
 		for _, d := range v.Decisions {
 			if d.ProjectID == id && d.Status == "open" {
@@ -555,15 +602,158 @@ func (s *Service) ReserveModelCall(ctx context.Context, limit int) error {
 	})
 }
 
+func holdsExecution(a Agent) bool {
+	if contains([]string{"running", "dispatching", "resuming", "reconciling"}, a.Status) {
+		return true
+	}
+	return a.Role != "manager" && a.ExternalID != "" && (a.Status == "waiting" || a.Status == "blocked")
+}
 func executingCount(v *Snapshot) int {
 	n := 0
 	for _, a := range v.Agents {
-		if contains([]string{"running", "dispatching", "resuming", "reconciling"}, a.Status) {
+		if holdsExecution(a) {
 			n++
 		}
 	}
 	return n
 }
+
+// BeginInstruction reserves execution before a message can wake a waiting manager.
+// Brokers must keep waiting managers suspended until an explicit instruction.
+func (s *Service) BeginInstruction(ctx context.Context, id string) error {
+	return s.store.update(ctx, func(v *Snapshot) error {
+		if v.Paused {
+			return errors.New("coordination is paused")
+		}
+		a := agent(v, id)
+		if a == nil {
+			return ErrNotFound
+		}
+		if terminal(a.Status) || a.ExternalID == "" {
+			return errors.New("instruction requires a live external session")
+		}
+		if a.Status == "interrupted" || a.Status == "resuming" || (a.Status == "reconciling" && a.ResumeKey != "") {
+			return errors.New("interrupted or uncertain recovery requires explicit reconciliation and resume")
+		}
+		if err := s.dispatchAuthority(v, a); err != nil {
+			return err
+		}
+		if !holdsExecution(*a) && executingCount(v) >= s.configuration().Limits.MaxAgents {
+			return errors.New("agent execution capacity reached")
+		}
+		a.Status = "running"
+		return nil
+	})
+}
+func (s *Service) dispatchAuthority(v *Snapshot, a *Agent) error {
+	if a.Depth > s.configuration().Limits.MaxDepth {
+		return errors.New("current delegation depth limit no longer permits execution")
+	}
+	if p := project(v, a.ProjectID); p == nil || p.Status == "completed" {
+		return errors.New("project no longer permits execution")
+	}
+	seen := map[string]bool{}
+	for current := a; current != nil; {
+		if seen[current.ID] {
+			return errors.New("invalid cyclic authority")
+		}
+		seen[current.ID] = true
+		profile, err := s.GetProfile(current.ProfileID)
+		if err != nil {
+			return err
+		}
+		if profile.ProjectID != "" && profile.ProjectID != current.ProjectID {
+			return errors.New("worker profile no longer authorizes this project")
+		}
+		for _, cap := range current.Capabilities {
+			if !contains(profile.Capabilities, cap) {
+				return errors.New("worker or ancestor authority was revoked by current configuration")
+			}
+		}
+		if current.ParentID == "" {
+			break
+		}
+		current = agent(v, current.ParentID)
+		if current == nil || terminal(current.Status) {
+			return errors.New("parent no longer permits execution")
+		}
+	}
+	return nil
+}
 func (s *Service) RecordActivity(ctx context.Context, projectID, kind, summary string) error {
 	return s.store.update(ctx, func(v *Snapshot) error { record(v, s.now().UTC(), projectID, kind, summary); return nil })
+}
+
+func pendingOperation(v Snapshot, id string) PendingOperation {
+	out := PendingOperation{ID: id, Summary: "An interrupted operation needs inspection before any repeat."}
+	parts := strings.Split(id, ":")
+	switch parts[0] {
+	case "slack":
+		out.Summary = "A received Slack request needs processing confirmation; it was not replayed."
+	case "question":
+		out.Summary = "A worker question needs delivery or decision confirmation."
+	case "instruction", "decision-answer":
+		out.Summary = "An agent instruction or owner answer needs delivery confirmation."
+	case "delegation":
+		out.Summary = "A requested child commission or its acknowledgement needs confirmation."
+	case "project-review":
+		out.Summary = "An acceptance review needs inspection; its model actions were not replayed."
+	case "notify":
+		out.Summary = "An owner notification needs delivery confirmation."
+	case "child-progress":
+		out.Summary = "A child progress report needs delivery confirmation to its manager."
+	}
+	for _, a := range v.Agents {
+		if contains(parts, a.ID) {
+			out.ProjectID = a.ProjectID
+			out.Summary += " Agent: " + a.Name
+			return out
+		}
+	}
+	for _, d := range v.Decisions {
+		if contains(parts, d.ID) {
+			out.ProjectID = d.ProjectID
+			out.Summary += " Decision: " + d.Title
+			return out
+		}
+	}
+	for _, p := range v.Projects {
+		if contains(parts, p.ID) {
+			out.ProjectID = p.ID
+			out.Summary += " Project: " + p.Title
+			return out
+		}
+	}
+	return out
+}
+
+// RefineProject establishes the acceptance contract at intake. Once any work
+// has been commissioned, changing it requires an explicit new commission.
+func (s *Service) RefineProject(ctx context.Context, id, description, acceptanceCriteria string) (Project, error) {
+	if !required(description, acceptanceCriteria) {
+		return Project{}, errors.New("description and measurable acceptance criteria are required")
+	}
+	var out Project
+	err := s.store.update(ctx, func(v *Snapshot) error {
+		p := project(v, id)
+		if p == nil {
+			return ErrNotFound
+		}
+		if p.Status != "ready" {
+			return errors.New("only an uncommissioned ready project can be refined")
+		}
+		for _, a := range v.Agents {
+			if a.ProjectID == id {
+				return errors.New("acceptance contract is frozen after work is commissioned")
+			}
+		}
+		p.Description = description
+		p.AcceptanceCriteria = acceptanceCriteria
+		p.ContractDefined = true
+		p.UpdatedAt = s.now().UTC()
+		out = *p
+		record(v, p.UpdatedAt, id, "project.refined", "Acceptance criteria defined for "+p.Title)
+		return nil
+	})
+	return out, err
 }

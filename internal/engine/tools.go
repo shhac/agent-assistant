@@ -6,6 +6,12 @@ type CreateProjectArgs struct {
 	Objective          string   `json:"objective"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
+type UpdateProjectArgs struct {
+	ProjectID          string   `json:"project_id"`
+	Objective          string   `json:"objective"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+}
+
 type DelegateArgs struct {
 	ProjectID          string   `json:"project_id"`
 	ParentID           string   `json:"parent_id"`
@@ -57,6 +63,7 @@ func Tools() []Tool {
 	return []Tool{
 		tool("read_state", "Read current projects, work, decisions, preferences, available profiles and authority.", nil, nil),
 		tool("create_project", "Record a project outcome and evidence required for acceptance. This creates coordination metadata only.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
+		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
 		tool("delegate", "Commission an approved worker or manager. Use an empty parent_id when reporting directly to the PA. The daemon enforces inherited scope and limits.", []string{"project_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
 		tool("ask_decision", "Prepare an unresolved owner decision. Include recommendation, viable alternatives, consequences and evidence.", []string{"project_id", "question", "recommendation", "why"}, []string{"options", "evidence"}),
 		tool("remember_preference", "Remember an owner preference. This cannot grant permissions or change budgets.", []string{"key", "value"}, nil),
