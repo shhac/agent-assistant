@@ -1,0 +1,324 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { App } from "./App";
+import { bootstrapSession, normalizeState, type State } from "./api";
+
+const initial = (): State =>
+  normalizeState({
+    assistant: { name: "Iris", personality: "Concise and thoughtful." },
+  });
+let state: State;
+let calls: { path: string; options?: RequestInit }[];
+let respond: (
+  path: string,
+  options?: RequestInit,
+) => { status?: number; body?: unknown };
+beforeEach(() => {
+  state = initial();
+  calls = [];
+  window.history.replaceState(null, "", "/");
+  respond = (path) => ({ body: path === "/api/state" ? state : {} });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, options?: RequestInit) => {
+      calls.push({ path: input, options });
+      const result = respond(input, options);
+      const status = result.status || 200;
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => result.body ?? {},
+      };
+    }),
+  );
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe("owner dashboard flows", () => {
+  it("uses the configured name and an honest outcome-focused empty workspace", async () => {
+    render(<App />);
+    expect(
+      await screen.findByRole("button", { name: "Iris overview" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Start with the outcome" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Overview" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Today" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tomorrow" })).toBeNull();
+    expect(screen.getByLabelText("Message Iris")).toBeTruthy();
+    expect(screen.queryByText("Preview mode", { exact: false })).toBeNull();
+  });
+  it("keeps a failed decision visible and exposes the actionable error", async () => {
+    state.decisions = [
+      {
+        id: "decision-1",
+        title: "Which review scope?",
+        context: "The broader review takes longer.",
+        recommendation: "Review the changed behavior first.",
+        choices: ["Focused review", "Full review"],
+        status: "pending",
+      },
+    ];
+    respond = (path) =>
+      path.includes("/resolve")
+        ? {
+            status: 409,
+            body: {
+              error: "This decision changed.",
+              hint: "Refresh its context before choosing.",
+            },
+          }
+        : { body: state };
+    render(<App />);
+    const choice = await screen.findByRole("button", {
+      name: "Focused review",
+    });
+    fireEvent.click(choice);
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "This decision changed. Refresh its context before choosing.",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Which review scope?" }),
+    ).toBeTruthy();
+    await waitFor(() => expect(choice).toHaveProperty("disabled", false));
+    const submitted = calls.filter((c) => c.path.endsWith("/resolve"));
+    expect(submitted).toHaveLength(1);
+    expect(JSON.parse(submitted[0].options!.body as string)).toEqual({
+      choice: "Focused review",
+    });
+    expect(submitted[0].options!.headers).toHaveProperty(
+      "X-Requested-With",
+      "agent-assistant",
+    );
+    expect(submitted[0].options!.credentials).toBe("same-origin");
+  });
+  it("preserves the chat draft when the model is not configured", async () => {
+    respond = (path) =>
+      path === "/api/chat"
+        ? {
+            status: 503,
+            body: { error: "Configure an assistant model in Settings." },
+          }
+        : { body: state };
+    render(<App />);
+    const field = await screen.findByLabelText("Message Iris");
+    fireEvent.change(field, {
+      target: { value: "Please coordinate this project." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Configure an assistant model in Settings.",
+    );
+    expect(field).toHaveProperty("value", "Please coordinate this project.");
+    expect(screen.queryByText("Iris is working through it…")).toBeNull();
+  });
+  it("records acceptance criteria as text without silently starting project work", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "New project" }));
+    fireEvent.change(screen.getByLabelText("Project name"), {
+      target: { value: "A useful dashboard" },
+    });
+    fireEvent.change(screen.getByLabelText("Desired outcome"), {
+      target: { value: "Make pending decisions easy to find." },
+    });
+    fireEvent.change(screen.getByLabelText("What does done look like?"), {
+      target: {
+        value:
+          "Decision context is visible\nError responses preserve the draft",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === "/api/projects")).toBe(true),
+    );
+    const body = JSON.parse(
+      calls.find((c) => c.path === "/api/projects")!.options!.body as string,
+    );
+    expect(body.acceptance_criteria).toBe(
+      "Decision context is visible\nError responses preserve the draft",
+    );
+    expect(calls.some((c) => c.path.endsWith("/coordinate"))).toBe(false);
+  });
+  it("preserves unrelated configuration when changing the assistant name", async () => {
+    const config = {
+      assistant: state.assistant,
+      dashboard: { addr: "127.0.0.1:8340" },
+      workers: [
+        {
+          id: "runner-a",
+          name: "Local worker",
+          endpoint: "http://127.0.0.1:8350",
+          api_key_env: "WORKER_KEY",
+          capabilities: ["implement"],
+        },
+      ],
+      model: { model: "configured-model", api_key_env: "TEST_MODEL_KEY" },
+    };
+    respond = (path) => ({ body: path === "/api/config" ? config : state });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
+    const name = await screen.findByLabelText("Name");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Save preferences" }),
+      ).toHaveProperty("disabled", false),
+    );
+    fireEvent.change(name, { target: { value: "Fern" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.path === "/api/config" && c.options?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const saved = JSON.parse(
+      calls.find(
+        (c) => c.path === "/api/config" && c.options?.method === "PUT",
+      )!.options!.body as string,
+    );
+    expect(saved).toEqual({
+      ...config,
+      assistant: { ...config.assistant, name: "Fern" },
+    });
+  });
+  it("binds a worker to its approved project without discarding other configuration", async () => {
+    const config = {
+      assistant: state.assistant,
+      model: { model: "kept-model" },
+      workers: [
+        {
+          id: "local",
+          name: "Local broker",
+          endpoint: "http://127.0.0.1:8350",
+          api_key_env: "WORKER_TOKEN",
+          capabilities: ["implement"],
+          project_id: "prior-project",
+          future_option: "preserved",
+        },
+      ],
+    };
+    respond = (path) => ({ body: path === "/api/config" ? config : state });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
+    const project = await screen.findByLabelText(/^Project ID \(optional\)/);
+    fireEvent.change(project, { target: { value: "approved-project" } });
+    fireEvent.click(screen.getByLabelText("review"));
+    fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.path === "/api/config" && c.options?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const saved = JSON.parse(
+      calls.find(
+        (c) => c.path === "/api/config" && c.options?.method === "PUT",
+      )!.options!.body as string,
+    );
+    expect(saved.model).toEqual(config.model);
+    expect(saved.workers).toEqual([
+      {
+        ...config.workers[0],
+        project_id: "approved-project",
+        capabilities: ["implement", "review"],
+      },
+    ]);
+    expect(saved.workers[0].capabilities).not.toContain("coordinate");
+    expect(saved.workers[0].api_key_env).toBe("WORKER_TOKEN");
+  });
+  it("requires an inspection note, preserves it after failure, and never retries interrupted work", async () => {
+    state.pending_operations = [
+      {
+        id: "uncertain-operation",
+        summary: "A worker dispatch result is unknown.",
+      },
+    ];
+    let fail = true;
+    respond = (path) => {
+      if (path.endsWith("/acknowledge")) {
+        if (fail)
+          return {
+            status: 409,
+            body: { error: "Inspection could not be recorded." },
+          };
+        state = { ...state, pending_operations: [] };
+        return { body: {} };
+      }
+      return { body: state };
+    };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Decisions/ }));
+    expect(
+      await screen.findByRole("button", { name: "Record inspection" }),
+    ).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Nothing needs your decision")).toBeNull();
+    const note = screen.getByLabelText("What did you find?");
+    fireEvent.change(note, {
+      target: { value: "Checked broker logs: dispatch was not accepted." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record inspection" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Inspection could not be recorded.",
+    );
+    expect(note).toHaveProperty(
+      "value",
+      "Checked broker logs: dispatch was not accepted.",
+    );
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Record inspection" }));
+    expect(await screen.findByText("Nothing needs your decision")).toBeTruthy();
+    const writes = calls.filter((c) => c.options?.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(
+      writes.every(
+        (c) => c.path === "/api/operations/uncertain-operation/acknowledge",
+      ),
+    ).toBe(true);
+    expect(JSON.parse(writes[0].options!.body as string)).toEqual({
+      note: "Checked broker logs: dispatch was not accepted.",
+    });
+  });
+  it("requires owner access before rendering private project data", async () => {
+    respond = () => ({
+      status: 401,
+      body: { error: "Owner access required." },
+    });
+    render(<App />);
+    expect(await screen.findByLabelText("Dashboard access code")).toBeTruthy();
+    expect(
+      screen.queryByRole("navigation", { name: "Main navigation" }),
+    ).toBeNull();
+  });
+  it("removes a pairing token before exchanging it and reuses one request", async () => {
+    window.history.replaceState(null, "", "/#token=one-use-fixture");
+    const first = bootstrapSession();
+    const second = bootstrapSession();
+    expect(window.location.hash).toBe("");
+    expect(first).toBe(second);
+    await first;
+    expect(calls.filter((c) => c.path === "/api/session")).toHaveLength(1);
+    expect(window.localStorage.length).toBe(0);
+  });
+});
