@@ -1,0 +1,32 @@
+.DS_Store
+.env
+.env.*
+
+# build
+dist
+node_modules
+release
+/agent-assistant
+
+# local
+.cache
+.tmp
+.ai-cache
+
+# runtime data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# claude
+.claude/*.local.json
+CLAUDE.local.md
+
+# design docs: tracked, except the archive of stale/internal notes
+design-docs/archive/
+
+# playwright MCP artifacts
+.playwright-mcp/
