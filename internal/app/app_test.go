@@ -1,0 +1,95 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/core"
+)
+
+func testApp(t *testing.T) *App {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Assistant.Name = "Quill"
+	cfg.Model.APIKeyEnv = ""
+	s, err := core.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return New(core.NewService(s, cfg), cfg, filepath.Join(t.TempDir(), "config.json"), false)
+}
+func TestChatModelUsesConfiguredNameAndPersistsToolEffects(t *testing.T) {
+	a := testApp(t)
+	var calls atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Error(r.URL.Path)
+		}
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if !strings.Contains(payload.Messages[0].Content, "Quill") {
+			t.Error("configured name absent from model prompt")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if calls.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"create_project","arguments":"{\"title\":\"Export\",\"objective\":\"Improve exports\",\"acceptance_criteria\":[\"CSV validates\"]}"}}]}}],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"I recorded the outcome and acceptance criteria."}}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}}`))
+	}))
+	defer remote.Close()
+	cfg := a.Config()
+	cfg.Model.BaseURL = remote.URL + "/v1"
+	cfg.Model.Model = "fixture-model"
+	if err := a.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	result, err := a.Chat(context.Background(), "Set up the export project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage.TotalTokens != 50 {
+		t.Fatal(result.Usage)
+	}
+	snapshot, _ := a.Core.Snapshot(context.Background())
+	if len(snapshot.Projects) != 1 || len(snapshot.Messages) != 2 {
+		t.Fatalf("lost model effects: %+v", snapshot)
+	}
+}
+func TestWorkerTriggeredReasoningCannotCrossProjectOrChangeMemory(t *testing.T) {
+	a := testApp(t)
+	ctx := context.Background()
+	p, _ := a.Core.CreateProject(ctx, core.ProjectInput{Title: "Allowed", AcceptanceCriteria: "Evidence"})
+	other, _ := a.Core.CreateProject(ctx, core.ProjectInput{Title: "Other", AcceptanceCriteria: "Evidence"})
+	scope := projectExecutor{app: a, projectID: p.ID}
+	if _, err := scope.Execute(ctx, "remember_preference", json.RawMessage(`{"key":"authority","value":"all"}`)); err == nil {
+		t.Fatal("worker changed global memory")
+	}
+	raw, _ := json.Marshal(map[string]any{"project_id": other.ID, "evidence": []string{"done"}})
+	if _, err := scope.Execute(ctx, "complete_project", raw); err == nil {
+		t.Fatal("worker closed unrelated project")
+	}
+	if _, err := a.Execute(ctx, "run_shell", json.RawMessage(`{"command":"anything"}`)); err == nil {
+		t.Fatal("PA acquired shell")
+	}
+}
+func TestDemoCannotCallModel(t *testing.T) {
+	a := testApp(t)
+	a.Demo = true
+	if _, err := a.Chat(context.Background(), "do work"); err == nil {
+		t.Fatal("demo invoked model")
+	}
+}

@@ -17,6 +17,9 @@ release
 *.db
 *.db-shm
 *.db-wal
+*.db.lock
+*.runtime/
+*.workers/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
