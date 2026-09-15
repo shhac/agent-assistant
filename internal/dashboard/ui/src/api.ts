@@ -6,6 +6,8 @@ export interface Project {
   description: string;
   acceptance_criteria: string[] | string;
   status: string;
+  directories?: string[];
+  scratch_directory?: string;
   updated_at?: string;
 }
 export interface Agent {
@@ -179,4 +181,18 @@ export function bootstrapSession(): Promise<void> {
     body: JSON.stringify({ token }),
   });
   return pairingRequest;
+}
+
+export type FileSystemKind = "directory" | "file" | "any";
+export interface FileSystemEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  selectable: boolean;
+}
+export interface FileSystemPage {
+  path: string;
+  parent: string | null;
+  entries: FileSystemEntry[];
+  next_cursor: string | null;
 }

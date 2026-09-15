@@ -1,3 +1,4 @@
+import { NewProject, ProjectDirectories } from "./ProjectForms";
 import { Avatar, Waiting, ThemePicker, validTheme } from "./Identity";
 import { AssistantSetup } from "./AssistantSetup";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -591,7 +592,7 @@ function Overview({
         action={
           <button className="button primary" onClick={onNew}>
             <Icon name="Plus" size={16} />
-            New project
+            Add project
           </button>
         }
       />
@@ -789,6 +790,11 @@ function Projects({
             Use this ID when binding an approved worker profile to this project.
           </p>
         </details>
+        <ProjectDirectories
+          key={project.id}
+          project={project}
+          refresh={refresh}
+        />
         <CoordinateProject project={project} refresh={refresh} />
         <section className="detail-section">
           <p className="eyebrow">WHAT DONE LOOKS LIKE</p>
@@ -866,7 +872,7 @@ function Projects({
         action={
           <button className="button primary" onClick={onNew}>
             <Icon name="Plus" size={16} />
-            New project
+            Add project
           </button>
         }
       />
@@ -887,7 +893,7 @@ function Projects({
           title="One outcome is a good start"
           action={
             <button className="button primary" onClick={onNew}>
-              Create a project <Icon name="Arrow" size={15} />
+              Add project <Icon name="Arrow" size={15} />
             </button>
           }
         >
@@ -1594,128 +1600,6 @@ function Login({
         </span>
       </main>
     </div>
-  );
-}
-function NewProject({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: () => Promise<void>;
-}) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [criteria, setCriteria] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
-    element?.querySelector<HTMLInputElement>("#project-title")?.focus();
-    return () => element?.close();
-  }, []);
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/projects", {
-        method: "POST",
-        body: JSON.stringify({
-          title: title.trim(),
-          description: description.trim(),
-          acceptance_criteria: criteria.trim(),
-        }),
-      });
-      await onCreated();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <dialog
-      ref={dialog}
-      className="project-dialog"
-      aria-labelledby="project-dialog-title"
-      onCancel={(e) => {
-        if (busy) e.preventDefault();
-        else onClose();
-      }}
-    >
-      <div className="dialog-header">
-        <p className="eyebrow">HAND OVER AN OUTCOME</p>
-        <button
-          className="icon-button"
-          aria-label="Close new project"
-          disabled={busy}
-          onClick={onClose}
-        >
-          <Icon name="Close" />
-        </button>
-      </div>
-      <h2 id="project-dialog-title">What would you like to achieve?</h2>
-      <p className="dialog-description">
-        Start with the result. Your assistant can help work out the
-        coordination.
-      </p>
-      <form onSubmit={create}>
-        <label htmlFor="project-title">
-          Project name
-          <input
-            id="project-title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="A clear, useful name"
-            maxLength={200}
-            required
-            autoFocus
-          />
-        </label>
-        <label htmlFor="project-description">
-          Desired outcome
-          <textarea
-            id="project-description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="What should change, and why does it matter?"
-            rows={3}
-            maxLength={20000}
-            required
-          />
-        </label>
-        <label htmlFor="project-criteria">
-          What does done look like?
-          <textarea
-            id="project-criteria"
-            value={criteria}
-            onChange={(e) => setCriteria(e.target.value)}
-            placeholder="One acceptance criterion per line"
-            rows={3}
-            maxLength={20000}
-            required
-          />
-        </label>
-        <ErrorNotice error={error} />
-        <div className="dialog-footer">
-          <p>
-            Creating a project records the outcome. Ask your assistant to begin
-            coordination.
-          </p>
-          <button
-            className="button primary"
-            disabled={
-              busy || !title.trim() || !description.trim() || !criteria.trim()
-            }
-          >
-            {busy ? "Creating…" : "Create project"}
-            <Icon name="Arrow" size={15} />
-          </button>
-        </div>
-      </form>
-    </dialog>
   );
 }
 

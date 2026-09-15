@@ -22,7 +22,8 @@ import (
 type Runner func(context.Context, string, []string) ([]byte, error)
 type Client struct{ Run Runner }
 type Profile struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
 }
 type Discovery struct {
 	Tool       string    `json:"tool"`
@@ -56,7 +57,7 @@ func Operations(tool string) []string {
 	case "agent-fathom":
 		return []string{"meetings", "summary", "action_items"}
 	case "agent-notion":
-		return []string{}
+		return []string{"search", "page", "blocks"}
 	}
 	return nil
 }
@@ -79,6 +80,10 @@ func (c Client) Discover(ctx context.Context, tool string) (Discovery, error) {
 	if err != nil {
 		return d, fmt.Errorf("%s returned invalid profile metadata", tool)
 	}
+	records, err = accountRecords(records)
+	if err != nil {
+		return d, err
+	}
 	seen := map[string]bool{}
 	for _, record := range records {
 		var row map[string]json.RawMessage
@@ -91,7 +96,18 @@ func (c Client) Discover(ctx context.Context, tool string) (Discovery, error) {
 			json.Unmarshal(row["profile"], &name)
 		}
 		if name != "" && !seen[name] {
-			d.Profiles = append(d.Profiles, Profile{Name: name})
+			detail := ""
+			if tool == "agent-slack" {
+				var secrets map[string]string
+				_ = json.Unmarshal(row["secrets"], &secrets)
+				for _, status := range secrets {
+					if status == "missing" {
+						detail = "Stored credential unavailable in this daemon context; re-authenticate with agent-slack on this computer"
+						break
+					}
+				}
+			}
+			d.Profiles = append(d.Profiles, Profile{Name: name, Detail: detail})
 			seen[name] = true
 		}
 	}
@@ -99,7 +115,7 @@ func (c Client) Discover(ctx context.Context, tool string) (Discovery, error) {
 	d.Available = true
 	d.Detail = "Existing CLI accounts; credentials remain with the CLI"
 	if !d.Selectable {
-		d.Detail = "This agent-notion version has no per-call workspace selector. Reads remain disabled until it supports explicit account selection; global defaults are never changed."
+		d.Detail = "Uses agent-notion’s current default account and native authentication. No profile selection is needed; changing the CLI default changes which account this connection reads."
 	}
 	return d, nil
 }
@@ -115,11 +131,15 @@ func (c Client) Query(ctx context.Context, bindings []config.Connection, q Query
 	if binding == nil {
 		return out, errors.New("unknown connection")
 	}
-	allowed := false
+	defaultNotion := binding.Tool == "agent-notion" && len(binding.Profiles) == 0
+	allowed := defaultNotion && q.Profile == ""
 	for _, p := range binding.Profiles {
 		if p == q.Profile {
 			allowed = true
 		}
+	}
+	if binding.Tool == "agent-notion" && (!defaultNotion || q.Profile != "") {
+		return out, errors.New("Notion uses the CLI default account; leave profiles and query profile empty")
 	}
 	if !allowed {
 		return out, errors.New("profile is outside the owner's configured connection scope")
@@ -131,18 +151,20 @@ func (c Client) Query(ctx context.Context, bindings []config.Connection, q Query
 	if err != nil {
 		return out, err
 	}
-	discovered, err := c.Discover(ctx, binding.Tool)
-	if err != nil {
-		return out, err
-	}
-	known := false
-	for _, p := range discovered.Profiles {
-		if p.Name == q.Profile {
-			known = true
+	if !defaultNotion {
+		discovered, err := c.Discover(ctx, binding.Tool)
+		if err != nil {
+			return out, err
 		}
-	}
-	if !discovered.Available || !known {
-		return out, errors.New("selected profile is not a known CLI account; configure it using the CLI auth commands")
+		known := false
+		for _, p := range discovered.Profiles {
+			if p.Name == q.Profile {
+				known = true
+			}
+		}
+		if !discovered.Available || !known {
+			return out, errors.New("selected profile is not a known CLI account; configure it using the CLI auth commands")
+		}
 	}
 	data, err := c.Run(ctx, binding.Tool, argv)
 	if err != nil {
@@ -157,16 +179,17 @@ func (c Client) Query(ctx context.Context, bindings []config.Connection, q Query
 
 var slackConversationID = regexp.MustCompile(`^[CGD][A-Z0-9]{8,31}$`)
 var linearIssueID = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_]*-[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
+var notionPageID = regexp.MustCompile(`^([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
 var fathomRecordingID = regexp.MustCompile(`^[0-9]{1,20}$`)
 
 func arguments(tool string, q Query) ([]string, error) {
 	args := []string{"--format", "jsonl", "--color", "never", "--timeout", "20000"}
-	if tool == "agent-notion" {
-		return nil, errors.New("agent-notion has no per-call workspace selector; reads are unavailable until explicit account selection is supported")
+	if tool == "agent-notion" && q.Profile != "" {
+		return nil, errors.New("Notion uses its CLI default account; query profile must be empty")
 	}
 	if tool == "agent-fathom" {
 		args = append(args, "--profile", q.Profile, "--max-retries", "0")
-	} else {
+	} else if tool != "agent-notion" {
 		args = append(args, "--workspace", q.Profile)
 	}
 	var tail []string
@@ -191,6 +214,17 @@ func arguments(tool string, q Query) ([]string, error) {
 			return nil, errors.New("Slack message reads require an existing C/G/D conversation ID; URLs and user targets are not allowed")
 		}
 		tail = []string{"message", "list", "--limit", "20", "--resolve", "none", "--max-body-chars", "2000", "--", q.ResourceID}
+	case "agent-notion:search":
+		tail = []string{"search", "query", "--limit", "20", "--", q.Query}
+	case "agent-notion:page", "agent-notion:blocks":
+		if !notionPageID.MatchString(q.ResourceID) {
+			return nil, errors.New("Notion reads require a page UUID, not a URL")
+		}
+		if q.Operation == "page" {
+			tail = []string{"page", "get", "--", q.ResourceID}
+		} else {
+			tail = []string{"block", "list", "--raw", "--limit", "50", "--", q.ResourceID}
+		}
 	case "agent-fathom:meetings":
 		tail = []string{"meetings", "list", "--limit", "10"}
 		if q.Query != "" {
@@ -211,6 +245,35 @@ func arguments(tool string, q Query) ([]string, error) {
 	}
 	return append(args, tail...), nil
 }
+
+// Account-list formats differ from data reads: Slack emits one workspaces
+// envelope even with --format jsonl. Only known account containers are unwrapped;
+// no authentication metadata beyond aliases and generated status text is exported.
+func accountRecords(records []json.RawMessage) ([]json.RawMessage, error) {
+	out := []json.RawMessage{}
+	for _, record := range records {
+		var envelope struct {
+			Workspaces []json.RawMessage `json:"workspaces"`
+			Profiles   []json.RawMessage `json:"profiles"`
+		}
+		if json.Unmarshal(record, &envelope) != nil {
+			return nil, errors.New("invalid account metadata")
+		}
+		switch {
+		case envelope.Workspaces != nil:
+			out = append(out, envelope.Workspaces...)
+		case envelope.Profiles != nil:
+			out = append(out, envelope.Profiles...)
+		default:
+			out = append(out, record)
+		}
+		if len(out) > 500 {
+			return nil, errors.New("too many account profiles")
+		}
+	}
+	return out, nil
+}
+
 func decode(data []byte) ([]json.RawMessage, error) {
 	records := []json.RawMessage{}
 	d := json.NewDecoder(bytes.NewReader(data))
@@ -250,18 +313,7 @@ func run(ctx context.Context, name string, args []string) ([]byte, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = time.Second
-	// Never forward provider API keys: each CLI resolves the explicitly named
-	// account from its own credential store and existing XDG configuration.
-	for _, key := range []string{"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR"} {
-		if v, ok := os.LookupEnv(key); ok {
-			cmd.Env = append(cmd.Env, key+"="+v)
-		}
-	}
-	cmd.Env = append(cmd.Env, "LIN_REQUIRE_IDENTITY=1")
-	// Auth-list is local metadata and needs no identity override.
-	if len(args) > 0 && args[0] == "auth" {
-		cmd.Env = cmd.Env[:len(cmd.Env)-1]
-	}
+	cmd.Env = commandEnvironment(name, args)
 	var out bounded
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
@@ -269,4 +321,25 @@ func run(ctx context.Context, name string, args []string) ([]byte, error) {
 		return nil, errors.New("CLI unavailable or read failed")
 	}
 	return out.Bytes(), nil
+}
+
+func commandEnvironment(name string, args []string) []string {
+	var env []string
+	// Named-account CLIs resolve their own credential stores. Notion explicitly
+	// uses its native default, including native environment authentication.
+	keys := []string{"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR"}
+	if name == "agent-notion" {
+		keys = append(keys, "NOTION_API_KEY", "NOTION_TOKEN")
+	}
+	for _, key := range keys {
+		if v, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+v)
+		}
+	}
+	env = append(env, "LIN_REQUIRE_IDENTITY=1")
+	// Auth-list is local metadata and needs no identity override.
+	if len(args) > 0 && args[0] == "auth" {
+		env = env[:len(env)-1]
+	}
+	return env
 }

@@ -2788,3 +2788,292 @@ textarea {
     scroll-behavior: auto !important;
   }
 }
+
+/* Shared server-filesystem selection, used by project setup and attachments. */
+.filesystem-dialog {
+  width: min(820px, calc(100vw - 28px));
+  height: min(760px, calc(100dvh - 36px));
+  max-height: calc(100dvh - 36px);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--text);
+  background: var(--surface);
+  overflow: hidden;
+}
+.filesystem-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.filesystem-header,
+.filesystem-dialog > .dialog-footer {
+  flex-shrink: 0;
+}
+.filesystem-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 3px;
+}
+.filesystem-body > * {
+  flex-shrink: 0;
+}
+.filesystem-body > .filesystem-tree {
+  flex: 1 1 342px;
+  min-height: 114px;
+}
+.filesystem-dialog::backdrop {
+  background: #080a0dbb;
+  backdrop-filter: blur(4px);
+}
+.filesystem-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.filesystem-header h2 {
+  margin: 7px 0 10px;
+}
+.filesystem-location {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  margin: 20px 0 12px;
+}
+.filesystem-location label {
+  flex: 1;
+  min-width: 0;
+}
+.filesystem-location input {
+  margin: 7px 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.filesystem-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+.filesystem-hidden {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.filesystem-hidden input {
+  width: 15px;
+  margin: 0;
+}
+.filesystem-tree {
+  height: min(342px, 40dvh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-deep);
+}
+.filesystem-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.filesystem-row:hover {
+  background: var(--surface-raised);
+}
+.filesystem-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.filesystem-row.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.filesystem-chevron {
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.filesystem-name {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.filesystem-choice {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-align: center;
+  color: var(--accent);
+}
+.filesystem-action {
+  color: var(--accent);
+}
+.filesystem-row-hint,
+.filesystem-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+.filesystem-status {
+  min-height: 17px;
+  margin: 8px 0;
+}
+.filesystem-current {
+  max-width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+  margin: 7px 0 16px;
+}
+.filesystem-current span,
+.project-directories li > span,
+.project-scratch code {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.filesystem-selection {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.filesystem-selection strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.filesystem-selection ul,
+.project-directories {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  max-height: 120px;
+  overflow: auto;
+}
+.filesystem-selection li,
+.project-directories li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 0;
+  font-size: 11px;
+}
+.filesystem-selection li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filesystem-selection li > button {
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+}
+.filesystem-loading {
+  display: grid;
+  place-items: center;
+  height: 200px;
+  color: var(--muted);
+}
+.filesystem-dialog .dialog-footer {
+  gap: 12px;
+  padding-top: 16px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.filesystem-dialog .dialog-footer p {
+  flex: 1;
+}
+.project-mode {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  margin: 18px 0;
+}
+.project-mode button {
+  padding: 10px 16px;
+  flex: 1;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+.project-mode button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.project-folder-choice {
+  padding: 15px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 16px 0;
+}
+.project-folder-choice > strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.optional-field {
+  display: inline;
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 9px;
+  font-weight: normal;
+}
+.project-locations {
+  border-bottom: 1px solid var(--line);
+  padding: 18px 0 22px;
+  margin-bottom: 22px;
+}
+.project-locations h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.project-locations .section-heading {
+  margin-bottom: 6px;
+}
+.project-location-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+.project-scratch {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.project-scratch summary {
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  .filesystem-dialog {
+    padding: 18px;
+  }
+  .filesystem-dialog .dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .filesystem-dialog .dialog-footer p {
+    flex-basis: 100%;
+  }
+  .filesystem-dialog .dialog-footer .button {
+    flex: 1;
+  }
+  .filesystem-selection ul {
+    max-height: 80px;
+  }
+}

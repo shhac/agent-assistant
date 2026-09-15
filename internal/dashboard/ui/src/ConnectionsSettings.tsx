@@ -8,7 +8,7 @@ export interface Connection {
 }
 interface ProfileDiscovery {
   tool: string;
-  profiles: { name: string }[];
+  profiles: { name: string; detail?: string }[];
   available: boolean;
   detail: string;
   selectable: boolean;
@@ -67,7 +67,7 @@ export function ConnectionsSettings({
       {connections.map((connection, index) => (
         <ConnectionEditor
           key={connection.id}
-          connection={connection}
+          connection={{ ...connection, profiles: connection.profiles ?? [] }}
           index={index}
           onChange={(next) =>
             onChange(
@@ -96,9 +96,8 @@ export function ConnectionsSettings({
       </button>
       <p className="field-hint">
         Accounts authenticate through their CLI. No credentials are entered
-        here. Choose at least one profile for each connection, or remove the
-        unfinished connection before saving preferences. Notion will become
-        selectable when its CLI supports choosing an account.
+        here. Choose at least one profile for Linear, Slack or Fathom. Notion
+        uses the account already selected in its CLI; no profile is needed.
       </p>
     </section>
   );
@@ -139,6 +138,7 @@ function ConnectionEditor({
       current = false;
     };
   }, [connection.tool, revision]);
+  const usesDefaultAccount = connection.tool === "agent-notion";
   const service = tools.find((t) => t.id === connection.tool);
   const discovered = (discovery?.profiles || []).map((p) => p.name);
   const names = [...new Set([...discovered, ...connection.profiles])];
@@ -187,22 +187,21 @@ function ConnectionEditor({
             }
           >
             {tools.map((tool) => (
-              <option
-                key={tool.id}
-                value={tool.id}
-                disabled={tool.id === "agent-notion"}
-              >
+              <option key={tool.id} value={tool.id}>
                 {tool.name}
-                {tool.id === "agent-notion"
-                  ? " (account selection unavailable)"
-                  : ""}
               </option>
             ))}
           </select>
         </label>
       </div>
       <div className="profile-selection-heading">
-        <strong>Allowed account profiles</strong>
+        <strong>
+          {usesDefaultAccount
+            ? "CLI default account"
+            : connection.tool === "agent-slack"
+              ? "Workspace aliases"
+              : "Allowed account profiles"}
+        </strong>
         <button
           type="button"
           className="text-button"
@@ -218,47 +217,64 @@ function ConnectionEditor({
         </p>
       )}
       {discovery?.detail && <p className="field-hint">{discovery.detail}</p>}
-      {!loading && !names.length && (
+      {!usesDefaultAccount && !loading && !names.length && (
         <p className="field-hint">
           No profiles found. Set up an account with{" "}
           <code>{connection.tool}</code>, then refresh.
         </p>
       )}
-      <div className="profile-choices">
-        {names.map((name) => (
-          <label key={name} className="profile-choice">
-            <input
-              type="checkbox"
-              checked={connection.profiles.includes(name)}
-              disabled={
-                loading ||
-                !discovery?.available ||
-                !discovery.selectable ||
-                !discovered.includes(name)
-              }
-              onChange={(e) =>
-                onChange({
-                  ...connection,
-                  profiles: e.target.checked
-                    ? [...connection.profiles, name]
-                    : connection.profiles.filter((p) => p !== name),
-                })
-              }
-            />
-            <span>
-              {name}
-              {!discovered.includes(name) && !loading && (
-                <small>Saved profile; currently unavailable</small>
-              )}
-            </span>
-          </label>
-        ))}
-      </div>
-      {discovery && !discovery.selectable && (
+      {!usesDefaultAccount && (
+        <div className="profile-choices">
+          {names.map((name) => (
+            <label key={name} className="profile-choice">
+              <input
+                type="checkbox"
+                checked={connection.profiles.includes(name)}
+                disabled={
+                  loading ||
+                  !discovery?.available ||
+                  !discovery.selectable ||
+                  !discovered.includes(name)
+                }
+                onChange={(e) =>
+                  onChange({
+                    ...connection,
+                    profiles: e.target.checked
+                      ? [...connection.profiles, name]
+                      : connection.profiles.filter((p) => p !== name),
+                  })
+                }
+              />
+              <span>
+                {name}
+                {discovery?.profiles.find((p) => p.name === name)?.detail && (
+                  <small>
+                    {discovery.profiles.find((p) => p.name === name)?.detail}
+                  </small>
+                )}
+                {!discovered.includes(name) && !loading && (
+                  <small>Saved profile; currently unavailable</small>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {usesDefaultAccount && (
         <p className="field-hint">
-          This CLI cannot select a specific account yet. The assistant will keep
-          this connection unavailable rather than use a different account.
+          Uses the current account and authentication from{" "}
+          <code>agent-notion</code>. Changing that CLI’s default changes the
+          account this connection reads.
         </p>
+      )}
+      {usesDefaultAccount && connection.profiles.length > 0 && (
+        <button
+          type="button"
+          className="button secondary"
+          onClick={() => onChange({ ...connection, profiles: [] })}
+        >
+          Use CLI default account
+        </button>
       )}
     </fieldset>
   );

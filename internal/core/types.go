@@ -8,6 +8,8 @@ type Assistant struct {
 	Personality string `json:"personality"`
 }
 type Project struct {
+	Directories        []string  `json:"directories"`
+	ScratchDirectory   string    `json:"scratch_directory"`
 	ContractDefined    bool      `json:"contract_defined"`
 	SourceDescription  string    `json:"source_description,omitempty"`
 	ID                 string    `json:"id"`
@@ -101,10 +103,11 @@ type Snapshot struct {
 	ModelCalls        map[string]int     `json:"-"`
 }
 type ProjectInput struct {
-	Title              string `json:"title"`
-	Description        string `json:"description"`
-	AcceptanceCriteria string `json:"acceptance_criteria"`
-	SourceID           string `json:"source_id,omitempty"`
+	Directories        []string `json:"directories"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description"`
+	AcceptanceCriteria string   `json:"acceptance_criteria"`
+	SourceID           string   `json:"source_id,omitempty"`
 }
 type DelegateInput struct {
 	ProjectID          string   `json:"project_id"`

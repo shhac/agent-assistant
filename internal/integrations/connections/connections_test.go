@@ -140,3 +140,117 @@ func TestResourceTargetsCannotSwitchAccountsOrCreateDMs(t *testing.T) {
 		}
 	}
 }
+
+func TestSlackWorkspaceEnvelopeDiscoveryAndQuery(t *testing.T) {
+	calls := 0
+	c := Client{Run: func(_ context.Context, name string, args []string) ([]byte, error) {
+		if name != "agent-slack" {
+			t.Fatal(name)
+		}
+		if args[0] == "auth" {
+			return []byte(`{"credentials_path":"private-path","default_workspace":"work","workspaces":[{"alias":"work","secrets":{"xoxc":"missing","xoxd":"missing"},"hint":"untrusted secret detail"},{"alias":"personal","secrets":{"token":"keychain"}}]}`), nil
+		}
+		calls++
+		if !strings.Contains(strings.Join(args, " "), "--workspace work search messages") {
+			t.Fatal(args)
+		}
+		return []byte(`{"content":"synthetic reply"}`), nil
+	}}
+	d, err := c.Discover(context.Background(), "agent-slack")
+	if err != nil || len(d.Profiles) != 2 {
+		t.Fatal(d, err)
+	}
+	if d.Profiles[1].Name != "work" || !strings.Contains(d.Profiles[1].Detail, "credential unavailable") {
+		t.Fatal(d)
+	}
+	raw, _ := json.Marshal(d)
+	for _, forbidden := range []string{"private-path", "untrusted secret detail", "xoxc", "xoxd"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatal(string(raw))
+		}
+	}
+	result, err := c.Query(context.Background(), []config.Connection{{ID: "slack", Tool: "agent-slack", Profiles: []string{"work"}}}, Query{ConnectionID: "slack", Profile: "work", Operation: "search", Query: "project"})
+	if err != nil || len(result.Data) != 1 || calls != 1 {
+		t.Fatal(result, calls, err)
+	}
+}
+func TestNotionDefaultAccountReadsWithoutAccountDiscoveryOrSelector(t *testing.T) {
+	var invoked []string
+	c := Client{Run: func(_ context.Context, name string, args []string) ([]byte, error) {
+		if name != "agent-notion" || args[0] == "auth" {
+			t.Fatal("Notion default must not depend on stored profile enumeration", name, args)
+		}
+		invoked = args
+		return []byte(`{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}`), nil
+	}}
+	bindings := []config.Connection{{ID: "notion", Tool: "agent-notion", Profiles: []string{}}}
+	for _, op := range Operations("agent-notion") {
+		result, err := c.Query(context.Background(), bindings, Query{ConnectionID: "notion", Operation: op, Query: "--backend malicious", ResourceID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
+		if err != nil || len(result.Data) != 1 || result.Profile != "" {
+			t.Fatal(result, err)
+		}
+		for _, arg := range invoked {
+			if arg == "--workspace" || arg == "--profile" || arg == "switch" {
+				t.Fatal("invented profile selection", invoked)
+			}
+		}
+		if op == "search" && !reflect.DeepEqual(invoked[len(invoked)-2:], []string{"--", "--backend malicious"}) {
+			t.Fatal(invoked)
+		}
+	}
+	invoked = nil
+	if _, err := c.Query(context.Background(), bindings, Query{ConnectionID: "notion", Profile: "work", Operation: "search", Query: "project"}); err == nil || invoked != nil {
+		t.Fatal("named profile silently ignored")
+	}
+	bindings[0].Profiles = []string{"work"}
+	if _, err := c.Query(context.Background(), bindings, Query{ConnectionID: "notion", Operation: "search", Query: "project"}); err == nil || invoked != nil {
+		t.Fatal("saved named profile silently ignored")
+	}
+}
+func TestNotionInvalidResourcesAndWritesNeverSpawn(t *testing.T) {
+	c := Client{Run: func(context.Context, string, []string) ([]byte, error) {
+		t.Fatal("invalid operation reached subprocess")
+		return nil, nil
+	}}
+	binding := []config.Connection{{ID: "notion", Tool: "agent-notion"}}
+	for _, q := range []Query{
+		{Operation: "page", ResourceID: "https://notion.so/another-workspace"},
+		{Operation: "blocks", ResourceID: "--content evil"},
+		{Operation: "append", ResourceID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{Operation: "ai", Query: "edit everything"},
+	} {
+		q.ConnectionID = "notion"
+		if _, err := c.Query(context.Background(), binding, q); err == nil {
+			t.Fatal(q)
+		}
+	}
+}
+
+func TestOnlyNotionDefaultReceivesItsNativeEnvironmentCredentials(t *testing.T) {
+	t.Setenv("NOTION_API_KEY", "synthetic-notion-key")
+	t.Setenv("NOTION_TOKEN", "synthetic-notion-token")
+	t.Setenv("OPENAI_API_KEY", "synthetic-provider-key")
+	t.Setenv("SLACK_TOKEN", "synthetic-other-account-token")
+	for _, tool := range []string{"agent-notion", "lin", "agent-slack", "agent-fathom"} {
+		values := map[string]string{}
+		for _, e := range commandEnvironment(tool, []string{"--format", "jsonl"}) {
+			key, value, _ := strings.Cut(e, "=")
+			values[key] = value
+		}
+		if _, ok := values["OPENAI_API_KEY"]; ok {
+			t.Fatal("provider credential forwarded")
+		}
+		if _, ok := values["SLACK_TOKEN"]; ok {
+			t.Fatal("named Slack account overridden")
+		}
+		if tool == "agent-notion" {
+			if values["NOTION_API_KEY"] != "synthetic-notion-key" || values["NOTION_TOKEN"] != "synthetic-notion-token" {
+				t.Fatal("native default auth dropped")
+			}
+		} else {
+			if _, ok := values["NOTION_API_KEY"]; ok {
+				t.Fatal("Notion credential sent to another CLI")
+			}
+		}
+	}
+}

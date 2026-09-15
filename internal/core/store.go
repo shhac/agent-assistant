@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	_ "modernc.org/sqlite"
 	"os"
@@ -14,8 +15,10 @@ import (
 // Store serializes mutations in-process and uses BEGIN IMMEDIATE to serialize
 // other processes. Each mutation atomically records entities and audit events.
 type Store struct {
-	db *sql.DB
-	mu sync.Mutex
+	db             *sql.DB
+	mu             sync.Mutex
+	stateDirectory string
+	temporaryState bool
 }
 type diskState struct {
 	Events     map[string]bool `json:"events"`
@@ -24,6 +27,26 @@ type diskState struct {
 }
 
 func Open(path string) (*Store, error) {
+	var stateDirectory string
+	temporaryState := path == ":memory:"
+	if temporaryState {
+		var err error
+		stateDirectory, err = os.MkdirTemp("", "agent-assistant-state-")
+		if err != nil {
+			return nil, err
+		}
+		canonical, err := filepath.EvalSymlinks(stateDirectory)
+		if err != nil {
+			os.RemoveAll(stateDirectory)
+			return nil, err
+		}
+		stateDirectory = canonical
+		defer func() {
+			if temporaryState {
+				os.RemoveAll(stateDirectory)
+			}
+		}()
+	}
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return nil, err
@@ -36,6 +59,15 @@ func Open(path string) (*Store, error) {
 		if err = os.Chmod(path, 0600); err != nil {
 			return nil, err
 		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, err
+		}
+		path, err = filepath.Abs(canonical)
+		if err != nil {
+			return nil, err
+		}
+		stateDirectory = filepath.Dir(path)
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -47,14 +79,28 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db}
-	if err = s.update(context.Background(), func(*Snapshot) error { return nil }); err != nil {
+	s := &Store{db: db, stateDirectory: stateDirectory, temporaryState: temporaryState}
+	if err = s.update(context.Background(), func(v *Snapshot) error {
+		for i := range v.Projects {
+			if err := s.prepareProject(&v.Projects[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		db.Close()
 		return nil, err
 	}
+	temporaryState = false
 	return s, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	if s.temporaryState {
+		return errors.Join(err, os.RemoveAll(s.stateDirectory))
+	}
+	return err
+}
 func emptyState() Snapshot {
 	return Snapshot{Projects: []Project{}, Agents: []Agent{}, Decisions: []Decision{}, Messages: []Message{}, Memories: []Memory{}, Activity: []Activity{}, Integrations: []Integration{}, Events: map[string]bool{}, ModelCalls: map[string]int{}}
 }

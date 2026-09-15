@@ -77,13 +77,22 @@ it("restores a previously applied recommendation without offering to apply it ag
     screen.queryByText("Nothing changes until you apply this suggestion."),
   ).toBeNull();
 });
-it("keeps named account bindings distinct and prevents unsupported Notion drafts", async () => {
-  response = () => ({
-    tool: "agent-slack",
-    available: true,
-    selectable: true,
-    profiles: [{ name: "work" }, { name: "personal" }],
-  });
+it("keeps named account bindings distinct and enables Notion with its CLI default", async () => {
+  response = (path) =>
+    path.includes("agent-notion")
+      ? {
+          tool: "agent-notion",
+          available: true,
+          selectable: false,
+          profiles: [],
+          detail: "Uses the CLI default account",
+        }
+      : {
+          tool: "agent-slack",
+          available: true,
+          selectable: true,
+          profiles: [{ name: "work" }, { name: "personal" }],
+        };
   let latest: Connection[] = [];
   function Harness() {
     const [connections, setConnections] = useState<Connection[]>([
@@ -122,9 +131,17 @@ it("keeps named account bindings distinct and prevents unsupported Notion drafts
   expect(latest[1].profiles).toEqual(["personal", "work"]);
   expect(
     screen.getAllByRole("option", {
-      name: "Notion (account selection unavailable)",
+      name: "Notion",
     })[0],
-  ).toHaveProperty("disabled", true);
+  ).toHaveProperty("disabled", false);
+  fireEvent.change(screen.getAllByLabelText("Service")[1], {
+    target: { value: "agent-notion" },
+  });
+  expect(latest[0].profiles).toEqual(["work"]);
+  expect(latest[1].tool).toBe("agent-notion");
+  expect(latest[1].profiles).toEqual([]);
+  expect(await screen.findByText("Uses the CLI default account")).toBeTruthy();
+  expect(screen.getByText("CLI default account")).toBeTruthy();
   expect(screen.getAllByLabelText("Connection name")[0]).toHaveProperty(
     "maxLength",
     80,

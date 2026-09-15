@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shhac/agent-assistant/internal/statepath"
 	"io"
 	"net"
 	"net/http"
@@ -47,7 +48,14 @@ func codexComplete(ctx context.Context, cfg Config, messages []Message, tools []
 	if err != nil {
 		return empty, usage, errors.New("cannot resolve Codex executable")
 	}
-	dir, err := os.MkdirTemp("", "agent-assistant-model-")
+	workRoot := ""
+	if cfg.WorkDirRoot != "" {
+		workRoot, err = statepath.EnsureDirectory(cfg.WorkDirRoot, "model-runs")
+		if err != nil {
+			return empty, usage, fmt.Errorf("prepare model scratch directory: %w", err)
+		}
+	}
+	dir, err := os.MkdirTemp(workRoot, "agent-assistant-model-")
 	if err != nil {
 		return empty, usage, err
 	}

@@ -86,6 +86,16 @@ Configuration defaults to `~/.config/agent-assistant.paulie.app/config.json`; st
 
 Only one daemon can own a state file. `serve --no-dispatch` is a fixed boot-time control for observing without starting or resuming workers. Pause stops new coordination actions; it does not terminate already-running external work. Ctrl-C or SIGTERM shuts down the local daemon; saved worker identities are reconciled on the next start.
 
+## Add an existing project
+
+In **Projects → Add project**, choose **Existing folders**, browse the daemon host, and select one or more directories. You can also paste an absolute host path. The project name starts from the folder name and remains editable. An objective or acceptance criteria can be added later; registering a folder does not start agents. Before commissioning implementation, the assistant must establish a measurable acceptance contract.
+
+Project details show the linked directories and let you change them. The same project can cover several repositories or folders. Paths are validated as existing directories, resolved to their canonical absolute locations, and retained across restarts. Registering a project never creates assistant files inside its source directories or grants a worker new filesystem permissions. Approved worker brokers still enforce their own workspace scope.
+
+Each project has a private scratch directory under `<state-directory>/projects/<project-id>`. Assistant model invocations use temporary directories under `<state-directory>/model-runs`, removed after the invocation. Both follow the selected `--state` location. Linked source directories remain project references, never the assistant's working directory.
+
+The reusable file/folder picker browses the **daemon host**, including over Tailscale. It supports single or multiple files/folders, keyboard navigation, hidden entries, and direct path entry. The server returns one directory level as paginated metadata; the browser renders only visible rows. It does not upload files or read file contents. Browsing requires the same owner authentication as the dashboard and is unavailable in demo mode.
+
 ## Dashboard
 
 The home screen is an enduring **Overview** of outcomes, decisions, and project progress. Projects expose acceptance criteria, responsible agents, evidence, and activity. Decisions show context, a recommendation, and alternatives. Memory is visible and editable. Settings control the assistant identity, model, connection references, and execution limits.
@@ -116,9 +126,9 @@ To make Serve persistent configuration, set `dashboard.tailscale` to `serve`. Ne
 
 ## Connect your work
 
-**CLI connections:** select existing accounts from `lin`, `agent-slack`, `agent-notion`, and `agent-fathom` in Settings. Each connection has a name and an explicit list of allowed profiles; the assistant names the connection and profile for every query. Credentials stay with the CLI. The daemon provides bounded read operations rather than arbitrary command execution. Slack search can use the broader access of your existing `agent-slack` account independently of the bot.
+**CLI connections:** select existing accounts from `lin`, `agent-slack`, and `agent-fathom` in Settings. Each connection has a name and an explicit list of allowed accounts. Slack uses the workspace aliases from `agent-slack auth list`, passed to queries through `--workspace`; Fathom uses profiles. The assistant names the connection and selected account for each query. Credentials stay with the CLI. The daemon provides bounded read operations rather than arbitrary command execution. Slack search can use the broader access of your existing `agent-slack` account independently of the bot.
 
-The installed `agent-notion` supports workspace discovery but lacks per-command workspace selection. Notion queries are unavailable until the CLI can select the requested workspace reliably; the assistant never switches the CLI's global default. Other connectors can use multiple explicitly selected profiles. Account discovery is a local credentials-metadata read, not a request for project or message content.
+**Notion:** add an `agent-notion` connection without choosing a profile (`"profiles": []`, or omit the field). Search, page reads, and block reads use the CLI's current default account and native authentication, including its native environment credentials. The assistant never switches that default. Changing the default in `agent-notion` changes the account this connection reads. Named Notion profiles are rejected because the CLI cannot select them per call. Account discovery reads local metadata, not project or message content. Slack aliases with unavailable stored credentials remain visible with a re-authentication hint; configure credentials through the CLI on the daemon host.
 
 **Slack bot:** configure `slack.owner_user_id` and supply the environment variables referenced by `slack.bot_token_env` and `slack.app_token_env`. Use a Slack app with Socket Mode and direct-message events. Only the configured owner's direct messages trigger the PA. The same conversation and decisions appear in the dashboard. The bot remains a separate connection from CLI querying. See [integration setup and protocols](internal/integrations/README.md) for scopes and delivery semantics.
 

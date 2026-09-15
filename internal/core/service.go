@@ -95,36 +95,6 @@ func required(fields ...string) bool {
 	}
 	return true
 }
-func (s *Service) CreateProject(ctx context.Context, in ProjectInput) (Project, error) {
-	if !required(in.Title, in.AcceptanceCriteria) {
-		return Project{}, errors.New("title and acceptance criteria are required")
-	}
-	out := Project{ContractDefined: in.SourceID == "", SourceDescription: in.Description, ID: uid(), Title: in.Title, Description: in.Description, AcceptanceCriteria: in.AcceptanceCriteria, Status: "ready", SourceID: in.SourceID, UpdatedAt: s.now().UTC()}
-	err := s.store.update(ctx, func(v *Snapshot) error {
-		if in.SourceID != "" {
-			for i := range v.Projects {
-				p := &v.Projects[i]
-				if p.SourceID == in.SourceID {
-					if p.Title != in.Title || p.SourceDescription != in.Description {
-						p.Title = in.Title
-						p.SourceDescription = in.Description
-						if !p.ContractDefined {
-							p.Description = in.Description
-						}
-						p.UpdatedAt = s.now().UTC()
-					}
-					// Source refreshes cannot replace the commissioned acceptance contract.
-					out = *p
-					return nil
-				}
-			}
-		}
-		v.Projects = append(v.Projects, out)
-		record(v, out.UpdatedAt, out.ID, "project.created", out.Title)
-		return nil
-	})
-	return out, err
-}
 func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error) {
 	if !required(in.ProjectID, in.ProfileID, in.Task, in.AcceptanceCriteria) {
 		return Agent{}, errors.New("project, worker profile, task and acceptance criteria are required")
@@ -174,7 +144,7 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 			return errors.New("completed project cannot receive new work")
 		}
 		if !p.ContractDefined {
-			return errors.New("define measurable acceptance criteria before commissioning discovered work")
+			return errors.New("define measurable acceptance criteria before commissioning work")
 		}
 		if in.ParentID != "" {
 			parent := agent(v, in.ParentID)
@@ -725,35 +695,4 @@ func pendingOperation(v Snapshot, id string) PendingOperation {
 		}
 	}
 	return out
-}
-
-// RefineProject establishes the acceptance contract at intake. Once any work
-// has been commissioned, changing it requires an explicit new commission.
-func (s *Service) RefineProject(ctx context.Context, id, description, acceptanceCriteria string) (Project, error) {
-	if !required(description, acceptanceCriteria) {
-		return Project{}, errors.New("description and measurable acceptance criteria are required")
-	}
-	var out Project
-	err := s.store.update(ctx, func(v *Snapshot) error {
-		p := project(v, id)
-		if p == nil {
-			return ErrNotFound
-		}
-		if p.Status != "ready" {
-			return errors.New("only an uncommissioned ready project can be refined")
-		}
-		for _, a := range v.Agents {
-			if a.ProjectID == id {
-				return errors.New("acceptance contract is frozen after work is commissioned")
-			}
-		}
-		p.Description = description
-		p.AcceptanceCriteria = acceptanceCriteria
-		p.ContractDefined = true
-		p.UpdatedAt = s.now().UTC()
-		out = *p
-		record(v, p.UpdatedAt, id, "project.refined", "Acceptance criteria defined for "+p.Title)
-		return nil
-	})
-	return out, err
 }

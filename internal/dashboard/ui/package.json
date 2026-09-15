@@ -11,6 +11,9 @@
     "format": "prettier --write src vite.config.ts index.html package.json tsconfig.json"
   },
   "dependencies": {
+    "@headless-tree/core": "1.7.0",
+    "@headless-tree/react": "1.7.0",
+    "@tanstack/react-virtual": "3.14.13",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

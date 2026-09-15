@@ -80,7 +80,11 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	for _, c := range cfg.Connections {
 		state, detail := "configured", "Read-only CLI accounts: "+strings.Join(c.Profiles, ", ")
 		if c.Tool == "agent-notion" {
-			state, detail = "unavailable", "CLI has no per-call workspace selector; reads disabled"
+			if len(c.Profiles) == 0 {
+				state, detail = "configured", "Read-only CLI default account"
+			} else {
+				state, detail = "unavailable", "Choose the CLI default account for Notion"
+			}
 		}
 		s.Integrations = append(s.Integrations, core.Integration{ID: "connection:" + c.ID, Name: c.Name, Status: state, Detail: detail})
 	}
@@ -143,7 +147,7 @@ func (a *App) Chat(ctx context.Context, message string) (engine.Result, error) {
 		return engine.Result{}, errors.New("demo mode does not invoke models or workers; start without --demo and configure a model to chat")
 	}
 	cfg := a.Config()
-	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, a)
 	if err != nil {
@@ -214,13 +218,13 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		if err := args(raw, &in); err != nil {
 			return nil, err
 		}
-		return a.Core.CreateProject(ctx, core.ProjectInput{Title: in.Title, Description: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
+		return a.Core.CreateProject(ctx, core.ProjectInput{Directories: in.Directories, Title: in.Title, Description: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
 	case "update_project":
 		var in engine.UpdateProjectArgs
 		if err := args(raw, &in); err != nil {
 			return nil, err
 		}
-		return a.Core.RefineProject(ctx, in.ProjectID, in.Objective, strings.Join(in.AcceptanceCriteria, "\n"))
+		return a.Core.RefineProjectWithDirectories(ctx, in.ProjectID, in.Objective, strings.Join(in.AcceptanceCriteria, "\n"), in.Directories)
 	case "delegate":
 		var in engine.DelegateArgs
 		if err := args(raw, &in); err != nil {

@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { App } from "./App";
 import { bootstrapSession, normalizeState, type State } from "./api";
@@ -161,7 +162,12 @@ describe("owner dashboard flows", () => {
   });
   it("records acceptance criteria as text without silently starting project work", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "New project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "New project",
+      }),
+    );
     fireEvent.change(screen.getByLabelText("Project name"), {
       target: { value: "A useful dashboard" },
     });

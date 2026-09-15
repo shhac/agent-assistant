@@ -2,11 +2,13 @@ package engine
 
 // Tool argument types are shared with the application's strict, policy-checking bridge.
 type CreateProjectArgs struct {
+	Directories        []string `json:"directories"`
 	Title              string   `json:"title"`
 	Objective          string   `json:"objective"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
 type UpdateProjectArgs struct {
+	Directories        []string `json:"directories"`
 	ProjectID          string   `json:"project_id"`
 	Objective          string   `json:"objective"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
@@ -62,11 +64,11 @@ type Function struct {
 func Tools() []Tool {
 	return []Tool{
 		tool("list_connections", "List configured integration connections and approved credential profiles. Credentials are never exposed.", nil, nil),
-		tool("query_connection", "Read through a configured integration and approved profile. This does not grant writes, deployment, production-data access, or purchases. Slack messages require an existing C/G/D channel ID; URLs and user targets are unavailable. Use empty strings for fields not required by the selected operation.", []string{"connection_id", "profile", "operation", "query", "resource_id"}, nil),
+		tool("query_connection", "Read through a configured integration and approved profile. This does not grant writes, deployment, production-data access, or purchases. Slack messages require an existing C/G/D channel ID; URLs and user targets are unavailable. Use an empty profile for the Notion CLI default; other integrations require an explicitly configured profile alias. Use empty strings for other fields not required by the operation.", []string{"connection_id", "profile", "operation", "query", "resource_id"}, nil),
 
 		tool("read_state", "Read current projects, work, decisions, preferences, available profiles and authority.", nil, nil),
-		tool("create_project", "Record a project outcome and evidence required for acceptance. This creates coordination metadata only.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
-		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
+		tool("create_project", "Track a project with a title and optional existing absolute directory paths. Objective may be empty and acceptance_criteria may be empty until commissioning. This creates coordination metadata only; it never opens or edits project files.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
+		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Optionally link existing absolute directories; null preserves current links. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
 		tool("delegate", "Commission an approved worker or manager. Use an empty parent_id when reporting directly to the PA. The daemon enforces inherited scope and limits.", []string{"project_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
 		tool("ask_decision", "Prepare an unresolved owner decision. Include recommendation, viable alternatives, consequences and evidence.", []string{"project_id", "question", "recommendation", "why"}, []string{"options", "evidence"}),
 		tool("remember_preference", "Remember an owner preference. This cannot grant permissions or change budgets.", []string{"key", "value"}, nil),
@@ -85,6 +87,10 @@ func tool(name, description string, strings, arrays []string) Tool {
 	for _, k := range arrays {
 		props[k] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 		required = append(required, k)
+	}
+	if name == "create_project" || name == "update_project" {
+		props["directories"] = map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "string"}, "maxItems": 16}
+		required = append(required, "directories")
 	}
 	if name == "delegate" {
 		props["role"] = map[string]any{"type": "string", "enum": []string{"worker", "manager"}}

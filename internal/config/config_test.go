@@ -208,3 +208,27 @@ func TestConfiguredCodexHomesDefaultWithoutAmbientEnvironment(t *testing.T) {
 		t.Fatal("relative home accepted")
 	}
 }
+
+func TestNotionDefaultAccountConfigRoundTrip(t *testing.T) {
+	cfg := Default()
+	cfg.Connections = []Connection{{ID: "notion", Name: "Documents", Tool: "agent-notion", Profiles: []string{}}}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || len(got.Connections) != 1 || len(got.Connections[0].Profiles) != 0 {
+		t.Fatal(got, err)
+	}
+	cfg.Connections[0].Profiles = []string{"work"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unusable named Notion selection accepted")
+	}
+	for _, tool := range []string{"lin", "agent-slack", "agent-fathom"} {
+		cfg.Connections[0].Tool = tool
+		cfg.Connections[0].Profiles = nil
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("implicit account selection accepted", tool)
+		}
+	}
+}

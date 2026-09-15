@@ -33,7 +33,7 @@ func (a *App) runConnectionTool(ctx context.Context, name string, raw json.RawMe
 		for _, c := range a.Config().Connections {
 			detail := "Read-only; select an explicit configured profile on every query"
 			if c.Tool == "agent-notion" {
-				detail = "Unavailable: installed CLI lacks per-call workspace selection"
+				detail = "Uses the CLI default account; pass an empty profile on every query"
 			}
 			result = append(result, entry{c.ID, c.Name, c.Tool, c.Profiles, connections.Operations(c.Tool), detail})
 		}

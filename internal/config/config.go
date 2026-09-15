@@ -403,6 +403,12 @@ func validateConnections(cs []Connection) error {
 		default:
 			return errors.New("unsupported connection CLI")
 		}
+		if c.Tool == "agent-notion" {
+			if len(c.Profiles) != 0 {
+				return errors.New("Notion uses the CLI default account; profiles must be empty")
+			}
+			continue
+		}
 		if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
 			return errors.New("select 1–32 existing profiles per connection")
 		}
