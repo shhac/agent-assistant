@@ -24,10 +24,15 @@ check:
 dev:
 	go run ./cmd/agent-assistant $(ARGS)
 
-.PHONY: release-check
+.PHONY: release release-check
+release: release-check
+	@echo "Next: git tag $(VERSION) && git push origin main $(VERSION)"
+
 release-check:
 	@echo "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$$' || (echo "Set VERSION=vX.Y.Z"; exit 1)
 	@git check-ref-format "refs/tags/$(VERSION)"
+	@! git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null || (echo "tag $(VERSION) already exists"; exit 1)
+	@remote_tag=$$(git ls-remote --tags origin "refs/tags/$(VERSION)") || exit $$?; test -z "$$remote_tag" || (echo "remote tag $(VERSION) already exists"; exit 1)
 	@test -z "$$(git status --short)" || (echo "working tree is dirty"; exit 1)
 	$(MAKE) dashboard
 	@git diff --exit-code -- internal/dashboard/assets

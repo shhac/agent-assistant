@@ -2,6 +2,29 @@
 
 A personal AI assistant that remembers context, coordinates project agents, follows up on stalled work, and brings its owner prepared decisions. A Go daemon and CLI with an embedded, dark-mode-first dashboard. Private Tailscale access is optional.
 
+## Install
+
+```sh
+brew install shhac/tap/agent-assistant
+```
+
+Homebrew installs Bash, Zsh, and Fish completions automatically. Standalone binaries for macOS, Linux, and Windows are available on the [releases page](https://github.com/shhac/agent-assistant/releases).
+
+For a source build or standalone binary, enable completions in your shell:
+
+```sh
+# Bash: add to ~/.bashrc (requires bash-completion).
+source <(agent-assistant completion bash)
+
+# Zsh: after compinit in ~/.zshrc.
+source <(agent-assistant completion zsh)
+
+# Fish: run once.
+agent-assistant completion fish > ~/.config/fish/completions/agent-assistant.fish
+```
+
+Create Fish's completions directory first if needed. PowerShell scripts are also available with `agent-assistant completion powershell`. Completions suggest config keys and supported values, assistant/worker login profiles, and configured worker projects/models. They only read local configuration; they never contact the daemon, integrations, or model providers.
+
 ## Run it
 
 Building requires Go 1.26.4 or newer. `make build` writes the gitignored `./agent-assistant` binary. Node is only needed when developing or rebuilding the dashboard; its compiled assets are included in the repository. The default model engine requires a compatible Codex CLI installed and logged in on the daemon host.
@@ -103,7 +126,7 @@ The installed `agent-notion` supports workspace discovery but lacks per-command 
 
 **Workers:** this repository includes a usable local coding-worker broker as well as the [external broker protocol](internal/integrations/README.md). The PA can commission a direct worker through the built-in broker, or choose a manager from an external approved profile.
 
-Run the separate broker against one dedicated, nonsecret source workspace and an existing assistant project ID:
+The built-in Docker worker broker requires macOS or Linux; Windows owners can use an external worker broker. Run the separate broker against one dedicated, nonsecret source workspace and an existing assistant project ID:
 
 ```sh
 ./agent-assistant worker serve --workspace /path/to/dedicated-source --project <project-id> --image <locally-installed-image@sha256:digest> --max-turns 24
@@ -138,6 +161,20 @@ make build
 The Vite bundle in `internal/dashboard/assets/` is committed and embedded in Go. After UI changes, rebuild it. CI checks Go tests/races/vet, frontend tests/types, and bundle freshness. Runtime tests use temporary SQLite files, fake providers, and fake worker brokers. No test needs live Slack, Linear, Tailscale, or paid inference.
 
 Design rationale and earlier concepts are in [design-docs](design-docs/README.md). Implementation choices and current limitations are recorded in the [implementation notes](design-docs/2026-09-14-first-implementation.md).
+
+## Releasing
+
+Commit the implementation and rebuilt dashboard bundle, then run:
+
+```sh
+make release VERSION=vX.Y.Z
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+```
+
+The release check requires a clean tree and an unused local and remote tag, rebuilds the dashboard, and runs Go tests/races/vet and frontend tests/types. The tag workflow repeats CI before invoking the shared Homebrew-tap release workflow. CI builds the standalone binaries, publishes their SHA-256 checksums and GitHub release, and updates the formula with completions. Do not package or upload release artifacts manually.
+
+The tap's write deploy key is the `TAP_DEPLOY_KEY` secret in this repository's `homebrew-tap` GitHub environment. That environment allows only tags matching `v*`; branch and PR jobs do not use it. The release workflow also checks the version format before entering the shared release job. Keep the key out of repository-level secrets, local config, and checked-in files. Its temporary provisioning files were deleted after upload.
 
 ## License
 

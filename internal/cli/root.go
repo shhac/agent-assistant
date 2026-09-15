@@ -219,6 +219,7 @@ func NewRoot(version string) *cobra.Command {
 	registerDashboard(root, o)
 	registerWorker(root, o)
 	registerModel(root, o)
+	registerCompletions(root, o)
 	return root
 }
 func (o *options) emit(v any) error   { return libcli.EmitItem(os.Stdout, o.globals.Format, v) }

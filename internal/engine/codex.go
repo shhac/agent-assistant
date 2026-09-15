@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -360,12 +359,12 @@ func runCodex(ctx context.Context, cfg Config, bin string, args []string, dir st
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stop := func() {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+	process, err := newCodexProcess(cmd)
+	if err != nil {
+		return nil, err
 	}
+	defer process.close()
+	stop := process.stop
 	cmd.Cancel = func() error { stop(); return nil }
 	cmd.WaitDelay = 2 * time.Second
 	output := &limitedOutput{max: 2 * 1024 * 1024, stop: stop}
@@ -373,7 +372,7 @@ func runCodex(ctx context.Context, cfg Config, bin string, args []string, dir st
 	// Diagnostics may contain credentials or remote record content. Keep them out
 	// of tool results, audit logs and model history.
 	cmd.Stderr = io.Discard
-	err := cmd.Run()
+	err = process.run()
 	return output.buffer.Bytes(), err
 }
 

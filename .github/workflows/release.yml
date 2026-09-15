@@ -1,50 +1,41 @@
+# The shared family workflow packages binaries, publishes GitHub releases, and
+# updates shhac/tap. TAP_DEPLOY_KEY is an environment secret, never a repo secret;
+# the homebrew-tap environment accepts v* tag deployments only.
 name: Release
+
 on:
   push:
     tags: ['v*']
+
 permissions:
   contents: read
+
 jobs:
-  build:
+  validate-tag:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [darwin, linux]
-        goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: Build standalone binary
+      - name: Require a version tag
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
           VERSION: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          mkdir -p release
-          go build -ldflags "-s -w -X main.version=$VERSION" -o release/agent-assistant ./cmd/agent-assistant
-          cp LICENSE release/
-          tar -czf "agent-assistant_${VERSION}_${GOOS}_${GOARCH}.tar.gz" -C release agent-assistant LICENSE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: agent-assistant_*.tar.gz
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
+          test "$REF_TYPE" = tag
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+
+  verify:
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: verify
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: shhac/homebrew-tap/.github/workflows/go-release.yml@main
     permissions:
       contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-      - name: Publish tagged release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          sha256sum agent-assistant_*.tar.gz > checksums.txt
-          gh release create "$VERSION" agent-assistant_*.tar.gz checksums.txt --verify-tag --generate-notes
+    secrets: inherit
+    with:
+      name: agent-assistant
+      desc: "Personal AI assistant for coordinating project agents"
+      formula_class: AgentAssistant
+      help_match: "A personal assistant that coordinates agents"
+      # License is detected from LICENSE by the shared workflow.

@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -16,6 +17,8 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./... -count=1
       - run: CGO_ENABLED=0 go build ./cmd/agent-assistant
+      - name: Verify Windows release target compiles
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o "$RUNNER_TEMP/agent-assistant.exe" ./cmd/agent-assistant
   dashboard:
     runs-on: ubuntu-latest
     steps:
@@ -30,3 +33,12 @@ jobs:
       - run: npm --prefix internal/dashboard/ui test
       - run: npm --prefix internal/dashboard/ui run build
       - run: git diff --exit-code -- internal/dashboard/assets
+  windows-process:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Verify Windows engine process containment
+        run: go test ./internal/engine -run '^TestWindowsCodex' -count=1 -timeout=60s
