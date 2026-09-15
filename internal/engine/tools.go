@@ -62,7 +62,7 @@ type Function struct {
 func Tools() []Tool {
 	return []Tool{
 		tool("list_connections", "List configured integration connections and approved credential profiles. Credentials are never exposed.", nil, nil),
-		tool("query_connection", "Read through a configured integration and approved profile. This does not grant writes, deployment, production-data access, or purchases. Use empty strings for fields not required by the selected operation.", []string{"connection_id", "profile", "operation", "query", "resource_id"}, nil),
+		tool("query_connection", "Read through a configured integration and approved profile. This does not grant writes, deployment, production-data access, or purchases. Slack messages require an existing C/G/D channel ID; URLs and user targets are unavailable. Use empty strings for fields not required by the selected operation.", []string{"connection_id", "profile", "operation", "query", "resource_id"}, nil),
 
 		tool("read_state", "Read current projects, work, decisions, preferences, available profiles and authority.", nil, nil),
 		tool("create_project", "Record a project outcome and evidence required for acceptance. This creates coordination metadata only.", []string{"title", "objective"}, []string{"acceptance_criteria"}),

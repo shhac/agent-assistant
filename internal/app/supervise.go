@@ -129,7 +129,7 @@ func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt strin
 	if !modelAvailable(cfg.Model) {
 		return engine.Result{}, fmt.Errorf("%w: model is not configured", ErrAssistantBusy)
 	}
-	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, scope)
 	if err != nil {

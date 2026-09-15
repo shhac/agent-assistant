@@ -183,3 +183,28 @@ func TestConnectionProfilesAndIdentityValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredCodexHomesDefaultWithoutAmbientEnvironment(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	t.Setenv("CODEX_HOME", filepath.Join(root, "unrelated-codex"))
+	c := Default()
+	want := filepath.Join(root, Namespace, "codex")
+	if c.Model.CodexHome != want || c.WorkerModel.CodexHome != want {
+		t.Fatal(c.Model.CodexHome, c.WorkerModel.CodexHome)
+	}
+	c.Model.CodexHome = filepath.Join(root, "assistant")
+	c.WorkerModel.CodexHome = filepath.Join(root, "worker")
+	path := filepath.Join(root, "config.json")
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.Model.CodexHome != c.Model.CodexHome || got.WorkerModel.CodexHome != c.WorkerModel.CodexHome {
+		t.Fatal(got, err)
+	}
+	c.Model.CodexHome = "relative/path"
+	if err := c.Validate(); err == nil {
+		t.Fatal("relative home accepted")
+	}
+}

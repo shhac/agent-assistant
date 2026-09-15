@@ -85,9 +85,28 @@ export function ModelSettings({
               onChange={(e) => change("codex_bin", e.target.value)}
             />
           </label>
+          <label htmlFor={`${group}-codex_home`}>
+            {title} Codex home
+            <input
+              id={`${group}-codex_home`}
+              value={value("codex_home")}
+              onChange={(e) => change("codex_home", e.target.value)}
+              placeholder="Absolute path to a dedicated Codex directory"
+              autoComplete="off"
+              required
+            />
+            <span className="field-hint">
+              Configuration, login and session data stay here. Save this path,
+              then sign in with{" "}
+              <code>
+                agent-assistant model login
+                {group === "worker_model" ? " --profile worker" : ""}
+              </code>
+              . No environment variable export is needed.
+            </span>
+          </label>
           <p className="field-hint">
-            Uses the daemon account’s Codex login. Use a dedicated CODEX_HOME
-            without global AGENTS files, then run codex login there. The model
+            Use a dedicated directory without global AGENTS files. The model
             proposes actions; the daemon controls which tools can execute.
           </p>
         </>

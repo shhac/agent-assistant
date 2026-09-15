@@ -61,7 +61,7 @@ func NewRoot(version string) *cobra.Command {
 		if err := config.Save(o.configPath, config.Default()); err != nil {
 			return err
 		}
-		return o.emit(map[string]string{"config": o.configPath, "next": "Run codex login, then agent-assistant serve --open; defaults are codex/gpt-6-astra/high"})
+		return o.emit(map[string]string{"config": o.configPath, "next": "Run agent-assistant model login, then agent-assistant serve --open; defaults are codex/gpt-6-astra/high"})
 	}}
 	root.AddCommand(init)
 	root.AddCommand(&cobra.Command{Use: "status", Short: "Read daemon state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
@@ -161,8 +161,8 @@ func NewRoot(version string) *cobra.Command {
 		}
 		refs := []string{cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv, cfg.Linear.APIKeyEnv}
 		if cfg.Model.Engine == "codex" {
-			isolationErr := engine.ValidateCodexHome()
-			isolationHint := "Use a dedicated persistent CODEX_HOME, then run codex login there."
+			isolationErr := engine.ValidateCodexHome(cfg.Model.CodexHome)
+			isolationHint := "Run agent-assistant model login to sign into the configured model.codex_home."
 			if isolationErr != nil {
 				isolationHint = isolationErr.Error()
 			}
@@ -174,16 +174,15 @@ func NewRoot(version string) *cobra.Command {
 				probe := exec.CommandContext(ctx, binary, "login", "status")
 				// Match the inference transport: use Codex's stored login, not
 				// unrelated provider keys inherited from the daemon environment.
-				probe.Env = []string{"PATH=" + os.Getenv("PATH")}
-				for _, key := range []string{"HOME", "CODEX_HOME"} {
-					if value := os.Getenv(key); value != "" {
-						probe.Env = append(probe.Env, key+"="+value)
-					}
+				probe.Env, err = engine.CodexEnvironment(cfg.Model.CodexHome)
+				if err != nil {
+					cancel()
+					return err
 				}
 				probe.Stdout, probe.Stderr = io.Discard, io.Discard
 				loginErr := probe.Run()
 				cancel()
-				checks = append(checks, map[string]any{"name": "codex login", "ok": loginErr == nil, "hint": "run codex login in the daemon account; no inference was invoked"})
+				checks = append(checks, map[string]any{"name": "codex login", "ok": loginErr == nil, "hint": "run agent-assistant model login; no inference was invoked"})
 			}
 		} else {
 			refs = append(refs, cfg.Model.APIKeyEnv)
@@ -219,6 +218,7 @@ func NewRoot(version string) *cobra.Command {
 	registerServe(root, o)
 	registerDashboard(root, o)
 	registerWorker(root, o)
+	registerModel(root, o)
 	return root
 }
 func (o *options) emit(v any) error   { return libcli.EmitItem(os.Stdout, o.globals.Format, v) }

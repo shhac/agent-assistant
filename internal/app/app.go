@@ -143,7 +143,7 @@ func (a *App) Chat(ctx context.Context, message string) (engine.Result, error) {
 		return engine.Result{}, errors.New("demo mode does not invoke models or workers; start without --demo and configure a model to chat")
 	}
 	cfg := a.Config()
-	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, a)
 	if err != nil {

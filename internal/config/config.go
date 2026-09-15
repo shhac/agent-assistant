@@ -57,6 +57,7 @@ type Model struct {
 	Engine    string `json:"engine"`
 	Effort    string `json:"effort"`
 	CodexBin  string `json:"codex_bin"`
+	CodexHome string `json:"codex_home"`
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`
@@ -106,7 +107,20 @@ func Default() Config {
 }
 
 func defaultModel() Model {
-	return Model{Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
+	return Model{Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", CodexHome: DefaultCodexHome(), BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
+}
+
+// DefaultCodexHome is app-owned state, independent of an ambient CODEX_HOME.
+func DefaultCodexHome() string {
+	root := os.Getenv("XDG_STATE_HOME")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(root, Namespace, "codex")
 }
 
 func defaultWorkerModel() Model {
@@ -343,6 +357,9 @@ func (m Model) Validate() error {
 	}
 	if m.Engine == "codex" && strings.TrimSpace(m.CodexBin) == "" {
 		return errors.New("codex_bin is required for the codex engine")
+	}
+	if m.Engine == "codex" && (!filepath.IsAbs(m.CodexHome) || strings.ContainsRune(m.CodexHome, '\x00')) {
+		return errors.New("codex_home must be an absolute directory path; use the app default or an existing dedicated Codex home")
 	}
 	if m.MaxTokens < 128 || m.MaxTokens > 131072 {
 		return errors.New("max_tokens must be between 128 and 131072")

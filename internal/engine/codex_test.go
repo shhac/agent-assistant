@@ -41,7 +41,11 @@ func TestCodexModelEffortAndIsolation(t *testing.T) {
 	}
 	t.Setenv("ASSISTANT_SECRET", "must-not-inherit")
 	t.Setenv("OPENAI_API_KEY", "must-not-inherit")
-	for _, e := range codexEnv(t.TempDir(), true) {
+	env, err := CodexEnvironment(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range env {
 		if strings.Contains(e, "must-not-inherit") {
 			t.Fatal("secret inherited")
 		}
@@ -150,7 +154,7 @@ func TestInstalledCodexCapabilityProbe(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cfg := Config{Engine: "codex", CodexBin: bin, Model: "gpt-6-astra", Effort: "high", Timeout: 20 * time.Second}
-	catalog, err := runCodex(context.Background(), cfg, bin, []string{"debug", "models", "--bundled"}, dir, codexEnv(dir, false), "")
+	catalog, err := runCodex(context.Background(), cfg, bin, []string{"debug", "models", "--bundled"}, dir, codexCatalogEnvironment(dir), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +169,7 @@ func TestInstalledCodexCapabilityProbe(t *testing.T) {
 		}
 	}
 	args := codexArgs(cfg, dir, filepath.Join(dir, "models.json"), filepath.Join(dir, "schema.json"), filepath.Join(dir, "instructions.txt"))
-	if err := probeCodex(context.Background(), cfg, bin, args, dir, codexEnv(dir, false)); err != nil {
+	if err := probeCodex(context.Background(), cfg, bin, args, dir, codexCatalogEnvironment(dir)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -177,7 +181,7 @@ func TestInstalledCodexStructuredResponse(t *testing.T) {
 	}
 	dir := t.TempDir()
 	cfg := Config{Engine: "codex", Model: "gpt-6-astra", Effort: "high", Timeout: 20 * time.Second}
-	catalog, err := runCodex(context.Background(), cfg, bin, []string{"debug", "models", "--bundled"}, dir, codexEnv(dir, false), "")
+	catalog, err := runCodex(context.Background(), cfg, bin, []string{"debug", "models", "--bundled"}, dir, codexCatalogEnvironment(dir), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +239,7 @@ func TestInstalledCodexStructuredResponse(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"OPENAI_API_KEY":"fake-local-key"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := runCodex(context.Background(), cfg, bin, args, dir, codexEnv(dir, false), `{"messages":[{"role":"user","content":"Hello"}],"available_tools":[]}`)
+	output, err := runCodex(context.Background(), cfg, bin, args, dir, codexCatalogEnvironment(dir), `{"messages":[{"role":"user","content":"Hello"}],"available_tools":[]}`)
 	if err != nil {
 		t.Fatalf("Codex fake protocol: %v; %s", err, output)
 	}
@@ -314,9 +318,153 @@ func TestCodexGlobalInstructionsFailBeforeProcessOrInference(t *testing.T) {
 				t.Fatal("started subprocess with global instructions")
 				return nil, nil
 			}, BeforeRequest: func(context.Context) error { t.Fatal("reserved model with global instructions"); return nil }}
-			if _, _, err := Complete(context.Background(), cfg, nil, Tools()); err == nil || !strings.Contains(err.Error(), "dedicated CODEX_HOME") {
+			if _, _, err := Complete(context.Background(), cfg, nil, Tools()); err == nil || !strings.Contains(err.Error(), "model.codex_home") {
 				t.Fatalf("missing actionable isolation failure: %v", err)
 			}
 		})
+	}
+}
+
+func environmentValue(env []string, key string) string {
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, key+"="); ok {
+			return value
+		}
+	}
+	return ""
+}
+func TestConfiguredCodexHomeWinsOverAmbientHome(t *testing.T) {
+	ambient, selected := t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", ambient)
+	t.Setenv("OPENAI_API_KEY", "provider-secret-not-for-codex")
+	t.Setenv("SLACK_BOT_TOKEN", "integration-secret-not-for-codex")
+	if err := os.WriteFile(filepath.Join(ambient, "AGENTS.md"), []byte("Ambient coding instructions"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCodexHome(selected); err != nil {
+		t.Fatal("validated ambient home instead of configured home", err)
+	}
+	if err := ValidateCodexHome(""); err == nil {
+		t.Fatal("legacy fallback ignored ambient instruction boundary")
+	}
+	env, err := CodexEnvironment(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environmentValue(env, "CODEX_HOME") != selected {
+		t.Fatal("configured home lost", env)
+	}
+	for _, entry := range env {
+		if strings.Contains(entry, "secret-not-for-codex") {
+			t.Fatal("application credential inherited")
+		}
+	}
+	if os.Getenv("CODEX_HOME") != ambient {
+		t.Fatal("environment builder mutated daemon environment")
+	}
+	if _, err = CodexEnvironment("relative-home"); err == nil {
+		t.Fatal("relative configured home accepted")
+	}
+}
+
+func TestConfiguredCodexHomeGuardChecksSelectedDirectory(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	for _, filename := range []string{"AGENTS.md", "AGENTS.override.md"} {
+		t.Run(filename, func(t *testing.T) {
+			selected := t.TempDir()
+			if err := os.WriteFile(filepath.Join(selected, filename), []byte("Selected-home coding instructions"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{Engine: "codex", CodexHome: selected, Model: "test-model", Effort: "high", codexRun: func(context.Context, string, []string, string, []string, string) ([]byte, error) {
+				t.Error("ran subprocess before checking configured home")
+				return nil, errors.New("unexpected process")
+			}, BeforeRequest: func(context.Context) error {
+				t.Error("reserved inference before checking configured home")
+				return errors.New("unexpected reservation")
+			}}
+			if _, _, err := Complete(context.Background(), cfg, nil, Tools()); err == nil {
+				t.Fatal("selected global instructions were ignored")
+			}
+		})
+	}
+}
+
+func TestConcurrentCodexRequestsKeepTheirSelectedHomes(t *testing.T) {
+	ambient := t.TempDir()
+	t.Setenv("CODEX_HOME", ambient)
+	// A valid explicitly configured home must work even when the daemon inherited
+	// a coding account whose global instructions prohibit transport use.
+	if err := os.WriteFile(filepath.Join(ambient, "AGENTS.md"), []byte("Unrelated coding guidance"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	homes := []string{t.TempDir(), t.TempDir()}
+	entered := make(chan struct{}, len(homes))
+	release := make(chan struct{})
+	results := make(chan error, len(homes))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, home := range homes {
+		go func(selected string) {
+			calls := 0
+			cfg := Config{Engine: "codex", CodexHome: selected, CodexBin: "sh", Model: "test-model", Effort: "high"}
+			cfg.codexRun = func(ctx context.Context, _ string, args []string, dir string, env []string, _ string) ([]byte, error) {
+				calls++
+				if args[0] == "debug" {
+					if environmentValue(env, "CODEX_HOME") != dir {
+						return nil, errors.New("catalog did not use isolated environment")
+					}
+					return []byte(testCatalog), nil
+				}
+				if environmentValue(env, "CODEX_HOME") != selected {
+					return nil, fmt.Errorf("request login home mismatch: got %q, want %q", environmentValue(env, "CODEX_HOME"), selected)
+				}
+				if environmentValue(env, "TMPDIR") != dir {
+					return nil, errors.New("request temporary directory escaped its invocation")
+				}
+				if os.Getenv("CODEX_HOME") != ambient {
+					return nil, errors.New("another request mutated the daemon environment")
+				}
+				if probeURL := findProbeURL(args); probeURL != "" {
+					entered <- struct{}{}
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+					request, err := http.NewRequestWithContext(ctx, "POST", probeURL, strings.NewReader(`{"model":"test-model","reasoning":{"effort":"high"},"tools":[]}`))
+					if err != nil {
+						return nil, err
+					}
+					response, err := http.DefaultClient.Do(request)
+					if err != nil {
+						return nil, err
+					}
+					response.Body.Close()
+					return nil, errors.New("probe deliberately rejects")
+				}
+				return []byte(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"content\":\"Ready.\",\"tool_calls\":[]}"}}` + "\n" + `{"type":"turn.completed"}`), nil
+			}
+			result, _, err := Complete(ctx, cfg, []Message{{Role: "user", Content: "Hello"}}, Tools())
+			if err == nil && (result.Content != "Ready." || calls != 3) {
+				err = fmt.Errorf("unexpected transport result: calls=%d result=%+v", calls, result)
+			}
+			results <- err
+		}(home)
+	}
+	for range homes {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("requests did not reach interleaved probes", ctx.Err())
+		}
+	}
+	close(release)
+	for range homes {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if os.Getenv("CODEX_HOME") != ambient {
+		t.Fatal("request changed ambient login home")
 	}
 }

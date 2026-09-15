@@ -24,6 +24,7 @@ type Config struct {
 	Engine          string
 	Effort          string
 	CodexBin        string
+	CodexHome       string
 	ModelEndpoint   string
 	Model           string
 	APIKeyEnv       string

@@ -18,10 +18,11 @@ import (
 // Config contains references to credentials, never their values. Endpoint is the
 // full chat-completions URL. HTTP is permitted only on loopback for local models.
 type Config struct {
-	Engine   string
-	Effort   string
-	CodexBin string
-	codexRun func(context.Context, string, []string, string, []string, string) ([]byte, error)
+	Engine    string
+	Effort    string
+	CodexBin  string
+	CodexHome string
+	codexRun  func(context.Context, string, []string, string, []string, string) ([]byte, error)
 	// BeforeRequest reserves durable capacity before each potentially billable call.
 	BeforeRequest   func(context.Context) error
 	Endpoint        string

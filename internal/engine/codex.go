@@ -29,14 +29,17 @@ import (
 func codexComplete(ctx context.Context, cfg Config, messages []Message, tools []Tool) (Message, Usage, error) {
 	var empty Message
 	var usage Usage
-	if err := validateCodexHome(); err != nil {
+	home, err := resolveCodexHome(cfg.CodexHome)
+	if err != nil {
+		return empty, usage, err
+	}
+	if err := ValidateCodexHome(home); err != nil {
 		return empty, usage, err
 	}
 	bin := cfg.CodexBin
 	if bin == "" {
 		bin = "codex"
 	}
-	var err error
 	bin, err = exec.LookPath(bin)
 	if err != nil {
 		return empty, usage, errors.New("Codex executable not found; install Codex and run codex login")
@@ -50,7 +53,18 @@ func codexComplete(ctx context.Context, cfg Config, messages []Message, tools []
 		return empty, usage, err
 	}
 	defer os.RemoveAll(dir)
-	cleanEnv := codexEnv(dir, false)
+	cleanEnv := codexCatalogEnvironment(dir)
+	authEnv, err := CodexEnvironment(home)
+	if err != nil {
+		return empty, usage, err
+	}
+	// Snapshot the selected login environment once for both probe and inference.
+	// Process-local environment mutation would mix independently configured PAs/workers.
+	for i, value := range authEnv {
+		if strings.HasPrefix(value, "TMPDIR=") {
+			authEnv[i] = "TMPDIR=" + dir
+		}
+	}
 	catalog, err := runCodex(ctx, cfg, bin, []string{"debug", "models", "--bundled"}, dir, cleanEnv, "")
 	if err != nil {
 		return empty, usage, errors.New("cannot read Codex bundled model catalog; upgrade Codex to a CLI supporting debug models --bundled")
@@ -75,7 +89,7 @@ func codexComplete(ctx context.Context, cfg Config, messages []Message, tools []
 		}
 	}
 	args := codexArgs(cfg, dir, catalogPath, schemaPath, instructionsPath)
-	if err := probeCodex(ctx, cfg, bin, args, dir, codexEnv(dir, true)); err != nil {
+	if err := probeCodex(ctx, cfg, bin, args, dir, authEnv); err != nil {
 		return empty, usage, err
 	}
 	payload, err := json.Marshal(map[string]any{"messages": messages, "available_tools": tools})
@@ -87,7 +101,7 @@ func codexComplete(ctx context.Context, cfg Config, messages []Message, tools []
 			return empty, usage, err
 		}
 	}
-	output, err := runCodex(ctx, cfg, bin, args, dir, codexEnv(dir, true), string(payload))
+	output, err := runCodex(ctx, cfg, bin, args, dir, authEnv, string(payload))
 	if err != nil {
 		if ctx.Err() != nil {
 			return empty, usage, ctx.Err()
@@ -209,22 +223,35 @@ func actionSchema(tools []Tool) ([]byte, error) {
 // Codex global AGENTS files cannot currently be disabled by an exec flag. A
 // dedicated CODEX_HOME with its own codex login preserves refresh/keyring rules
 // without copying credentials or importing the owner's coding instructions.
-func ValidateCodexHome() error { return validateCodexHome() }
-func validateCodexHome() error {
-	home := os.Getenv("CODEX_HOME")
+func ValidateCodexHome(selectedHome string) error {
+	home, err := resolveCodexHome(selectedHome)
+	if err != nil {
+		return err
+	}
+	return validateSelectedCodexHome(home)
+}
+
+func resolveCodexHome(home string) (string, error) {
+	if home == "" {
+		home = os.Getenv("CODEX_HOME")
+	}
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			return errors.New("cannot resolve Codex login home")
+			return "", errors.New("cannot resolve Codex login home")
 		}
 		home = filepath.Join(userHome, ".codex")
 	}
 	if !filepath.IsAbs(home) {
-		return errors.New("CODEX_HOME must be an absolute directory path")
+		return "", errors.New("Codex home must be an absolute directory path")
 	}
+	return filepath.Clean(home), nil
+}
+
+func validateSelectedCodexHome(home string) error {
 	info, err := os.Stat(home)
 	if err != nil || !info.IsDir() {
-		return errors.New("Codex login home is unavailable; create a dedicated CODEX_HOME with codex login before starting agent-assistant")
+		return errors.New("Configured Codex home is unavailable; run agent-assistant model login (or model login --profile worker) before starting this runtime")
 	}
 	for _, name := range []string{"AGENTS.override.md", "AGENTS.md"} {
 		info, err := os.Stat(filepath.Join(home, name))
@@ -237,26 +264,31 @@ func validateCodexHome() error {
 		if info.Size() == 0 && info.Mode().IsRegular() {
 			continue
 		}
-		return errors.New("Codex home contains global AGENTS instructions that exec cannot disable; run codex login with a dedicated CODEX_HOME containing no AGENTS.md or AGENTS.override.md, then start agent-assistant with that same CODEX_HOME (credentials are not copied)")
+		return errors.New("Codex home contains global AGENTS instructions that exec cannot disable; choose a dedicated Codex home containing no AGENTS.md or AGENTS.override.md using model.codex_home or worker_model.codex_home, then run agent-assistant model login for that profile (credentials are not copied)")
 	}
 	return nil
 }
 
-func codexEnv(dir string, authenticated bool) []string {
-	env := []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + dir}
-	if authenticated {
-		if home := os.Getenv("HOME"); home != "" {
-			env = append(env, "HOME="+home)
-		}
-		if home := os.Getenv("CODEX_HOME"); home != "" {
-			env = append(env, "CODEX_HOME="+home)
-		}
-	} else {
-		env = append(env, "HOME="+dir, "CODEX_HOME="+dir)
+// CodexEnvironment returns the same credential-safe environment used for model
+// requests, doctor and login. The selected login directory is explicit per call;
+// no process-wide environment or credential store is changed. Empty home retains
+// the legacy CODEX_HOME/HOME fallback for direct engine callers.
+func CodexEnvironment(home string) ([]string, error) {
+	selected, err := resolveCodexHome(home)
+	if err != nil {
+		return nil, err
 	}
-	// Credentials are resolved by Codex from its own login store. Application
-	// integration secrets and arbitrary shell environment never reach this process.
-	return env
+	env := []string{"PATH=" + os.Getenv("PATH"), "CODEX_HOME=" + selected, "TMPDIR=" + os.TempDir()}
+	if userHome := os.Getenv("HOME"); userHome != "" {
+		env = append(env, "HOME="+userHome)
+	}
+	// Codex resolves its own login store. Provider API keys and application
+	// integration credentials must never reach this subprocess.
+	return env, nil
+}
+
+func codexCatalogEnvironment(dir string) []string {
+	return []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + dir, "HOME=" + dir, "CODEX_HOME=" + dir}
 }
 
 // probeCodex makes no inference call. A dummy provider rejects the first request

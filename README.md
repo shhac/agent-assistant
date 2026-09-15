@@ -16,9 +16,8 @@ Demo mode uses fictional data and disables external integrations. Without an exp
 For your own assistant:
 
 ```sh
-export CODEX_HOME="$HOME/.local/state/agent-assistant.paulie.app/codex"
-codex login
 ./agent-assistant init
+./agent-assistant model login
 ./agent-assistant config set assistant.name Quill
 # Fresh configuration defaults to codex / gpt-6-astra / high.
 ./agent-assistant doctor
@@ -37,13 +36,17 @@ Choose engine, model and reasoning effort in **Settings → Assistant and worker
 ./agent-assistant config set worker_model.effort high
 ```
 
-The `codex` engine uses the configured `codex_bin` and the saved login in the daemon's `CODEX_HOME`. Use a dedicated persistent Codex home as shown above. Keep the same environment when launching the daemon and local worker broker. Codex proposes structured actions with its built-in tools disabled; the Go daemon authorizes and executes the allowed coordination tools. Local coding workers use the same model transport but send their file and command actions through the isolated Docker broker. Account access and usage limits still apply.
+The `codex` engine uses each profile's `codex_bin` and `codex_home`. Both homes default to `~/.local/state/agent-assistant.paulie.app/codex` (respecting `XDG_STATE_HOME`). Set `model.codex_home` or `worker_model.codex_home` to an absolute path to use an existing dedicated login or separate accounts. Explicit configuration wins over the shell's `CODEX_HOME`: the daemon sets that variable only in each child process, never globally. You do not need to export it before starting the daemon or broker.
 
-Codex currently loads global `AGENTS.md` / `AGENTS.override.md` even when project instructions are disabled. The adapter refuses a Codex home containing nonempty global instruction files before inference. It leaves your usual Codex setup untouched; the dedicated home isolates the PA without weakening its tool boundaries. This is instruction isolation, not a requirement for a second account or subscription: you may sign into the same account there. The home must persist so Codex can manage its own login refresh. We do not copy credentials or modify your normal Codex home.
+`agent-assistant model login` creates the configured directory privately and runs Codex's own interactive login. Use `--profile worker` for a separate worker home. Codex owns credential storage and refresh; this command never copies tokens. The same account and subscription can be used for both profiles. Login is an owner-invoked CLI command, not a model tool.
+
+Codex currently loads global `AGENTS.md` / `AGENTS.override.md` even when project instructions are disabled. The adapter refuses a home containing those instructions before inference. This is instruction isolation, not a requirement for a second account. Codex proposes structured actions with its built-in tools disabled; Go authorizes and executes permitted coordination tools. Workers send implementation actions through the isolated Docker broker.
+
+If you previously exported `CODEX_HOME`, point both configuration fields at that existing directory to retain its login. Configuration files written before these fields existed receive the app-owned default; the daemon does not silently adopt a shell's unrelated Codex setup.
 
 The `openai-compatible` engine uses Chat Completions with `reasoning_effort`. Configure `base_url`, `api_key_env` and an exact provider model that supports function tools and strict schemas. Remote endpoints require HTTPS; loopback HTTP is allowed for local providers. Astra's native API tool calling requires Responses, so use the Codex engine for this default. Unsupported selections fail rather than silently substituting another model.
 
-Reasoning effort is separate from execution limits. API engines enforce `max_tokens` through `max_completion_tokens`. Codex does not expose a per-request output-token cap here; process time/output bounds and the daemon's model-turn/call limits apply instead. The selected Codex home's saved login selects the account used for inference; API credential references are not required for this engine. This integration never copies login tokens between homes.
+Reasoning effort is separate from execution limits. API engines enforce `max_tokens` through `max_completion_tokens`. Codex does not expose a per-request output-token cap here; process time/output bounds and the daemon's model-turn/call limits apply instead. The configured Codex home's saved login selects the account used for inference; API credential references are not required for this engine. This integration never copies login tokens between homes.
 
 Existing configuration with a `model` section but no `engine` keeps the previous API engine and provider. A missing `worker_model` in that legacy configuration inherits its previous assistant API profile once on load. To switch an existing setup, set the engine/model/effort explicitly using the commands above. Changes to the assistant profile apply to subsequent requests; restart a running worker broker to use its changed profile.
 
@@ -77,8 +80,7 @@ Local access uses a single-use, five-minute pairing code exchanged for an HttpOn
 Install and log into Tailscale on the existing daemon host, and enable HTTPS for its tailnet. Configure the exact owner identities permitted to open the dashboard:
 
 ```sh
-export CODEX_HOME="$HOME/.local/state/agent-assistant.paulie.app/codex"
-# Run codex login with this CODEX_HOME once, if not already signed in.
+./agent-assistant model login # Once, if not already signed in.
 ./agent-assistant config set dashboard.allowed_users '["owner@example.test"]'
 ./agent-assistant serve --http 127.0.0.1:8340 --tailscale serve --tailscale-port 8443 --open
 ```

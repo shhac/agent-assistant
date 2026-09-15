@@ -281,6 +281,7 @@ describe("owner dashboard flows", () => {
       model: "gpt-6-astra",
       effort: "high",
       codex_bin: "codex",
+      codex_home: "/fixture/assistant-login",
       base_url: "https://api.example.test/v1",
       api_key_env: "PA_KEY",
       max_tokens: 4096,
@@ -308,6 +309,13 @@ describe("owner dashboard flows", () => {
     expect(
       screen.queryByLabelText(/^Assistant maximum output tokens per call/),
     ).toBeNull();
+    expect(screen.getByLabelText(/^Assistant Codex home/)).toHaveProperty(
+      "value",
+      "/fixture/assistant-login",
+    );
+    fireEvent.change(screen.getByLabelText(/^Worker Codex home/), {
+      target: { value: "/fixture/worker-login" },
+    });
     fireEvent.change(screen.getByLabelText("Worker engine"), {
       target: { value: "openai-compatible" },
     });
@@ -339,6 +347,7 @@ describe("owner dashboard flows", () => {
     expect(saved.model).toEqual(model);
     expect(saved.worker_model).toEqual({
       ...config.worker_model,
+      codex_home: "/fixture/worker-login",
       engine: "openai-compatible",
       model: "provider-model",
       effort: "low",
