@@ -42,7 +42,10 @@ func (b *Broker) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		expected := os.Getenv(b.cfg.TokenEnv)
+		expected := b.cfg.AuthToken
+		if expected == "" {
+			expected = os.Getenv(b.cfg.TokenEnv)
+		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if expected == "" || len(got) != len(expected) || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
 			respond(w, 401, map[string]string{"error": "broker authentication required"})

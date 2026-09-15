@@ -15,7 +15,14 @@ import (
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
 
+type DependencyMount struct {
+	Source string
+	Target string
+}
+
 type Config struct {
+	Dependencies []DependencyMount `json:"-"`
+
 	StateDir        string
 	Workspace       string
 	ProjectID       string
@@ -25,10 +32,13 @@ type Config struct {
 	Effort          string
 	CodexBin        string
 	CodexHome       string
+	ClaudeBin       string
+	ClaudeHome      string
 	ModelEndpoint   string
 	Model           string
 	APIKeyEnv       string
 	TokenEnv        string
+	AuthToken       string `json:"-"` // In-process managed brokers never export credentials.
 	MaxTurns        int
 	MaxOutputTokens int
 	MaxConcurrent   int

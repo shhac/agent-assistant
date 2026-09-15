@@ -19,6 +19,7 @@ import (
 type Config struct {
 	Endpoint     string
 	APIKeyEnv    string
+	AuthToken    string `json:"-"` // Internal managed-broker credential, never persisted.
 	Capabilities []string
 	HTTPClient   *http.Client
 	Timeout      time.Duration
@@ -206,7 +207,9 @@ func (c *Client) call(ctx context.Context, method, path, key string, in any) (Ru
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
-	if c.cfg.APIKeyEnv != "" {
+	if c.cfg.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.AuthToken)
+	} else if c.cfg.APIKeyEnv != "" {
 		token := os.Getenv(c.cfg.APIKeyEnv)
 		if token == "" {
 			return result, fmt.Errorf("worker credential environment variable %s is not set", c.cfg.APIKeyEnv)

@@ -1,4 +1,6 @@
-# Run an isolated coding worker
+# Run a separate coding worker (advanced)
+
+For normal local use, add a project folder and ask the assistant to prepare a worker. It manages setup, names and private authentication; see the [managed workflow](../README.md#connect-your-work). This guide is for operating a separate broker with a custom toolchain.
 
 The assistant coordinates work; the separate `worker serve` process performs implementation inside an offline Docker container. This repository includes both components. You do not need to write your own execution service to try direct worker delegation. Manager agents can still use an external approved broker; the built-in broker accepts direct `worker` roles with `implement` or `review` capabilities only.
 
@@ -12,7 +14,7 @@ Known sensitive files and directories are excluded from the source copy: `.env*`
 
 ## Start the broker
 
-Configure the independent `worker_model` profile in Settings or with `config set worker_model.<field>`. Fresh worker profiles use `codex / gpt-5.6-terra / high` with the login in `worker_model.codex_home`. `--engine`, `--model` and `--effort` override that profile for this broker process. The API engine uses `worker_model.base_url` and `worker_model.api_key_env`; the Codex engine uses `worker_model.codex_bin`. Changing the PA's model does not change a running worker broker.
+Configure the independent `worker_model` profile in Settings or with `config set worker_model.<field>`. Fresh worker profiles use `codex / gpt-5.6-terra / high` with the login in `worker_model.codex_home`. `--engine`, `--model` and `--effort` override that profile for this broker process. The API engine uses `worker_model.base_url` and `worker_model.api_key_env`; the Codex engine uses `worker_model.codex_bin`; Claude uses `worker_model.claude_bin` and `worker_model.claude_home` with its native CLI login. Changing the PA's model does not change a running worker broker.
 
 Set an independently generated broker API token in the environment variable `AGENT_ASSISTANT_WORKER_TOKEN` in both the broker and assistant processes. For the API engine, set the configured model credential variable in the broker process as well. For Codex, configure `worker_model.codex_home` and run `agent-assistant model login --profile worker`. Its default is the same app-owned home as the PA; no environment variable export is needed. Homes containing global AGENTS instruction files are rejected; credentials are never copied from your usual Codex home. Keep actual tokens out of configuration files, command arguments and version control.
 
@@ -51,9 +53,9 @@ Each run gets its own copied workspace. The container has:
 - No network, host sockets, host home directory, provider credentials or cloud credentials.
 - A read-only root filesystem, dropped Linux capabilities and `no-new-privileges`.
 - A non-root numeric user, 1 GiB memory limit, two CPUs and 128-process limit.
-- One copied workspace mount and a bounded 256 MiB temporary filesystem. Review-only workers receive a read-only workspace mount.
+- One copied workspace mount and a bounded 256 MiB temporary filesystem. Review-only workers receive a read-only workspace mount; managed npm workers also have a writable per-run dependency mount for temporary test bundles.
 
-Model requests happen on the host through the selected engine. With Codex, a tool-disabled CLI proposes structured actions that the Go broker checks and executes; it cannot run commands itself. The model sees narrowly defined worker tools: `read_file`, `write_file`, `run_command`, `ask_decision`, and `finish`. File writes and test commands are sent through `docker exec`; command strings are interpreted only by the container's shell. The Docker CLI receives a clean environment without inherited credentials. The PA's model does not receive these implementation tools.
+Model requests happen on the host through the selected engine. With Codex or Claude, a tool-disabled CLI proposes structured actions that the Go broker checks and executes; it cannot run commands itself. The model sees narrowly defined worker tools: `read_file`, `write_file`, `run_command`, `ask_decision`, and `finish`. File writes and test commands are sent through `docker exec`; command strings are interpreted only by the container's shell. The Docker CLI receives a clean environment without inherited credentials. The PA's model does not receive these implementation tools.
 
 The owner-supplied image and local Docker daemon are trusted infrastructure. This is container isolation, not a claim of a hardware security boundary against kernel or Docker vulnerabilities.
 

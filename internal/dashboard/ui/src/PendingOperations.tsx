@@ -1,3 +1,4 @@
+import { ProjectLink } from "./ProjectLink";
 import { useState, type FormEvent } from "react";
 import { api, errorText, type PendingOperation, type Project } from "./api";
 
@@ -64,7 +65,11 @@ function OperationInspection({
   return (
     <form className="operation-inspection" onSubmit={submit}>
       <h3>{operation.summary}</h3>
-      {project && <p className="field-hint">{project.title}</p>}
+      {project && (
+        <p className="field-hint">
+          <ProjectLink project={project} />
+        </p>
+      )}
       <details>
         <summary>Operation details</summary>
         <code>{operation.id}</code>

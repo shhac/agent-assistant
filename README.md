@@ -47,7 +47,7 @@ For your own assistant:
 ./agent-assistant serve --open
 ```
 
-Choose engine, model and reasoning effort in **Settings → Assistant and worker models**, independently for the assistant (`model`) and local coding workers (`worker_model`). The assistant defaults to `codex / gpt-6-astra / high`; the built-in downstream worker defaults to `codex / gpt-5.6-terra / high`. External manager brokers own their model selection. Explicit saved profiles are preserved when defaults change.
+Choose engine, model and reasoning effort from the installed CLI’s live catalog in **Settings → Assistant and worker models**, independently for the assistant (`model`) and local coding workers (`worker_model`). The assistant defaults to `codex / gpt-6-astra / high`; the built-in downstream worker defaults to `codex / gpt-5.6-terra / high`. External manager brokers own their model selection. Explicit saved profiles are preserved when defaults change.
 
 ```sh
 ./agent-assistant config set model.engine codex
@@ -61,11 +61,15 @@ Choose engine, model and reasoning effort in **Settings → Assistant and worker
 
 The `codex` engine uses each profile's `codex_bin` and `codex_home`. Both homes default to `~/.local/state/agent-assistant.paulie.app/codex` (respecting `XDG_STATE_HOME`). Set `model.codex_home` or `worker_model.codex_home` to an absolute path to use an existing dedicated login or separate accounts. Explicit configuration wins over the shell's `CODEX_HOME`: the daemon sets that variable only in each child process, never globally. You do not need to export it before starting the daemon or broker.
 
-`agent-assistant model login` creates the configured directory privately and runs Codex's own interactive login. Use `--profile worker` for a separate worker home. Codex owns credential storage and refresh; this command never copies tokens. The same account and subscription can be used for both profiles. Login is an owner-invoked CLI command, not a model tool.
+`agent-assistant model login` creates the configured directory privately and runs the selected CLI’s own interactive login. Use `--profile worker` for a separate worker home. Codex owns credential storage and refresh; this command never copies tokens. The same account and subscription can be used for both profiles. Login is an owner-invoked CLI command, not a model tool.
 
 Codex currently loads global `AGENTS.md` / `AGENTS.override.md` even when project instructions are disabled. The adapter refuses a home containing those instructions before inference. This is instruction isolation, not a requirement for a second account. Codex proposes structured actions with its built-in tools disabled; Go authorizes and executes permitted coordination tools. Workers send implementation actions through the isolated Docker broker.
 
 If you previously exported `CODEX_HOME`, point both configuration fields at that existing directory to retain its login. Configuration files written before these fields existed receive the app-owned default; the daemon does not silently adopt a shell's unrelated Codex setup.
+
+The `claude` engine uses `claude_bin` and `claude_home`, defaults to the native `~/.claude` login, and keeps Claude’s credential storage and refresh in the CLI. Both assistant and worker profiles use this same home by default. A custom home selects a separate login; `model login --profile worker` uses Claude’s subscription login flow when that profile selects Claude. Ambient API keys are not forwarded to either CLI. Configure a managed worker’s optional `model_profile` only when it needs its own complete model/account profile; otherwise all managed workers use `worker_model`.
+
+Normal operation uses local Codex or Claude CLI authentication and its billing arrangement. Separate per-project homes are unnecessary: project code runs in containers that cannot access the host CLI homes. No credentials are copied. API providers remain an explicit advanced option and are never selected automatically after a CLI error.
 
 The `openai-compatible` engine uses Chat Completions with `reasoning_effort`. Configure `base_url`, `api_key_env` and an exact provider model that supports function tools and strict schemas. Remote endpoints require HTTPS; loopback HTTP is allowed for local providers. Astra's native API tool calling requires Responses, so use the Codex engine for this default. Unsupported selections fail rather than silently substituting another model.
 
@@ -138,19 +142,17 @@ Projects live in agent-assistant's local state. Linear, Notion, Slack and other 
 
 **Legacy Linear API:** set `linear.import_assignments` to `true` as well as explicit `linear.team_ids` and `linear.api_key_env` to enable assignment discovery. Omitted import flags stay off on upgrade, including older configurations. New setups should use the `lin` connection; configuring one supersedes legacy API discovery. Discovery does not start agents and an issue's update time is not its assignment time.
 
-**Workers:** this repository includes a usable local coding-worker broker as well as the [external broker protocol](internal/integrations/README.md). The PA can commission a direct worker through the built-in broker, or choose a manager from an external approved profile.
+**Workers:** add an existing folder to a project and describe what you want to do next, in chat or on the project page. The assistant can prepare its worker, register the private connection, commission the agreed outcome, and follow progress. Preparation creates no project run by itself. The project page also offers **Prepare worker**; external broker fields are under advanced settings.
 
-The built-in Docker worker broker requires macOS or Linux; Windows owners can use an external worker broker. Run the separate broker against one dedicated, nonsecret source workspace and an existing assistant project ID:
+On macOS, automatic setup uses an existing local container runtime or a dedicated Colima instance. With Homebrew available it installs the free runtime tools as needed, without changing your current Docker context. On Linux, a working local Docker daemon is required. Missing host prerequisites produce a specific blocker; setup never purchases services or creates paid cloud resources. Windows can use an external broker.
 
-```sh
-./agent-assistant worker serve --workspace /path/to/dedicated-source --project <project-id> --image <locally-installed-image@sha256:digest> --max-turns 24
-```
+The daemon builds a fixed Go/Node toolchain without project source as its build context and records the resulting image digest. Public Go and npm dependencies can be prepared from sanitized manifests without project scripts or host credentials. Private registries, local/git dependencies, npm workspaces, and install scripts need an explicitly prepared environment; automatic setup reports these limitations. Other languages need a custom toolchain through an external broker.
 
-Supply the broker API token through `AGENT_ASSISTANT_WORKER_TOKEN` in both processes. Register a profile pointing to `http://127.0.0.1:8350` with that credential reference, the same `project_id`, and `implement`/`review` capabilities. See the complete [worker setup guide](docs/worker-broker.md) for image requirements, configuration and results.
+Workers use copied project workspaces inside non-root containers with no network, no host credentials or sockets, dropped capabilities and resource bounds. Git-ignored files and common secret files are excluded. The host Go broker invokes the configured local model CLI; the PA never receives coding tools. The original source remains untouched. Completion includes a patch, command results, and a bounded evidence digest for PA review. Missing or truncated evidence requires further inspection.
 
-The image must be pinned and preinstalled locally; it is never pulled. Workers operate in copied workspaces inside non-root Docker containers with no network, no host credentials or sockets, dropped capabilities and resource bounds. The host Go broker makes model requests; the PA never receives coding tools. The original source remains untouched. Completion includes an actual content patch, command results and a bounded broker-generated evidence digest for PA review. Missing or truncated evidence requires further inspection.
+Managed state and recovery records live under the daemon’s state directory. The private loopback endpoint and its random token are owned by the daemon; users do not enter or share them. All managed workers share the configured worker CLI login by default. Existing external services remain supported through the [worker broker guide](docs/worker-broker.md). Worker model changes require a daemon restart after a broker has started.
 
-`--max-turns` is the exact cumulative model-call cap for a worker session, including resumes and messages. Output tokens, command duration and per-attempt wall time are also bounded. Stable dispatch keys, saved run IDs and durable receipts preserve recovery without blindly repeating uncertain effects. Built-in worker tests use fake Docker and model services; real Docker/image/provider compatibility has not been exercised during development.
+`--max-turns` on a manually operated broker is its cumulative model-call cap, including resumes and messages. Output, command duration and per-attempt wall time are bounded. Stable dispatch keys and durable receipts prevent blind retries of uncertain effects. Tests use fake CLIs, runtimes, providers, and brokers; a full real-runtime installation and paid worker run have not been exercised during development.
 
 External brokers remain trusted enforcement boundaries. They must provide idempotency, truthful progress timestamps, isolated workspaces and role-specific tools. Managers coordinate through the daemon so descendant scope and shared limits remain enforced.
 

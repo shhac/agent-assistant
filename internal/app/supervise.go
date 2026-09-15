@@ -129,7 +129,7 @@ func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt strin
 	if !modelAvailable(cfg.Model) {
 		return engine.Result{}, fmt.Errorf("%w: model is not configured", ErrAssistantBusy)
 	}
-	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, ClaudeBin: cfg.Model.ClaudeBin, ClaudeHome: cfg.Model.ClaudeHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, scope)
 	if err != nil {
@@ -185,11 +185,7 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 	if snap.Paused {
 		return worker.Run{}, errors.New("coordination is paused")
 	}
-	profile, err := a.Core.GetProfile(agent.ProfileID)
-	if err != nil {
-		return worker.Run{}, err
-	}
-	client, err := worker.New(worker.Config{Endpoint: profile.Endpoint, APIKeyEnv: profile.APIKeyEnv, Capabilities: profile.Capabilities})
+	client, err := a.broker(ctx, agent.ProfileID)
 	if err != nil {
 		return worker.Run{}, err
 	}
@@ -218,6 +214,10 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 func modelAvailable(m config.Model) bool {
 	if m.Model == "" {
 		return false
+	}
+	if m.Engine == "claude" {
+		_, err := exec.LookPath(m.ClaudeBin)
+		return err == nil
 	}
 	if m.Engine == "codex" {
 		_, err := exec.LookPath(m.CodexBin)

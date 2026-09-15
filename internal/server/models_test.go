@@ -1,0 +1,120 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/shhac/agent-assistant/internal/app"
+	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/engine"
+)
+
+func TestModelEndpointUsesSavedProfileAndCaches(t *testing.T) {
+	cfg := config.Default()
+	cfg.Model.CodexHome = "/test/assistant-login"
+	cfg.WorkerModel.CodexHome = "/test/worker-login"
+	a := app.New(nil, cfg, filepath.Join(t.TempDir(), "config.json"), false)
+	calls := 0
+	handler := modelHandler(a, func(_ context.Context, c engine.Config) ([]engine.ModelOption, error) {
+		calls++
+		if c.CodexHome != cfg.WorkerModel.CodexHome {
+			t.Fatal("wrong profile", c.CodexHome)
+		}
+		return []engine.ModelOption{{ID: "test", Name: "Test model", DefaultEffort: "high"}}, nil
+	})
+	for i := 0; i < 2; i++ {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/models?profile=worker", nil))
+		var result modelCatalog
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Available || result.Profile != "worker" || result.Current.Model != cfg.WorkerModel.Model || result.Default.Model != config.Default().WorkerModel.Model || len(result.Models) != 1 {
+			t.Fatal(w.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatal("repeated discovery", calls)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/models?profile=unknown", nil))
+	if w.Code != 400 || calls != 1 {
+		t.Fatal(w.Code, calls)
+	}
+}
+
+func TestModelEndpointFailureDoesNotInventModels(t *testing.T) {
+	cfg := config.Default()
+	a := app.New(nil, cfg, filepath.Join(t.TempDir(), "config.json"), false)
+	handler := modelHandler(a, func(context.Context, engine.Config) ([]engine.ModelOption, error) {
+		return nil, errors.New("secret-provider-diagnostic")
+	})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/models", nil))
+	var result modelCatalog
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Available || len(result.Models) != 0 || result.Current.Model != cfg.Model.Model || strings.Contains(w.Body.String(), "secret-provider") {
+		t.Fatal(w.Body.String())
+	}
+}
+
+func TestDemoModelDiscoveryNeverStartsProcess(t *testing.T) {
+	a := app.New(nil, config.Default(), "", true)
+	handler := modelHandler(a, func(context.Context, engine.Config) ([]engine.ModelOption, error) {
+		t.Fatal("demo started discovery")
+		return nil, nil
+	})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/models", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"available":false`) {
+		t.Fatal(w.Body.String())
+	}
+}
+
+func TestModelEndpointCanPreviewClaudeBeforeSavingEngine(t *testing.T) {
+	cfg := config.Default()
+	cfg.Model.ClaudeHome = "/test/shared-claude"
+	a := app.New(nil, cfg, "", false)
+	handler := modelHandler(a, func(_ context.Context, c engine.Config) ([]engine.ModelOption, error) {
+		if c.Engine != "claude" || c.ClaudeHome != cfg.Model.ClaudeHome {
+			t.Fatal(c)
+		}
+		return []engine.ModelOption{{ID: "opus", Name: "Opus"}}, nil
+	})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/models?profile=assistant&engine=claude", nil))
+	var result modelCatalog
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Engine != "claude" || !result.Available || a.Config().Model.Engine != "codex" {
+		t.Fatal(w.Body.String())
+	}
+}
+
+func TestModelDiscoveryRequiresOwnerAuthentication(t *testing.T) {
+	root := t.TempDir()
+	auth, err := NewAuth(root, "http://127.0.0.1:8340", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := app.New(nil, config.Default(), "", false)
+	handler := auth.Middleware(modelHandler(a, func(context.Context, engine.Config) ([]engine.ModelOption, error) {
+		t.Fatal("unauthenticated discovery")
+		return nil, nil
+	}))
+	r := httptest.NewRequest("GET", "http://127.0.0.1:8340/api/models", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}

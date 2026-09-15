@@ -34,9 +34,13 @@ func registerModel(root *cobra.Command, o *options) {
 			return err
 		}
 		child.Stdin, child.Stdout, child.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
-		fmt.Fprintln(cmd.ErrOrStderr(), "Signing into Codex home:", selected.CodexHome)
+		home := selected.CodexHome
+		if selected.Engine == "claude" {
+			home = selected.ClaudeHome
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "Signing into", selected.Engine, "home:", home)
 		if err = child.Run(); err != nil {
-			return fmt.Errorf("Codex login did not complete: %w", err)
+			return fmt.Errorf("%s login did not complete: %w", selected.Engine, err)
 		}
 		return nil
 	}}
@@ -48,8 +52,31 @@ func registerModel(root *cobra.Command, o *options) {
 // Login is an owner-invoked CLI action, never an assistant model tool. Codex owns
 // its credentials and refresh flow; we only select the directory and process.
 func prepareModelLogin(ctx context.Context, profile config.Model) (*exec.Cmd, error) {
+	if profile.Engine == "claude" {
+		if err := profile.Validate(); err != nil {
+			return nil, err
+		}
+		bin, err := exec.LookPath(profile.ClaudeBin)
+		if err != nil {
+			return nil, errors.New("Claude CLI is not installed")
+		}
+		bin, err = filepath.Abs(bin)
+		if err != nil {
+			return nil, err
+		}
+		if err = os.MkdirAll(profile.ClaudeHome, 0700); err != nil {
+			return nil, err
+		}
+		env, err := engine.ClaudeEnvironment(profile.ClaudeHome)
+		if err != nil {
+			return nil, err
+		}
+		child := exec.CommandContext(ctx, bin, "auth", "login", "--claudeai")
+		child.Dir, child.Env = profile.ClaudeHome, env
+		return child, nil
+	}
 	if profile.Engine != "codex" {
-		return nil, errors.New("model login supports the Codex engine; API credentials stay with the configured provider")
+		return nil, errors.New("model login supports Codex and Claude CLI; API credentials stay with the configured provider")
 	}
 	if err := profile.Validate(); err != nil {
 		return nil, err

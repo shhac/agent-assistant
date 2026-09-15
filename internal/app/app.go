@@ -20,6 +20,10 @@ import (
 )
 
 type App struct {
+	workerPreflight  func(context.Context, config.Model) error
+	managedMu        sync.Mutex
+	managed          managedWorkerService
+	prepareMu        sync.Mutex
 	connectionClient connections.Client
 	dispatchDisabled atomic.Bool
 	Core             *core.Service
@@ -68,7 +72,7 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 		return s, err
 	}
 	cfg := a.Config()
-	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Add an approved execution broker"}}
+	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Ask your assistant to prepare a worker for a project"}}
 	if cfg.Model.Model != "" {
 		s.Integrations[0].Status = "configured"
 		s.Integrations[0].Detail = strings.Join([]string{cfg.Model.Engine, cfg.Model.Model, cfg.Model.Effort}, " / ")
@@ -155,7 +159,7 @@ func (a *App) Chat(ctx context.Context, message string) (engine.Result, error) {
 		return engine.Result{}, errors.New("demo mode does not invoke models or workers; start without --demo and configure a model to chat")
 	}
 	cfg := a.Config()
-	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
+	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, ClaudeBin: cfg.Model.ClaudeBin, ClaudeHome: cfg.Model.ClaudeHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
 		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
 	}}, a)
 	if err != nil {
@@ -191,6 +195,15 @@ func args(raw json.RawMessage, v any) error {
 }
 func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (any, error) {
 	switch name {
+	case "prepare_worker":
+		var in struct {
+			ProjectID string `json:"project_id"`
+			Workspace string `json:"workspace"`
+		}
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		return a.PrepareWorker(ctx, in.ProjectID, in.Workspace)
 	case "list_connections", "query_connection":
 		return a.runConnectionTool(ctx, name, raw)
 	case "message_agent":

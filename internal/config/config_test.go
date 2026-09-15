@@ -262,3 +262,22 @@ func TestAssignmentImportOptInDefaultsAndRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedWorkerScopesAndSharedCLIHomes(t *testing.T) {
+	c := Default()
+	if c.Model.CodexHome != c.WorkerModel.CodexHome || c.Model.ClaudeHome != c.WorkerModel.ClaudeHome {
+		t.Fatal("default worker login is not shared")
+	}
+	c.Workers = []Worker{{ID: "worker", Name: "Project worker", Managed: true, ProjectID: "project", Workspace: t.TempDir(), Capabilities: []string{"implement", "review"}}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Worker){func(w *Worker) { w.ProjectID = "" }, func(w *Worker) { w.Endpoint = "https://example.test" }, func(w *Worker) { w.APIKeyEnv = "TOKEN" }, func(w *Worker) { w.Capabilities = []string{"coordinate"} }, func(w *Worker) { w.Workspace = "relative" }} {
+		bad := c
+		bad.Workers = append([]Worker{}, c.Workers...)
+		mutate(&bad.Workers[0])
+		if err := bad.Validate(); err == nil {
+			t.Fatal("invalid managed authority accepted")
+		}
+	}
+}

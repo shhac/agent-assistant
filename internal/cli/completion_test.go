@@ -54,7 +54,7 @@ func TestConfigCompletionsMatchSetTraversal(t *testing.T) {
 		key, prefix string
 		want        []string
 	}{
-		{"worker_model.engine", "", []string{"codex", "openai-compatible"}},
+		{"worker_model.engine", "", []string{"claude", "codex", "openai-compatible"}},
 		{"model.effort", "m", []string{"max", "medium", "minimal"}},
 		{"dashboard.tailscale", "", []string{"off", "serve"}},
 		{"assistant.theme", "ink", []string{"ink-blue"}},
@@ -98,7 +98,7 @@ func TestCompletionUsesSelectedConfigWithoutCallingTools(t *testing.T) {
 	}{
 		{"project", []string{"project-a", "project-z"}},
 		{"model", []string{"custom-assistant", "custom-worker"}},
-		{"engine", []string{"codex", "openai-compatible"}},
+		{"engine", []string{"claude", "codex", "openai-compatible"}},
 	} {
 		f, ok := worker.GetFlagCompletionFunc(tc.flag)
 		if !ok {

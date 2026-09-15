@@ -23,6 +23,10 @@ func excluded(name string) bool {
 	return strings.HasPrefix(n, ".env") || strings.HasSuffix(n, ".pem") || strings.HasSuffix(n, ".key") || strings.HasSuffix(n, ".p12") || strings.HasSuffix(n, ".pfx")
 }
 func copyWorkspace(source, dest string) (map[string][]byte, error) {
+	selected, err := workspaceSelection(source)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, err
 	}
@@ -39,6 +43,12 @@ func copyWorkspace(source, dest string) (map[string][]byte, error) {
 			return errors.New("cannot read dedicated source workspace")
 		}
 		if path == "." {
+			return nil
+		}
+		if selected != nil && !selected[path] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if excluded(d.Name()) {

@@ -1,5 +1,8 @@
+import { ProjectLink } from "./ProjectLink";
+import { WorkerPreparation } from "./WorkerPreparation";
+import { ChatPanel } from "./ChatPanel";
 import { NewProject, ProjectDirectories } from "./ProjectForms";
-import { Avatar, Waiting, ThemePicker, validTheme } from "./Identity";
+import { Avatar, ThemePicker, validTheme } from "./Identity";
 import { AssistantSetup } from "./AssistantSetup";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { ModelSettings } from "./ModelSettings";
@@ -241,7 +244,37 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = validTheme(state?.assistant.theme);
   }, [state?.assistant.theme]);
+  useEffect(() => {
+    const follow = () => {
+      const match = /^#\/projects\/([^/]+)$/.exec(window.location.hash);
+      if (match) {
+        try {
+          setSelectedProject(decodeURIComponent(match[1]));
+          setPage("Projects");
+          setChatExpanded(false);
+          setChatOpen(false);
+        } catch {
+          /* Ignore malformed bookmarks. */
+        }
+      }
+    };
+    follow();
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, []);
+  function openProject(id: string) {
+    window.location.hash = `/projects/${encodeURIComponent(id)}`;
+    setSelectedProject(id);
+    setPage("Projects");
+    setChatExpanded(false);
+    setChatOpen(false);
+  }
   function navigate(next: Page) {
+    window.history.replaceState(
+      window.history.state,
+      "",
+      window.location.pathname + window.location.search,
+    );
     setChatExpanded(false);
     setPage(next);
     setSelectedProject(null);
@@ -405,10 +438,7 @@ export function App() {
               state={state}
               onNew={() => setNewProject(true)}
               onNavigate={navigate}
-              onProject={(id) => {
-                setSelectedProject(id);
-                setPage("Projects");
-              }}
+              onProject={openProject}
               refresh={refresh}
             />
           )}
@@ -416,7 +446,7 @@ export function App() {
             <Projects
               state={state}
               selected={selectedProject}
-              onSelect={setSelectedProject}
+              onSelect={(id) => (id ? openProject(id) : navigate("Projects"))}
               onNew={() => setNewProject(true)}
               refresh={refresh}
             />
@@ -514,7 +544,8 @@ export function App() {
         className={`conversation ${chatOpen ? "mobile-open" : ""}`}
         aria-label={`Conversation with ${name}`}
       >
-        <Chat
+        <ChatPanel
+          onProjectOpen={openProject}
           state={state}
           refresh={refresh}
           onClose={() => setChatOpen(false)}
@@ -532,7 +563,7 @@ export function App() {
           onClose={() => setNewProject(false)}
           onCreated={async () => {
             setNewProject(false);
-            setPage("Projects");
+            navigate("Projects");
             await refresh();
           }}
         />
@@ -776,7 +807,7 @@ function Projects({
           action={<Status>{humanStatus(project.status)}</Status>}
         />
         <details className="project-setup-details">
-          <summary>Project setup details</summary>
+          <summary>Technical identifiers</summary>
           <label htmlFor="project-setup-id">
             Project ID
             <input
@@ -787,7 +818,8 @@ function Projects({
             />
           </label>
           <p className="field-hint">
-            Use this ID when binding an approved worker profile to this project.
+            For diagnostics and external integrations. Worker setup uses the
+            project name automatically.
           </p>
         </details>
         <ProjectDirectories
@@ -795,7 +827,16 @@ function Projects({
           project={project}
           refresh={refresh}
         />
-        <CoordinateProject project={project} refresh={refresh} />
+        <CoordinateProject
+          key={`coordinate-${project.id}`}
+          project={project}
+          refresh={refresh}
+        />
+        <WorkerPreparation
+          key={`worker-${project.id}`}
+          project={project}
+          demo={state.demo}
+        />
         <section className="detail-section">
           <p className="eyebrow">WHAT DONE LOOKS LIKE</p>
           {criteriaLines(project.acceptance_criteria).length ? (
@@ -937,7 +978,7 @@ function DecisionCard({
     <article className={`decision-card ${compact ? "compact" : ""}`}>
       <div className="decision-topline">
         <span className="eyebrow">YOUR DECISION</span>
-        {project && <span>{project.title}</span>}
+        {project && <ProjectLink project={project} />}
       </div>
       <h3>{decision.title}</h3>
       <p className="decision-context">{decision.context}</p>
@@ -992,8 +1033,15 @@ function ActivityList({ state, limit }: { state: State; limit?: number }) {
           <div>
             <p>{entry.summary}</p>
             <span>
-              {state.projects.find((p) => p.id === entry.project_id)?.title ||
-                humanStatus(entry.kind || "workspace")}
+              {state.projects.some((p) => p.id === entry.project_id) ? (
+                <ProjectLink
+                  project={state.projects.find(
+                    (p) => p.id === entry.project_id,
+                  )!}
+                />
+              ) : (
+                humanStatus(entry.kind || "workspace")
+              )}
               {entry.created_at && (
                 <>
                   {" "}
@@ -1008,182 +1056,6 @@ function ActivityList({ state, limit }: { state: State; limit?: number }) {
         </li>
       ))}
     </ol>
-  );
-}
-function Chat({
-  state,
-  refresh,
-  onClose,
-  expanded,
-  onExpand,
-}: {
-  state: State;
-  refresh: () => Promise<void>;
-  onClose: () => void;
-  expanded: boolean;
-  onExpand: () => void;
-}) {
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const scroll = useRef<HTMLDivElement>(null);
-  const name = state.assistant.name || "Assistant";
-  useEffect(() => {
-    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [state.messages.length, busy]);
-  async function send(e: FormEvent) {
-    e.preventDefault();
-    const submitted = message.trim();
-    if (!submitted || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ message: submitted }),
-      });
-      setMessage("");
-      await refresh();
-    } catch (err) {
-      setError(errorText(err));
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <header className="chat-header">
-        <Avatar avatar={state.assistant.avatar} small />
-        <div>
-          <h2>{name}</h2>
-          <span>Your context, kept together</span>
-        </div>
-        <button
-          className="icon-button chat-expand"
-          aria-label={expanded ? "Return to workspace" : "Expand conversation"}
-          aria-pressed={expanded}
-          onClick={onExpand}
-          title={
-            expanded ? "Return to workspace" : "Make conversation the main view"
-          }
-        >
-          <Icon name={expanded ? "Shrink" : "Expand"} />
-        </button>
-        <button
-          className="icon-button mobile-close"
-          aria-label="Close conversation"
-          onClick={onClose}
-        >
-          <Icon name="Close" />
-        </button>
-      </header>
-      {expanded && (
-        <div className="chat-context-strip">
-          <span>YOUR WORK, WITH CONTEXT</span>
-          <p>
-            {state.projects.filter((p) => p.status !== "completed").length}{" "}
-            active projects <i>·</i> {pendingDecisions(state.decisions).length}{" "}
-            open decisions <i>·</i> one conversation
-          </p>
-        </div>
-      )}
-      <div
-        className="chat-messages"
-        ref={scroll}
-        role="log"
-        aria-label="Conversation history"
-        aria-live="polite"
-      >
-        {state.messages.length ? (
-          state.messages.map((m) => (
-            <article
-              key={m.id}
-              className={`message ${m.role === "user" ? "user-message" : "assistant-message"}`}
-            >
-              <div className="message-label">
-                {m.role === "user" ? "You" : name}
-                {m.created_at && (
-                  <time dateTime={m.created_at}>{dateLabel(m.created_at)}</time>
-                )}
-              </div>
-              <p>{m.content}</p>
-            </article>
-          ))
-        ) : (
-          <div className="chat-welcome">
-            <span className="chat-orbit">
-              <Avatar avatar={state.assistant.avatar} />
-            </span>
-            <p className="eyebrow">A LITTLE LESS TO CARRY</p>
-            <h3>Start a conversation.</h3>
-            <p>
-              Share an outcome, ask about your projects, or tell {name} what
-              matters to you.
-            </p>
-            <div className="suggestions">
-              {[
-                "What needs my attention?",
-                "Help me set up a project.",
-                "What do you remember about me?",
-              ].map((text) => (
-                <button
-                  key={text}
-                  onClick={() => {
-                    setMessage(text);
-                    document.getElementById("chat-message")?.focus();
-                  }}
-                >
-                  {text}
-                  <Icon name="Arrow" size={13} />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {busy && (
-          <Waiting
-            label={`${name} is working through it…`}
-            detail="Keeping the context together. An answer or a clear decision is on its way."
-          />
-        )}
-      </div>
-      <div className="chat-composer-wrap">
-        <ErrorNotice error={error} />
-        <form className="chat-composer" onSubmit={send}>
-          <label className="sr-only" htmlFor="chat-message">
-            Message {name}
-          </label>
-          <textarea
-            id="chat-message"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder={`Ask ${name}, or hand over an outcome…`}
-            rows={3}
-            maxLength={20000}
-            disabled={busy}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <div className="composer-footer">
-            <span>⌘ / Ctrl + Enter to send</span>
-            <button
-              className="send-button"
-              type="submit"
-              disabled={busy || !message.trim()}
-              aria-label="Send message"
-            >
-              <Icon name="Send" size={17} />
-            </button>
-          </div>
-        </form>
-        <p className="chat-footnote">One conversation across your projects.</p>
-      </div>
-    </>
   );
 }
 function MemoryView({
@@ -1448,6 +1320,7 @@ function Settings({
         )}
         {config && (
           <WorkerSettings
+            projects={state.projects}
             workers={config.workers || []}
             onChange={(workers) => {
               setConfig({ ...config, workers });
@@ -1613,13 +1486,15 @@ function CoordinateProject({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [next, setNext] = useState("");
   async function coordinate() {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
       await api(`/api/projects/${encodeURIComponent(project.id)}/coordinate`, {
         method: "POST",
-        body: "{}",
+        body: JSON.stringify({ next }),
       });
       setSent(true);
       await refresh();
@@ -1629,23 +1504,37 @@ function CoordinateProject({
       setBusy(false);
     }
   }
-  if (["completed", "archived", "cancelled"].includes(project.status))
-    return null;
   return (
     <div className="coordinate-project">
       <div>
-        <p>Ready to hand over the coordination?</p>
+        <label htmlFor="project-next">What would you like to do next?</label>
         <span>
-          Ask your assistant to move this outcome forward with the approved
-          agents.
+          Describe the change or outcome you want. Your assistant will clarify
+          the goal, arrange a worker, and follow through.
         </span>
       </div>
+      <textarea
+        id="project-next"
+        value={next}
+        onChange={(e) => {
+          setNext(e.target.value);
+          setSent(false);
+        }}
+        placeholder="For example: improve the onboarding, fix a bug, or help me choose the next priority."
+        rows={3}
+        maxLength={12000}
+        disabled={busy}
+      />
       <button
         className="button primary"
         disabled={busy}
         onClick={() => void coordinate()}
       >
-        {busy ? "Coordinating…" : "Coordinate this project"}
+        {busy
+          ? "Thinking it through…"
+          : next.trim()
+            ? "Work on this with me"
+            : "Help me choose"}
         <Icon name="Arrow" size={14} />
       </button>
       <ErrorNotice error={error} />

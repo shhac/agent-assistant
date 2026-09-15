@@ -45,11 +45,14 @@ func New(cfg Config) (*Broker, error) {
 	})); err != nil {
 		return nil, err
 	}
-	if cfg.Engine != "codex" && cfg.APIKeyEnv != "" && os.Getenv(cfg.APIKeyEnv) == "" {
+	if cfg.Engine != "codex" && cfg.Engine != "claude" && cfg.APIKeyEnv != "" && os.Getenv(cfg.APIKeyEnv) == "" {
 		return nil, errors.New("worker model credential environment variable is not set")
 	}
+	if err := validateDependencies(cfg.Dependencies); err != nil {
+		return nil, err
+	}
 	var err error
-	if cfg.TokenEnv == "" || os.Getenv(cfg.TokenEnv) == "" {
+	if cfg.AuthToken == "" && (cfg.TokenEnv == "" || os.Getenv(cfg.TokenEnv) == "") {
 		return nil, errors.New("worker broker authentication token environment variable is required")
 	}
 	if cfg.MaxTurns == 0 {

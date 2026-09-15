@@ -55,14 +55,16 @@ type Dashboard struct {
 	AllowedUsers  []string `json:"allowed_users"`
 }
 type Model struct {
-	Engine    string `json:"engine"`
-	Effort    string `json:"effort"`
-	CodexBin  string `json:"codex_bin"`
-	CodexHome string `json:"codex_home"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env"`
-	MaxTokens int    `json:"max_tokens"`
+	ClaudeBin  string `json:"claude_bin"`
+	ClaudeHome string `json:"claude_home"`
+	Engine     string `json:"engine"`
+	Effort     string `json:"effort"`
+	CodexBin   string `json:"codex_bin"`
+	CodexHome  string `json:"codex_home"`
+	BaseURL    string `json:"base_url"`
+	Model      string `json:"model"`
+	APIKeyEnv  string `json:"api_key_env"`
+	MaxTokens  int    `json:"max_tokens"`
 }
 type Slack struct {
 	BotTokenEnv string `json:"bot_token_env"`
@@ -83,6 +85,9 @@ type Limits struct {
 	CheckInMinutes      int `json:"check_in_minutes"`
 }
 type Worker struct {
+	ModelProfile *Model   `json:"model_profile,omitempty"`
+	Managed      bool     `json:"managed,omitempty"`
+	Workspace    string   `json:"workspace,omitempty"`
 	ProjectID    string   `json:"project_id,omitempty"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
@@ -109,7 +114,7 @@ func Default() Config {
 }
 
 func defaultModel() Model {
-	return Model{Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", CodexHome: DefaultCodexHome(), BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
+	return Model{ClaudeBin: "claude", ClaudeHome: DefaultClaudeHome(), Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", CodexHome: DefaultCodexHome(), BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
 }
 
 // DefaultCodexHome is app-owned state, independent of an ambient CODEX_HOME.
@@ -123,6 +128,11 @@ func DefaultCodexHome() string {
 		root = filepath.Join(home, ".local", "state")
 	}
 	return filepath.Join(root, Namespace, "codex")
+}
+
+func DefaultClaudeHome() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
 }
 
 func defaultWorkerModel() Model {
@@ -328,7 +338,31 @@ func (c Config) Validate() error {
 			return errors.New("workers must have unique nonempty IDs")
 		}
 		ids[w.ID] = true
-		if err = validateEndpoint(w.Endpoint); err != nil {
+		if w.ModelProfile != nil {
+			if !w.Managed {
+				return errors.New("model_profile applies only to managed workers")
+			}
+			if err := w.ModelProfile.Validate(); err != nil {
+				return fmt.Errorf("worker model profile: %w", err)
+			}
+			if w.ModelProfile.MaxTokens > 32768 {
+				return errors.New("worker model output limit exceeds 32768")
+			}
+			envs = append(envs, w.ModelProfile.APIKeyEnv)
+		}
+		if w.Managed {
+			if w.ProjectID == "" || !filepath.IsAbs(w.Workspace) || w.Endpoint != "" || w.APIKeyEnv != "" {
+				return errors.New("managed workers require a project and absolute workspace; endpoints and credentials are automatic")
+			}
+			if len(w.Capabilities) == 0 {
+				return errors.New("managed workers need implementation or review capability")
+			}
+			for _, cap := range w.Capabilities {
+				if cap != "implement" && cap != "review" {
+					return errors.New("managed workers only implement or review")
+				}
+			}
+		} else if err = validateEndpoint(w.Endpoint); err != nil {
 			return fmt.Errorf("worker %s endpoint: %w", w.ID, err)
 		}
 		for _, cap := range w.Capabilities {
@@ -349,8 +383,8 @@ func (c Config) Validate() error {
 // Validate checks configuration syntax. The selected engine checks provider model
 // capabilities before inference rather than guessing from model name prefixes.
 func (m Model) Validate() error {
-	if m.Engine != "codex" && m.Engine != "openai-compatible" {
-		return errors.New("engine must be codex or openai-compatible")
+	if m.Engine != "codex" && m.Engine != "claude" && m.Engine != "openai-compatible" {
+		return errors.New("engine must be codex, claude or openai-compatible")
 	}
 	switch m.Effort {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
@@ -362,6 +396,9 @@ func (m Model) Validate() error {
 	}
 	if m.Engine == "codex" && (!filepath.IsAbs(m.CodexHome) || strings.ContainsRune(m.CodexHome, '\x00')) {
 		return errors.New("codex_home must be an absolute directory path; use the app default or an existing dedicated Codex home")
+	}
+	if m.Engine == "claude" && (strings.TrimSpace(m.ClaudeBin) == "" || !filepath.IsAbs(m.ClaudeHome) || strings.ContainsRune(m.ClaudeHome, '\x00')) {
+		return errors.New("claude requires an executable and absolute CLI home for its shared login")
 	}
 	if m.MaxTokens < 128 || m.MaxTokens > 131072 {
 		return errors.New("max_tokens must be between 128 and 131072")

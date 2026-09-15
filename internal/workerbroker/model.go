@@ -11,7 +11,7 @@ import (
 
 func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMessage, error) {
 	message, _, err := engine.Complete(ctx, engine.Config{
-		Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome,
+		WorkDirRoot: b.cfg.StateDir, Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome, ClaudeBin: b.cfg.ClaudeBin, ClaudeHome: b.cfg.ClaudeHome,
 		Endpoint: b.cfg.ModelEndpoint, Model: b.cfg.Model, APIKeyEnv: b.cfg.APIKeyEnv,
 		MaxOutputTokens: b.cfg.MaxOutputTokens, Timeout: 5 * time.Minute, HTTPClient: b.cfg.HTTPClient,
 	}, messages, workerTools())

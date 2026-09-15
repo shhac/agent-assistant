@@ -157,6 +157,7 @@ describe("owner dashboard flows", () => {
       "textContent",
       "Configure an assistant model in Settings.",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Restore message to draft" }));
     expect(field).toHaveProperty("value", "Please coordinate this project.");
     expect(screen.queryByText("Iris is working through it…")).toBeNull();
   });
@@ -251,10 +252,11 @@ describe("owner dashboard flows", () => {
         },
       ],
     };
+    state.projects = [{ id: "approved-project", title: "Approved project", description: "", acceptance_criteria: "", status: "ready" }];
     respond = (path) => ({ body: path === "/api/config" ? config : state });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
-    const project = await screen.findByLabelText(/^Project ID \(optional\)/);
+    const project = await screen.findByLabelText(/^Project$/);
     fireEvent.change(project, { target: { value: "approved-project" } });
     fireEvent.click(screen.getByLabelText("review"));
     fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
@@ -304,7 +306,7 @@ describe("owner dashboard flows", () => {
       "value",
       "codex",
     );
-    expect(screen.getByLabelText("Assistant model identifier")).toHaveProperty(
+    expect(screen.getByLabelText(/^Assistant custom model identifier/)).toHaveProperty(
       "value",
       "gpt-6-astra",
     );
@@ -325,10 +327,10 @@ describe("owner dashboard flows", () => {
     fireEvent.change(screen.getByLabelText("Worker engine"), {
       target: { value: "openai-compatible" },
     });
-    fireEvent.change(screen.getByLabelText("Worker model identifier"), {
+    fireEvent.change(screen.getByLabelText(/^Worker custom model identifier/), {
       target: { value: "provider-model" },
     });
-    fireEvent.change(screen.getByLabelText(/^Worker reasoning effort/), {
+    fireEvent.change(screen.getByLabelText(/^Worker custom reasoning effort/), {
       target: { value: "low" },
     });
     expect(

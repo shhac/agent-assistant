@@ -17,6 +17,8 @@ import (
 func New(a *app.App, auth *Auth) http.Handler {
 	mux := http.NewServeMux()
 	registerFilesystem(mux, a)
+	registerModels(mux, a)
+	registerWorkerSetup(mux, a)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		s, err := a.Snapshot(r.Context())
 		if err != nil {
@@ -128,25 +130,6 @@ func New(a *app.App, auth *Auth) http.Handler {
 			return
 		}
 		respond(w, 201, v)
-	})
-	mux.HandleFunc("POST /api/projects/{id}/coordinate", func(w http.ResponseWriter, r *http.Request) {
-		s, err := a.Snapshot(r.Context())
-		if err != nil {
-			problem(w, err)
-			return
-		}
-		for _, p := range s.Projects {
-			if p.ID == r.PathValue("id") {
-				v, err := a.Chat(r.Context(), "Please coordinate project "+p.ID+" ("+p.Title+") to meet its recorded acceptance criteria. Delegate through approved profiles and keep me informed of unresolved decisions.")
-				if err != nil {
-					problem(w, err)
-					return
-				}
-				respond(w, 200, v)
-				return
-			}
-		}
-		problem(w, core.ErrNotFound)
 	})
 	mux.HandleFunc("POST /api/decisions/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

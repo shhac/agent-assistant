@@ -58,3 +58,32 @@ func TestModelLoginRejectsGlobalInstructionsInConfiguredHome(t *testing.T) {
 		t.Fatal("global instructions accepted")
 	}
 }
+
+func TestClaudeLoginUsesConfiguredHomeAndSubscription(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "must-not-be-forwarded")
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	profile := config.Default().WorkerModel
+	profile.Engine = "claude"
+	profile.ClaudeHome = filepath.Join(t.TempDir(), "worker-login")
+	profile.ClaudeBin, _ = os.Executable()
+	child, err := prepareModelLogin(context.Background(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(child.Args[1:], " ") != "auth login --claudeai" || child.Dir != profile.ClaudeHome {
+		t.Fatal(child.Args, child.Dir)
+	}
+	found := false
+	for _, value := range child.Env {
+		if value == "CLAUDE_CONFIG_DIR="+profile.ClaudeHome {
+			found = true
+		}
+		if strings.HasPrefix(value, "ANTHROPIC_API_KEY=") {
+			t.Fatal("inherited API billing credential")
+		}
+	}
+	if !found {
+		t.Fatal("configured login home missing")
+	}
+	// Never start the process: login remains an explicit owner action.
+}

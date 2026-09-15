@@ -125,7 +125,7 @@ func completionConfigValues(key string) []string {
 	case "dashboard.tailscale_port":
 		return []string{"443", "8443", "10000"}
 	case "model.engine", "worker_model.engine":
-		return []string{"codex", "openai-compatible"}
+		return []string{"codex", "claude", "openai-compatible"}
 	case "model.effort", "worker_model.effort":
 		return []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 	}

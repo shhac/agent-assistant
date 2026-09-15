@@ -63,6 +63,7 @@ type Function struct {
 
 func Tools() []Tool {
 	return []Tool{
+		tool("prepare_worker", "Prepare a private local worker for a project the owner wants to work on. Handles environment setup, downloads of free tools, worker naming and private credentials automatically; does not start project work. Choose one of the project’s linked directory paths as workspace, or an empty string when only one is linked. Ask only for the intended outcome or workspace if unclear; never ask the owner for profile IDs, endpoints, tokens or a container image.", []string{"project_id", "workspace"}, nil),
 		tool("list_connections", "List available optional resources and approved credential profiles. Availability does not make an account relevant to a project. Credentials are never exposed.", nil, nil),
 		tool("query_connection", "Read through an optional integration and approved profile only when relevant to the owner request or established project context. Do not query a work account for a personal project unless the owner explicitly links it or asks. This does not grant writes, deployment, production-data access, or purchases. Slack messages require an existing C/G/D channel ID; URLs and user targets are unavailable. Use an empty profile for the Notion CLI default; other integrations require an explicitly configured profile alias. Use empty strings for other fields not required by the operation.", []string{"connection_id", "profile", "operation", "query", "resource_id"}, nil),
 

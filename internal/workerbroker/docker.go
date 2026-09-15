@@ -74,7 +74,27 @@ func (b *Broker) containerArgs(r storedRun) []string {
 	if !contains(r.Request.Capabilities, "implement") {
 		mount += ",readonly"
 	}
-	return []string{"run", "--detach", "--pull=never", "--name", r.Container, "--label", "agent-assistant.worker=" + r.Run.ID, "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "128", "--memory", "1g", "--cpus", "2", "--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()), "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m", "--mount", mount, "--workdir", "/workspace", "--env", "HOME=/tmp/home", "--entrypoint", "/bin/sh", b.cfg.Image, "-c", "mkdir -p /tmp/home; while :; do sleep 3600; done"}
+	args := []string{"run", "--detach", "--pull=never", "--name", r.Container, "--label", "agent-assistant.worker=" + r.Run.ID, "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "128", "--memory", "1g", "--cpus", "2", "--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()), "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m", "--mount", mount, "--workdir", "/workspace", "--env", "HOME=/tmp/home", "--entrypoint", "/bin/sh", b.cfg.Image, "-c", "mkdir -p /tmp/home; while :; do sleep 3600; done"}
+	extra := []string{}
+	for _, mount := range b.cfg.Dependencies {
+		if mount.Target != "/opt/agent-assistant/gomod" {
+			if !contains(r.Request.Capabilities, "implement") {
+				// Review source stays read-only, but Vite/Vitest can write their
+				// temporary bundles into this run's private dependency copy.
+				relative := strings.TrimPrefix(mount.Target, "/workspace/")
+				source := filepath.Join(r.WorkDir, filepath.FromSlash(relative))
+				extra = append(extra, "--mount", "type=bind,src="+source+",dst="+mount.Target)
+			}
+			continue
+		}
+		extra = append(extra, "--mount", "type=bind,src="+mount.Source+",dst="+mount.Target+",readonly")
+		if mount.Target == "/opt/agent-assistant/gomod" {
+			extra = append(extra, "--env", "GOMODCACHE=/opt/agent-assistant/gomod", "--env", "GOPROXY=off", "--env", "GOSUMDB=off")
+		}
+	}
+	// Options must precede the image and command.
+	index := len(args) - 3
+	return append(append(append([]string{}, args[:index]...), extra...), args[index:]...)
 }
 
 func dockerEnvironment() []string { return []string{"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"} }

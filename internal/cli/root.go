@@ -190,6 +190,22 @@ func NewRoot(version string) *cobra.Command {
 				cancel()
 				checks = append(checks, map[string]any{"name": "codex login", "ok": loginErr == nil, "hint": "run agent-assistant model login; no inference was invoked"})
 			}
+		} else if cfg.Model.Engine == "claude" {
+			binary, lookupErr := exec.LookPath(cfg.Model.ClaudeBin)
+			checks = append(checks, map[string]any{"name": "claude executable", "ok": lookupErr == nil, "hint": "Install Claude CLI to use its existing subscription login."})
+			if lookupErr == nil {
+				ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+				probe := exec.CommandContext(ctx, binary, "auth", "status")
+				probe.Env, err = engine.ClaudeEnvironment(cfg.Model.ClaudeHome)
+				if err != nil {
+					cancel()
+					return err
+				}
+				probe.Stdout, probe.Stderr = io.Discard, io.Discard
+				loginErr := probe.Run()
+				cancel()
+				checks = append(checks, map[string]any{"name": "claude login", "ok": loginErr == nil, "hint": "Sign in once with agent-assistant model login; workers using this CLI home share the login."})
+			}
 		} else {
 			refs = append(refs, cfg.Model.APIKeyEnv)
 		}

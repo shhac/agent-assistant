@@ -57,6 +57,10 @@ func (b *Broker) execute(parent context.Context, id string) {
 			b.terminal(id, "interrupted", copyErr.Error(), nil)
 			return
 		}
+		if dependencyErr := b.prepareRunDependencies(ctx, workDir); dependencyErr != nil {
+			b.terminal(id, "interrupted", dependencyErr.Error(), nil)
+			return
+		}
 		err = b.update(id, func(run *storedRun) error { run.WorkDir = workDir; run.Baseline = baseline; return nil })
 		if err != nil {
 			b.terminal(id, "interrupted", "Could not record isolated workspace", nil)
@@ -225,7 +229,7 @@ func (b *Broker) tool(ctx context.Context, id string, r storedRun, call toolCall
 		}
 		c, stop := context.WithTimeout(ctx, 60*time.Second)
 		defer stop()
-		out, err := b.cfg.Command.Run(c, []string{"exec", r.Container, "/bin/sh", "-lc", in.Command}, nil)
+		out, err := b.cfg.Command.Run(c, []string{"exec", r.Container, "/bin/sh", "-c", in.Command}, nil)
 		record := commandRecord{Command: in.Command, Success: err == nil, Output: string(out)}
 		if saveErr := b.update(id, func(run *storedRun) error {
 			run.Commands = append(run.Commands, record)

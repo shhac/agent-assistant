@@ -21,6 +21,7 @@ import (
 // Run owns deterministic supervision. noDispatch is fixed at process boot;
 // changing pause or live configuration cannot enable starts or resumes beneath it.
 func (a *App) Run(ctx context.Context, noDispatch bool) error {
+	defer a.closeManagedWorkers()
 	if noDispatch {
 		a.SetNoDispatch()
 	}
@@ -135,10 +136,17 @@ func (a *App) syncLinear(ctx context.Context, c assignmentSource) error {
 	a.Status("linear", "Linear", "connected", fmt.Sprintf("%d scoped assignments synced; no work starts without a commission", len(result.Issues)))
 	return nil
 }
-func (a *App) broker(profileID string) (*worker.Client, error) {
+func (a *App) broker(ctx context.Context, profileID string) (*worker.Client, error) {
 	p, err := a.Core.GetProfile(profileID)
 	if err != nil {
 		return nil, err
+	}
+	if p.Managed {
+		manager, err := a.managedWorkers()
+		if err != nil {
+			return nil, err
+		}
+		return manager.Client(ctx, p.ProjectID, p.Workspace, workerModel(a.Config(), p))
 	}
 	return worker.New(worker.Config{Endpoint: p.Endpoint, APIKeyEnv: p.APIKeyEnv, Capabilities: p.Capabilities})
 }
@@ -190,7 +198,7 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 	if agent.Status == "queued" && noDispatch {
 		return nil
 	}
-	c, err := a.broker(agent.ProfileID)
+	c, err := a.broker(ctx, agent.ProfileID)
 	if err != nil {
 		return err
 	}
@@ -531,7 +539,7 @@ func (a *App) sendInstruction(ctx context.Context, ag core.Agent, key, message s
 	if a.Demo || a.dispatchDisabled.Load() {
 		return worker.Run{}, &noEffect{errors.New("worker instructions disabled for this boot")}
 	}
-	c, err := a.broker(ag.ProfileID)
+	c, err := a.broker(ctx, ag.ProfileID)
 	if err != nil {
 		return worker.Run{}, &noEffect{err}
 	}

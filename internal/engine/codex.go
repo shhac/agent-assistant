@@ -426,6 +426,12 @@ func parseCodex(data []byte, tools []Tool) (Message, Usage, error) {
 	if !completed {
 		return Message{}, usage, errors.New("Codex did not complete its response")
 	}
+	result, err := parseActionEnvelope([]byte(result.Content), tools)
+	return result, usage, err
+}
+
+// parseActionEnvelope validates proposals before either CLI can invoke app tools.
+func parseActionEnvelope(data []byte, tools []Tool) (Message, error) {
 	var envelope struct {
 		Content   string `json:"content"`
 		ToolCalls []struct {
@@ -434,31 +440,31 @@ func parseCodex(data []byte, tools []Tool) (Message, Usage, error) {
 		} `json:"tool_calls"`
 	}
 	var required map[string]json.RawMessage
-	if json.Unmarshal([]byte(result.Content), &required) != nil || required["content"] == nil || required["tool_calls"] == nil || string(required["content"]) == "null" || string(required["tool_calls"]) == "null" {
-		return Message{}, usage, errors.New("Codex action envelope omitted required fields")
+	if json.Unmarshal(data, &required) != nil || required["content"] == nil || required["tool_calls"] == nil || string(required["content"]) == "null" || string(required["tool_calls"]) == "null" {
+		return Message{}, errors.New("Model action envelope omitted required fields")
 	}
-	decoder := json.NewDecoder(strings.NewReader(result.Content))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF || len(envelope.ToolCalls) > 16 {
-		return Message{}, usage, errors.New("Codex returned an invalid action envelope")
+		return Message{}, errors.New("Model returned an invalid action envelope")
 	}
 	allowed := map[string]bool{}
 	for _, t := range tools {
 		allowed[t.Function.Name] = true
 	}
-	result = Message{Role: "assistant", Content: envelope.Content}
+	result := Message{Role: "assistant", Content: envelope.Content}
 	for _, call := range envelope.ToolCalls {
 		if !allowed[call.Name] || !json.Valid([]byte(call.Arguments)) {
-			return Message{}, usage, errors.New("Codex requested an unavailable tool or invalid arguments")
+			return Message{}, errors.New("Model requested an unavailable tool or invalid arguments")
 		}
 		var id [16]byte
 		if _, err := rand.Read(id[:]); err != nil {
-			return Message{}, usage, err
+			return Message{}, err
 		}
 		c := ToolCall{ID: "call_" + hex.EncodeToString(id[:]), Type: "function"}
 		c.Function.Name = call.Name
 		c.Function.Arguments = call.Arguments
 		result.ToolCalls = append(result.ToolCalls, c)
 	}
-	return result, usage, nil
+	return result, nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -57,7 +58,7 @@ func (d *fakeDocker) Run(ctx context.Context, args []string, input []byte) ([]by
 			_ = os.MkdirAll(filepath.Dir(target), 0755)
 			return nil, os.WriteFile(target, input, 0644)
 		}
-		if args[len(args)-2] == "-lc" {
+		if args[len(args)-2] == "-c" {
 			return []byte("PASS: synthetic verification\n"), nil
 		}
 		p := args[len(args)-1]
@@ -247,7 +248,15 @@ func TestInterruptedMessageCannotBypassExplicitResume(t *testing.T) {
 func TestWorkspaceFilterAndConfinedReads(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source")
-	_ = os.MkdirAll(filepath.Join(source, ".git", "hooks"), 0755)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", source, "init", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("init fixture: %s %v", out, err)
+	}
 	_ = os.WriteFile(filepath.Join(source, ".env"), []byte("private"), 0600)
 	_ = os.WriteFile(filepath.Join(source, ".git", "hooks", "pre-commit"), []byte("private"), 0600)
 	_ = os.WriteFile(filepath.Join(source, "normal.txt"), []byte("safe"), 0644)
