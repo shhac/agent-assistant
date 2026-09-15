@@ -16,21 +16,36 @@ import (
 	"strings"
 )
 
+const Namespace = "agent-assistant.paulie.app"
 const DefaultAssistantName = "Milo"
 
 type Config struct {
-	Assistant   Assistant `json:"assistant"`
-	Dashboard   Dashboard `json:"dashboard"`
-	Model       Model     `json:"model"`
-	WorkerModel Model     `json:"worker_model"`
-	Slack       Slack     `json:"slack"`
-	Linear      Linear    `json:"linear"`
-	Limits      Limits    `json:"limits"`
-	Workers     []Worker  `json:"workers"`
+	Assistant   Assistant    `json:"assistant"`
+	Dashboard   Dashboard    `json:"dashboard"`
+	Model       Model        `json:"model"`
+	WorkerModel Model        `json:"worker_model"`
+	Slack       Slack        `json:"slack"`
+	Linear      Linear       `json:"linear"`
+	Limits      Limits       `json:"limits"`
+	Workers     []Worker     `json:"workers"`
+	Connections []Connection `json:"connections"`
 }
 type Assistant struct {
 	Name        string `json:"name"`
 	Personality string `json:"personality"`
+	Theme       string `json:"theme"`
+	Avatar      Avatar `json:"avatar"`
+}
+type Avatar struct {
+	Shape      string `json:"shape"`
+	Background string `json:"background"`
+	Accent     string `json:"accent"`
+}
+type Connection struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Tool     string   `json:"tool"`
+	Profiles []string `json:"profiles"`
 }
 type Dashboard struct {
 	Addr          string   `json:"addr"`
@@ -79,10 +94,11 @@ type FilePaths struct {
 
 func Default() Config {
 	return Config{
-		Assistant:   Assistant{Name: DefaultAssistantName, Personality: "Calm, concise and proactive. Bring clear recommendations and evidence; handle the chasing."},
+		Assistant:   Assistant{Name: DefaultAssistantName, Personality: "Calm, concise and proactive. Bring clear recommendations and evidence; handle the chasing.", Theme: "graphite-sage", Avatar: Avatar{Shape: "orb", Background: "#16211e", Accent: "#a8c5a8"}},
 		Dashboard:   Dashboard{Addr: "127.0.0.1:8340", Tailscale: "off", TailscalePort: 8443, AllowedUsers: []string{}},
 		Model:       defaultModel(),
-		WorkerModel: defaultModel(),
+		WorkerModel: defaultWorkerModel(),
+		Connections: []Connection{},
 		Slack:       Slack{BotTokenEnv: "SLACK_BOT_TOKEN", AppTokenEnv: "SLACK_APP_TOKEN"},
 		Linear:      Linear{APIKeyEnv: "LINEAR_API_KEY", TeamIDs: []string{}},
 		Limits:      Limits{MaxModelCallsPerDay: 100, MaxModelTurns: 8, MaxAgents: 4, MaxDepth: 3, MaxRecoveries: 2, CheckInMinutes: 30}, Workers: []Worker{},
@@ -91,6 +107,12 @@ func Default() Config {
 
 func defaultModel() Model {
 	return Model{Engine: "codex", Model: "gpt-6-astra", Effort: "high", CodexBin: "codex", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY", MaxTokens: 4096}
+}
+
+func defaultWorkerModel() Model {
+	m := defaultModel()
+	m.Model = "gpt-5.6-terra"
+	return m
 }
 
 func Paths() (FilePaths, error) {
@@ -106,7 +128,35 @@ func Paths() (FilePaths, error) {
 	if stateRoot == "" {
 		stateRoot = filepath.Join(home, ".local", "state")
 	}
-	return FilePaths{Config: filepath.Join(configRoot, "agent-assistant", "config.json"), State: filepath.Join(stateRoot, "agent-assistant", "state.db")}, nil
+	current := FilePaths{Config: filepath.Join(configRoot, Namespace, "config.json"), State: filepath.Join(stateRoot, Namespace, "state.db")}
+	legacy := FilePaths{Config: filepath.Join(configRoot, "agent-assistant", "config.json"), State: filepath.Join(stateRoot, "agent-assistant", "state.db")}
+	has := func(p FilePaths) (bool, error) {
+		found := false
+		for _, path := range []string{p.Config, p.State} {
+			_, e := os.Stat(path)
+			if e == nil {
+				found = true
+			} else if !errors.Is(e, os.ErrNotExist) {
+				return false, e
+			}
+		}
+		return found, nil
+	}
+	old, err := has(legacy)
+	if err != nil {
+		return FilePaths{}, err
+	}
+	fresh, err := has(current)
+	if err != nil {
+		return FilePaths{}, err
+	}
+	if old && fresh {
+		return FilePaths{}, errors.New("both legacy and reverse-DNS config/state exist; choose explicit --config and --state paths to avoid splitting assistant history")
+	}
+	if old {
+		return legacy, nil
+	}
+	return current, nil
 }
 func Load(path string) (Config, error) {
 	c := Default()
@@ -186,6 +236,26 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.Assistant.Name) == "" || len(c.Assistant.Name) > 80 {
 		return errors.New("assistant.name must contain 1–80 characters")
+	}
+	if len(c.Assistant.Personality) > 4000 {
+		return errors.New("assistant.personality must not exceed 4000 characters")
+	}
+	switch c.Assistant.Theme {
+	case "graphite-sage", "ink-blue", "charcoal-amber":
+	default:
+		return errors.New("assistant.theme must be graphite-sage, ink-blue or charcoal-amber")
+	}
+	switch c.Assistant.Avatar.Shape {
+	case "orb", "spark", "leaf":
+	default:
+		return errors.New("assistant.avatar.shape must be orb, spark or leaf")
+	}
+	hex := regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+	if !hex.MatchString(c.Assistant.Avatar.Background) || !hex.MatchString(c.Assistant.Avatar.Accent) {
+		return errors.New("assistant avatar colors must be #RRGGBB")
+	}
+	if err := validateConnections(c.Connections); err != nil {
+		return err
 	}
 	host, port, err := net.SplitHostPort(c.Dashboard.Addr)
 	if err != nil {
@@ -296,4 +366,36 @@ func validateEndpoint(raw string) error {
 		return nil
 	}
 	return errors.New("HTTPS is required except on loopback")
+}
+
+func validateConnections(cs []Connection) error {
+	if len(cs) > 32 {
+		return errors.New("at most 32 connections are supported")
+	}
+	ids := map[string]bool{}
+	for _, c := range cs {
+		if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`).MatchString(c.ID) || ids[c.ID] {
+			return errors.New("connections require unique IDs of 1–64 letters, digits, underscores or hyphens")
+		}
+		ids[c.ID] = true
+		if strings.TrimSpace(c.Name) == "" || len(c.Name) > 80 {
+			return errors.New("connection name must contain 1–80 characters")
+		}
+		switch c.Tool {
+		case "lin", "agent-slack", "agent-notion", "agent-fathom":
+		default:
+			return errors.New("unsupported connection CLI")
+		}
+		if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
+			return errors.New("select 1–32 existing profiles per connection")
+		}
+		seen := map[string]bool{}
+		for _, p := range c.Profiles {
+			if strings.TrimSpace(p) == "" || len(p) > 128 || strings.ContainsAny(p, "\r\n\x00") || seen[p] {
+				return errors.New("connection profiles must be unique nonempty aliases")
+			}
+			seen[p] = true
+		}
+	}
+	return nil
 }

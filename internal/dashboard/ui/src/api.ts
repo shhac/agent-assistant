@@ -1,3 +1,5 @@
+import type { Connection } from "./ConnectionsSettings";
+import type { AvatarSpec } from "./Identity";
 export interface Project {
   id: string;
   title: string;
@@ -67,7 +69,12 @@ export interface WorkerProfile {
 }
 export interface State {
   pending_operations: PendingOperation[];
-  assistant: { name: string; personality: string };
+  assistant: {
+    name: string;
+    personality: string;
+    theme?: string;
+    avatar?: AvatarSpec;
+  };
   projects: Project[];
   agents: Agent[];
   decisions: Decision[];
@@ -79,8 +86,15 @@ export interface State {
   demo: boolean;
 }
 export type Config = Record<string, unknown> & {
-  assistant?: { name?: string; personality?: string; [key: string]: unknown };
+  assistant?: {
+    name?: string;
+    personality?: string;
+    theme?: string;
+    avatar?: AvatarSpec;
+    [key: string]: unknown;
+  };
   workers?: WorkerProfile[];
+  connections?: Connection[];
 };
 export class APIError extends Error {
   constructor(

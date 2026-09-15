@@ -1,3 +1,6 @@
+import { Avatar, Waiting, ThemePicker, validTheme } from "./Identity";
+import { AssistantSetup } from "./AssistantSetup";
+import { ConnectionsSettings } from "./ConnectionsSettings";
 import { ModelSettings } from "./ModelSettings";
 import {
   useCallback,
@@ -48,6 +51,9 @@ const icons: Record<string, string> = {
   Message: "M4 4h16v13H9l-5 4z",
   Lock: "M6 10h12v11H6zM8 10V6a4 4 0 018 0v4",
   Chevron: "M9 5l7 7-7 7",
+  Expand:
+    "M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5M3 3l6 6M21 3l-6 6M3 21l6-6M21 21l-6-6",
+  Shrink: "M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5",
   Bell: "M5 17h14l-2-3V9a5 5 0 00-10 0v5zM10 21h4",
 };
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -147,6 +153,7 @@ export function App() {
   const [connectionError, setConnectionError] = useState("");
   const [newProject, setNewProject] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState("");
   const request = useRef(0);
@@ -225,11 +232,16 @@ export function App() {
     const desktop = window.matchMedia("(min-width: 1001px)");
     const changed = () => {
       if (desktop.matches) setChatOpen(false);
+      else setChatExpanded(false);
     };
     desktop.addEventListener("change", changed);
     return () => desktop.removeEventListener("change", changed);
   }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = validTheme(state?.assistant.theme);
+  }, [state?.assistant.theme]);
   function navigate(next: Page) {
+    setChatExpanded(false);
     setPage(next);
     setSelectedProject(null);
   }
@@ -272,8 +284,11 @@ export function App() {
   const decisions = pendingDecisions(state.decisions);
   const name = state.assistant.name || "Assistant";
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#main-content">
+    <div className={`app-shell ${chatExpanded ? "chat-expanded" : ""}`}>
+      <a
+        className="skip-link"
+        href={chatExpanded ? "#chat-message" : "#main-content"}
+      >
         Skip to content
       </a>
       <aside className="sidebar" inert={chatOpen}>
@@ -282,7 +297,7 @@ export function App() {
           onClick={() => navigate("Overview")}
           aria-label={`${name} overview`}
         >
-          <Mark small />
+          <Avatar avatar={state.assistant.avatar} small />
           <span>
             {name}
             <small>PERSONAL ASSISTANT</small>
@@ -346,7 +361,7 @@ export function App() {
           <ErrorNotice error={controlError} />
         </div>
       </aside>
-      <div className="workspace" inert={chatOpen}>
+      <div className="workspace" inert={chatOpen || chatExpanded}>
         <header className="topbar">
           <div className="breadcrumbs">
             Workspace <span>/</span> <strong>{page}</strong>
@@ -502,6 +517,13 @@ export function App() {
           state={state}
           refresh={refresh}
           onClose={() => setChatOpen(false)}
+          expanded={chatExpanded}
+          onExpand={() => {
+            setChatExpanded(!chatExpanded);
+            requestAnimationFrame(() =>
+              document.getElementById("chat-message")?.focus(),
+            );
+          }}
         />
       </aside>
       {newProject && (
@@ -986,10 +1008,14 @@ function Chat({
   state,
   refresh,
   onClose,
+  expanded,
+  onExpand,
 }: {
   state: State;
   refresh: () => Promise<void>;
   onClose: () => void;
+  expanded: boolean;
+  onExpand: () => void;
 }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1022,11 +1048,22 @@ function Chat({
   return (
     <>
       <header className="chat-header">
-        <Mark small />
+        <Avatar avatar={state.assistant.avatar} small />
         <div>
           <h2>{name}</h2>
           <span>Your context, kept together</span>
         </div>
+        <button
+          className="icon-button chat-expand"
+          aria-label={expanded ? "Return to workspace" : "Expand conversation"}
+          aria-pressed={expanded}
+          onClick={onExpand}
+          title={
+            expanded ? "Return to workspace" : "Make conversation the main view"
+          }
+        >
+          <Icon name={expanded ? "Shrink" : "Expand"} />
+        </button>
         <button
           className="icon-button mobile-close"
           aria-label="Close conversation"
@@ -1035,6 +1072,16 @@ function Chat({
           <Icon name="Close" />
         </button>
       </header>
+      {expanded && (
+        <div className="chat-context-strip">
+          <span>YOUR WORK, WITH CONTEXT</span>
+          <p>
+            {state.projects.filter((p) => p.status !== "completed").length}{" "}
+            active projects <i>·</i> {pendingDecisions(state.decisions).length}{" "}
+            open decisions <i>·</i> one conversation
+          </p>
+        </div>
+      )}
       <div
         className="chat-messages"
         ref={scroll}
@@ -1060,7 +1107,7 @@ function Chat({
         ) : (
           <div className="chat-welcome">
             <span className="chat-orbit">
-              <Mark />
+              <Avatar avatar={state.assistant.avatar} />
             </span>
             <p className="eyebrow">A LITTLE LESS TO CARRY</p>
             <h3>Start a conversation.</h3>
@@ -1089,10 +1136,10 @@ function Chat({
           </div>
         )}
         {busy && (
-          <p className="thinking" role="status">
-            <span className="status-dot" />
-            {name} is working through it…
-          </p>
+          <Waiting
+            label={`${name} is working through it…`}
+            detail="Keeping the context together. An answer or a clear decision is on its way."
+          />
         )}
       </div>
       <div className="chat-composer-wrap">
@@ -1314,6 +1361,16 @@ function Settings({
         description="A familiar voice, a clear remit, and connections you control."
       />
       <ErrorNotice error={error} />
+      <AssistantSetup
+        currentName={state.assistant.name}
+        demo={state.demo}
+        onApplied={async (assistant) => {
+          setName(assistant.name || state.assistant.name);
+          setPersonality(assistant.personality || "");
+          setConfig(await api<Config>("/api/config"));
+          await refresh();
+        }}
+      />
       <form className="settings-form" onSubmit={save}>
         <div className="settings-section-title">
           <Mark small />
@@ -1354,6 +1411,27 @@ function Settings({
           configured separately.
         </p>
         {config && (
+          <ThemePicker
+            value={config.assistant?.theme}
+            onChange={(theme) => {
+              setConfig({
+                ...config,
+                assistant: { ...config.assistant, theme },
+              });
+              setSaved(false);
+            }}
+          />
+        )}
+        {config && (
+          <ConnectionsSettings
+            connections={config.connections || []}
+            onChange={(connections) => {
+              setConfig({ ...config, connections });
+              setSaved(false);
+            }}
+          />
+        )}
+        {config && (
           <ConfigurationFields
             config={config}
             onChange={(next) => {
@@ -1383,7 +1461,7 @@ function Settings({
       </form>
       <section className="section-block">
         <div className="section-heading">
-          <h2>Connections</h2>
+          <h2>Connection status</h2>
         </div>
         <p className="section-description">
           Connection credentials stay outside the dashboard. Configure
@@ -1765,7 +1843,7 @@ function ConfigurationFields({
   return (
     <div className="configuration-fields">
       <details>
-        <summary>Model and connection setup</summary>
+        <summary>Assistant and worker models</summary>
         <p className="field-hint">
           Enter environment variable names for credentials. Never paste a token
           or API key. Connection changes may require restarting the daemon.
@@ -1782,26 +1860,34 @@ function ConfigurationFields({
           group="worker_model"
           title="Worker"
         />
-        <div className="config-field-group">
-          <h3>Slack</h3>
-          {field("slack", "owner_user_id", "Your Slack user ID")}
-          {field("slack", "bot_token_env", "Bot token environment variable", {
-            env: true,
-          })}
-          {field("slack", "app_token_env", "App token environment variable", {
-            env: true,
-          })}
-        </div>
-        <div className="config-field-group">
-          <h3>Linear</h3>
-          {field("linear", "api_key_env", "API key environment variable", {
-            env: true,
-          })}
-          {field("linear", "team_ids", "Watched team IDs", {
-            list: true,
-            hint: "Separate IDs with commas. Configure only the teams you want the assistant to access.",
-          })}
-        </div>
+        <details className="advanced-connection">
+          <summary>Advanced: Slack bot and direct Linear API</summary>
+          <p className="field-hint">
+            Optional integrations for a dedicated bot identity or direct API
+            access. Named CLI connections above are the simpler starting point.
+            Bot connection changes require a daemon restart.
+          </p>
+          <div className="config-field-group">
+            <h3>Slack bot</h3>
+            {field("slack", "owner_user_id", "Your Slack user ID")}
+            {field("slack", "bot_token_env", "Bot token environment variable", {
+              env: true,
+            })}
+            {field("slack", "app_token_env", "App token environment variable", {
+              env: true,
+            })}
+          </div>
+          <div className="config-field-group">
+            <h3>Linear</h3>
+            {field("linear", "api_key_env", "API key environment variable", {
+              env: true,
+            })}
+            {field("linear", "team_ids", "Watched team IDs", {
+              list: true,
+              hint: "Separate IDs with commas. Configure only the teams you want the assistant to access.",
+            })}
+          </div>
+        </details>
       </details>
       <details>
         <summary>Capacity and supervision</summary>

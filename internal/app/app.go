@@ -16,9 +16,11 @@ import (
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/core"
 	"github.com/shhac/agent-assistant/internal/engine"
+	"github.com/shhac/agent-assistant/internal/integrations/connections"
 )
 
 type App struct {
+	connectionClient connections.Client
 	dispatchDisabled atomic.Bool
 	Core             *core.Service
 	mu               sync.RWMutex
@@ -30,7 +32,7 @@ type App struct {
 }
 
 func New(s *core.Service, cfg config.Config, path string, demo bool) *App {
-	return &App{Core: s, cfg: cfg, configPath: path, Demo: demo, chat: make(chan struct{}, 1), statuses: map[string]core.Integration{}}
+	return &App{connectionClient: connections.New(), Core: s, cfg: cfg, configPath: path, Demo: demo, chat: make(chan struct{}, 1), statuses: map[string]core.Integration{}}
 }
 func (a *App) Config() config.Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) UpdateConfig(cfg config.Config) error {
@@ -66,7 +68,7 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 		return s, err
 	}
 	cfg := a.Config()
-	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "linear", Name: "Linear", Status: "not_configured", Detail: "Set team scope and credential environment reference"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Add an approved execution broker"}}
+	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "linear", Name: "Linear", Status: "not_configured", Detail: "Use a named lin connection; legacy API integration remains available"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Add an approved execution broker"}}
 	if cfg.Model.Model != "" {
 		s.Integrations[0].Status = "configured"
 		s.Integrations[0].Detail = strings.Join([]string{cfg.Model.Engine, cfg.Model.Model, cfg.Model.Effort}, " / ")
@@ -74,6 +76,13 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	if len(cfg.Workers) > 0 {
 		s.Integrations[3].Status = "configured"
 		s.Integrations[3].Detail = fmt.Sprintf("%d approved profiles", len(cfg.Workers))
+	}
+	for _, c := range cfg.Connections {
+		state, detail := "configured", "Read-only CLI accounts: "+strings.Join(c.Profiles, ", ")
+		if c.Tool == "agent-notion" {
+			state, detail = "unavailable", "CLI has no per-call workspace selector; reads disabled"
+		}
+		s.Integrations = append(s.Integrations, core.Integration{ID: "connection:" + c.ID, Name: c.Name, Status: state, Detail: detail})
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -114,9 +123,10 @@ func (a *App) context(ctx context.Context) (json.RawMessage, []engine.Message, e
 		profiles = append(profiles, profile{p.ProjectID, p.ID, p.Name, p.Capabilities})
 	}
 	raw, err := json.Marshal(struct {
-		State    core.Snapshot `json:"state"`
-		Profiles []profile     `json:"worker_profiles"`
-	}{s, profiles})
+		State       core.Snapshot       `json:"state"`
+		Profiles    []profile           `json:"worker_profiles"`
+		Connections []config.Connection `json:"connections"`
+	}{s, profiles, a.Config().Connections})
 	return raw, history, err
 }
 func (a *App) Chat(ctx context.Context, message string) (engine.Result, error) {
@@ -169,6 +179,8 @@ func args(raw json.RawMessage, v any) error {
 }
 func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (any, error) {
 	switch name {
+	case "list_connections", "query_connection":
+		return a.runConnectionTool(ctx, name, raw)
 	case "message_agent":
 		var in struct {
 			AgentID string `json:"agent_id"`

@@ -102,8 +102,14 @@ func (a *App) SyncLinear(ctx context.Context) error {
 		return nil
 	}
 	cfg := a.Config()
+	cliErr := a.syncCLIConnections(ctx)
+	for _, binding := range cfg.Connections {
+		if binding.Tool == "lin" {
+			return cliErr
+		} // Explicit CLI accounts supersede the legacy API integration.
+	}
 	if len(cfg.Linear.TeamIDs) == 0 {
-		return nil
+		return cliErr
 	}
 	c, err := linearapi.New(linearapi.Config{APIKeyEnv: cfg.Linear.APIKeyEnv, TeamIDs: cfg.Linear.TeamIDs})
 	if err == nil {
@@ -112,7 +118,7 @@ func (a *App) SyncLinear(ctx context.Context) error {
 	if err != nil {
 		a.Status("linear", "Linear", "error", err.Error())
 	}
-	return err
+	return errors.Join(cliErr, err)
 }
 
 type assignmentSource interface {

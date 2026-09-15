@@ -12,7 +12,7 @@ Known sensitive files and directories are excluded from the source copy: `.env*`
 
 ## Start the broker
 
-Configure the independent `worker_model` profile in Settings or with `config set worker_model.<field>`. Fresh profiles use `codex / gpt-6-astra / high` with the login in the process's `CODEX_HOME`. `--engine`, `--model` and `--effort` override that profile for this broker process. The API engine uses `worker_model.base_url` and `worker_model.api_key_env`; the Codex engine uses `worker_model.codex_bin`. Changing the PA's model does not change a running worker broker.
+Configure the independent `worker_model` profile in Settings or with `config set worker_model.<field>`. Fresh worker profiles use `codex / gpt-5.6-terra / high` with the login in the process's `CODEX_HOME`. `--engine`, `--model` and `--effort` override that profile for this broker process. The API engine uses `worker_model.base_url` and `worker_model.api_key_env`; the Codex engine uses `worker_model.codex_bin`. Changing the PA's model does not change a running worker broker.
 
 Set an independently generated broker API token in the environment variable `AGENT_ASSISTANT_WORKER_TOKEN` in both the broker and assistant processes. For the API engine, set the configured model credential variable in the broker process as well. For Codex, export the same dedicated, persistent `CODEX_HOME` used by the assistant and log in there using `codex login`. Homes containing global AGENTS instruction files are rejected; credentials are never copied from your usual Codex home. Keep actual tokens out of configuration files, command arguments and version control.
 

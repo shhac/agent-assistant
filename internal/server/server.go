@@ -52,6 +52,54 @@ func New(a *app.App, auth *Auth) http.Handler {
 		}
 		respond(w, 200, c)
 	})
+	mux.HandleFunc("GET /api/connection-profiles", func(w http.ResponseWriter, r *http.Request) {
+		result, err := a.DiscoverConnectionProfiles(r.Context(), r.URL.Query().Get("tool"))
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 200, result)
+	})
+	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		state, err := a.IdentitySetup()
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 200, state)
+	})
+	mux.HandleFunc("POST /api/setup/interview", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Message string `json:"message"`
+		}
+		if decode(w, r, &in) != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+		defer cancel()
+		state, err := a.InterviewIdentity(ctx, in.Message)
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 200, state)
+	})
+	mux.HandleFunc("POST /api/setup/apply", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			RecommendationID string `json:"recommendation_id"`
+			Accepted         bool   `json:"accepted"`
+		}
+		if decode(w, r, &in) != nil {
+			return
+		}
+		identity, err := a.ApplyIdentity(r.Context(), in.RecommendationID, in.Accepted)
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 200, identity)
+	})
+
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Message string `json:"message"`

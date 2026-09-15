@@ -39,6 +39,17 @@ func NewRoot(version string) *cobra.Command {
 	}
 	o := &options{configPath: paths.Config, statePath: paths.State, globals: &libcli.Globals{}}
 	root := libcli.NewRoot(libcli.Options{Use: "agent-assistant", Short: "A personal assistant that coordinates agents and brings clear decisions", Version: version, Globals: o.globals, DefaultFormat: output.FormatNDJSON})
+	pathErr := err
+	before := root.PersistentPreRunE
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if pathErr != nil && !(cmd.Flags().Changed("config") && cmd.Flags().Changed("state")) {
+			return pathErr
+		}
+		if before != nil {
+			return before(cmd, args)
+		}
+		return nil
+	}
 	root.PersistentFlags().StringVar(&o.configPath, "config", paths.Config, "Configuration file")
 	root.PersistentFlags().StringVar(&o.statePath, "state", paths.State, "Durable SQLite state file")
 	init := &cobra.Command{Use: "init", Short: "Create private default configuration", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,6 +151,14 @@ func NewRoot(version string) *cobra.Command {
 			return err
 		}
 		checks := []map[string]any{{"name": "config", "ok": true}, {"name": "model", "ok": cfg.Model.Model != "", "engine": cfg.Model.Engine, "model": cfg.Model.Model, "effort": cfg.Model.Effort}}
+		for _, connection := range cfg.Connections {
+			_, lookupErr := exec.LookPath(connection.Tool)
+			hint := "Account credentials are managed by this CLI; choose its existing profiles in Settings."
+			if connection.Tool == "agent-notion" {
+				hint = "Profile discovery is available, but this CLI lacks per-call workspace selection; queries are unavailable."
+			}
+			checks = append(checks, map[string]any{"name": connection.Name + " CLI executable", "tool": connection.Tool, "ok": lookupErr == nil, "queries_supported": connection.Tool != "agent-notion", "profiles": connection.Profiles, "hint": hint})
+		}
 		refs := []string{cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv, cfg.Linear.APIKeyEnv}
 		if cfg.Model.Engine == "codex" {
 			isolationErr := engine.ValidateCodexHome()

@@ -70,7 +70,7 @@ func TestXDGPaths(t *testing.T) {
 func TestModelDefaultsAndIndependentProfiles(t *testing.T) {
 	c := Default()
 	for name, profile := range map[string]Model{"assistant": c.Model, "worker": c.WorkerModel} {
-		if profile.Engine != "codex" || profile.Model != "gpt-6-astra" || profile.Effort != "high" || profile.CodexBin != "codex" {
+		if profile.Engine != "codex" || profile.Model != map[string]string{"assistant": "gpt-6-astra", "worker": "gpt-5.6-terra"}[name] || profile.Effort != "high" || profile.CodexBin != "codex" {
 			t.Fatalf("%s defaults: %+v", name, profile)
 		}
 	}
@@ -144,5 +144,42 @@ func TestLegacyAssistantTokenCapDoesNotChangeWorkerCap(t *testing.T) {
 	}
 	if got.Model.MaxTokens != 65536 || got.WorkerModel.MaxTokens != 4096 {
 		t.Fatalf("legacy limits changed: %+v", got)
+	}
+}
+
+func TestNamespaceKeepsLegacyConfigAndStateTogether(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	fresh, err := Paths()
+	if err != nil || !strings.Contains(fresh.Config, Namespace) || !strings.Contains(fresh.State, Namespace) {
+		t.Fatal(fresh, err)
+	}
+	legacy := filepath.Join(root, "state", "agent-assistant", "state.db")
+	os.MkdirAll(filepath.Dir(legacy), 0700)
+	os.WriteFile(legacy, []byte("state"), 0600)
+	got, err := Paths()
+	if err != nil || got.State != legacy || got.Config != filepath.Join(root, "config", "agent-assistant", "config.json") {
+		t.Fatal(got, err)
+	}
+	os.MkdirAll(filepath.Dir(fresh.Config), 0700)
+	os.WriteFile(fresh.Config, []byte("{}"), 0600)
+	if _, err = Paths(); err == nil {
+		t.Fatal("ambiguous namespaces accepted")
+	}
+}
+func TestConnectionProfilesAndIdentityValidation(t *testing.T) {
+	c := Default()
+	c.Connections = []Connection{{ID: "work", Name: "Work", Tool: "lin", Profiles: []string{"first", "second"}}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Config){func(c *Config) { c.Connections[0].Profiles = []string{"first", "first"} }, func(c *Config) { c.Connections[0].Tool = "sh" }, func(c *Config) { c.Assistant.Avatar.Accent = "url(https://example.com)" }, func(c *Config) { c.Assistant.Theme = "arbitrary" }} {
+		d := Default()
+		d.Connections = []Connection{{ID: "work", Name: "Work", Tool: "lin", Profiles: []string{"first"}}}
+		mutate(&d)
+		if err := d.Validate(); err == nil {
+			t.Fatal("invalid config accepted")
+		}
 	}
 }

@@ -65,6 +65,34 @@ describe("owner dashboard flows", () => {
     expect(screen.getByLabelText("Message Iris")).toBeTruthy();
     expect(screen.queryByText("Preview mode", { exact: false })).toBeNull();
   });
+  it("expands the conversation without losing its draft and restores navigation", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    render(<App />);
+    const field = await screen.findByLabelText("Message Iris");
+    fireEvent.change(field, { target: { value: "Keep this context." } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand conversation" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Return to workspace" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(document.querySelector(".workspace")!.hasAttribute("inert")).toBe(
+      true,
+    );
+    expect(document.activeElement).toBe(field);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Return to workspace" }),
+    );
+    expect(document.querySelector(".workspace")!.hasAttribute("inert")).toBe(
+      false,
+    );
+    expect(field).toHaveProperty("value", "Keep this context.");
+  });
   it("keeps a failed decision visible and exposes the actionable error", async () => {
     state.decisions = [
       {

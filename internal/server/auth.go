@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/shhac/agent-assistant/internal/config"
 )
 
 type Auth struct {
@@ -91,7 +93,7 @@ func (a *Auth) recognized(r *http.Request) bool {
 			}
 		}
 	}
-	cookie, err := r.Cookie("assistant_session")
+	cookie, err := r.Cookie(config.Namespace + ".session")
 	if err != nil {
 		return false
 	}
@@ -166,7 +168,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	token := secret()
 	a.sessions[token] = time.Now().Add(12 * time.Hour)
-	http.SetCookie(w, &http.Cookie{Name: "assistant_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || (a.tailscale && isLoopback(r) && strings.HasPrefix(r.Host, "127.") == false && r.Host != "localhost"), MaxAge: 43200})
+	http.SetCookie(w, &http.Cookie{Name: config.Namespace + ".session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || (a.tailscale && isLoopback(r) && strings.HasPrefix(r.Host, "127.") == false && r.Host != "localhost"), MaxAge: 43200})
 	respond(w, 200, map[string]bool{"ok": true})
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) error {
