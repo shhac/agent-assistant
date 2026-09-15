@@ -1785,6 +1785,8 @@ function ConfigurationFields({
               Optional. Import your assigned issues from the teams below using
               the direct API. Projects in agent-assistant do not require Linear;
               keep this off unless you want automatic imports from this account.
+              Configured Linear CLI connections take precedence; enable imports
+              on those connections instead.
             </p>
             {field("linear", "api_key_env", "API key environment variable", {
               env: true,
