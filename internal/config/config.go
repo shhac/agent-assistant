@@ -42,10 +42,11 @@ type Avatar struct {
 	Accent     string `json:"accent"`
 }
 type Connection struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Tool     string   `json:"tool"`
-	Profiles []string `json:"profiles"`
+	ImportAssignments bool     `json:"import_assignments"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Tool              string   `json:"tool"`
+	Profiles          []string `json:"profiles"`
 }
 type Dashboard struct {
 	Addr          string   `json:"addr"`
@@ -69,8 +70,9 @@ type Slack struct {
 	OwnerUserID string `json:"owner_user_id"`
 }
 type Linear struct {
-	APIKeyEnv string   `json:"api_key_env"`
-	TeamIDs   []string `json:"team_ids"`
+	ImportAssignments bool     `json:"import_assignments"`
+	APIKeyEnv         string   `json:"api_key_env"`
+	TeamIDs           []string `json:"team_ids"`
 }
 type Limits struct {
 	MaxModelCallsPerDay int `json:"max_model_calls_per_day"`
@@ -403,6 +405,9 @@ func validateConnections(cs []Connection) error {
 		default:
 			return errors.New("unsupported connection CLI")
 		}
+		if c.ImportAssignments && c.Tool != "lin" {
+			return errors.New("assignment import is only supported for Linear connections")
+		}
 		if c.Tool == "agent-notion" {
 			if len(c.Profiles) != 0 {
 				return errors.New("Notion uses the CLI default account; profiles must be empty")
@@ -421,4 +426,18 @@ func validateConnections(cs []Connection) error {
 		}
 	}
 	return nil
+}
+
+// LegacyLinearImportEnabled keeps query-only CLI connections from falling back
+// to a legacy account with different ownership or scope.
+func (c Config) LegacyLinearImportEnabled() bool {
+	if !c.Linear.ImportAssignments || len(c.Linear.TeamIDs) == 0 {
+		return false
+	}
+	for _, connection := range c.Connections {
+		if connection.Tool == "lin" {
+			return false
+		}
+	}
+	return true
 }

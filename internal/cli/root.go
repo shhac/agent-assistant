@@ -155,11 +155,17 @@ func NewRoot(version string) *cobra.Command {
 			_, lookupErr := exec.LookPath(connection.Tool)
 			hint := "Account credentials are managed by this CLI; choose its existing profiles in Settings."
 			if connection.Tool == "agent-notion" {
-				hint = "Profile discovery is available, but this CLI lacks per-call workspace selection; queries are unavailable."
+				hint = "Uses the CLI default account and native authentication; no profile is needed."
 			}
-			checks = append(checks, map[string]any{"name": connection.Name + " CLI executable", "tool": connection.Tool, "ok": lookupErr == nil, "queries_supported": connection.Tool != "agent-notion", "profiles": connection.Profiles, "hint": hint})
+			checks = append(checks, map[string]any{"name": connection.Name + " CLI executable", "tool": connection.Tool, "ok": lookupErr == nil, "queries_supported": true, "profiles": connection.Profiles, "hint": hint})
 		}
-		refs := []string{cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv, cfg.Linear.APIKeyEnv}
+		refs := []string{}
+		if cfg.Slack.OwnerUserID != "" {
+			refs = append(refs, cfg.Slack.BotTokenEnv, cfg.Slack.AppTokenEnv)
+		}
+		if cfg.LegacyLinearImportEnabled() {
+			refs = append(refs, cfg.Linear.APIKeyEnv)
+		}
 		if cfg.Model.Engine == "codex" {
 			isolationErr := engine.ValidateCodexHome(cfg.Model.CodexHome)
 			isolationHint := "Run agent-assistant model login to sign into the configured model.codex_home."

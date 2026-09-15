@@ -232,3 +232,33 @@ func TestNotionDefaultAccountConfigRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestAssignmentImportOptInDefaultsAndRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	// Upgrading an old config must not silently enroll every visible assignment.
+	if err := os.WriteFile(p, []byte(`{"connections":[{"id":"work","name":"Work","tool":"lin","profiles":["company"]}],"linear":{"team_ids":["team"]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.ImportAssignments || cfg.Connections[0].ImportAssignments {
+		t.Fatal("old config implicitly enabled imports")
+	}
+	cfg.Linear.ImportAssignments = true
+	cfg.Connections[0].ImportAssignments = true
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || !got.Linear.ImportAssignments || !got.Connections[0].ImportAssignments {
+		t.Fatal("opt-in lost", err)
+	}
+	for _, tool := range []string{"agent-notion", "agent-slack", "agent-fathom"} {
+		cfg.Connections[0].Tool = tool
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "assignment import") {
+			t.Fatalf("unsupported import %s: %v", tool, err)
+		}
+	}
+}

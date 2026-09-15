@@ -68,17 +68,25 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 		return s, err
 	}
 	cfg := a.Config()
-	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "linear", Name: "Linear", Status: "not_configured", Detail: "Use a named lin connection; legacy API integration remains available"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Add an approved execution broker"}}
+	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Add an approved execution broker"}}
 	if cfg.Model.Model != "" {
 		s.Integrations[0].Status = "configured"
 		s.Integrations[0].Detail = strings.Join([]string{cfg.Model.Engine, cfg.Model.Model, cfg.Model.Effort}, " / ")
 	}
 	if len(cfg.Workers) > 0 {
-		s.Integrations[3].Status = "configured"
-		s.Integrations[3].Detail = fmt.Sprintf("%d approved profiles", len(cfg.Workers))
+		s.Integrations[2].Status = "configured"
+		s.Integrations[2].Detail = fmt.Sprintf("%d approved profiles", len(cfg.Workers))
+	}
+	ignoreLive := map[string]bool{}
+	if cfg.LegacyLinearImportEnabled() {
+		s.Integrations = append(s.Integrations, core.Integration{ID: "linear", Name: "Linear assignment import", Status: "configured", Detail: "Optional import from selected teams; local projects remain independent"})
 	}
 	for _, c := range cfg.Connections {
 		state, detail := "configured", "Read-only CLI accounts: "+strings.Join(c.Profiles, ", ")
+		if c.Tool == "lin" && !c.ImportAssignments {
+			detail += "; optional resource, assignment import off"
+			ignoreLive["connection:"+c.ID] = true
+		}
 		if c.Tool == "agent-notion" {
 			if len(c.Profiles) == 0 {
 				state, detail = "configured", "Read-only CLI default account"
@@ -91,7 +99,7 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	for i, st := range s.Integrations {
-		if live, ok := a.statuses[st.ID]; ok {
+		if live, ok := a.statuses[st.ID]; ok && !ignoreLive[st.ID] {
 			s.Integrations[i] = live
 		}
 	}

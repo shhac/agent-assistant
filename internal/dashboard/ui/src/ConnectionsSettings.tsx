@@ -5,6 +5,7 @@ export interface Connection {
   name: string;
   tool: "lin" | "agent-slack" | "agent-notion" | "agent-fathom";
   profiles: string[];
+  import_assignments?: boolean;
 }
 interface ProfileDiscovery {
   tool: string;
@@ -50,17 +51,18 @@ export function ConnectionsSettings({
         <div>
           <h2 id="connections-title">Your connected accounts</h2>
           <p>
-            Keep work and personal accounts distinct. Give each connection a
-            name and choose the profiles your assistant can read.
+            Connections are optional resources for your projects. Keep work and
+            personal accounts distinct, and choose what your assistant can read.
           </p>
         </div>
       </div>
       {!connections.length && (
         <div className="connections-empty">
-          <p>Start with the place your project context already lives.</p>
+          <p>Your projects live in agent-assistant.</p>
           <span>
-            Linear, Slack, Notion and Fathom use the CLI profiles already on
-            this computer.
+            Add existing folders or create projects without connecting any
+            service. Personal projects need no Linear workspace. Connect Linear,
+            Slack, Notion or Fathom when their context is useful.
           </span>
         </div>
       )}
@@ -88,6 +90,7 @@ export function ConnectionsSettings({
               name: "",
               tool: "lin",
               profiles: [],
+              import_assignments: false,
             },
           ])
         }
@@ -183,6 +186,7 @@ function ConnectionEditor({
                 ...connection,
                 tool: e.target.value as Connection["tool"],
                 profiles: [],
+                import_assignments: false,
               })
             }
           >
@@ -194,6 +198,29 @@ function ConnectionEditor({
           </select>
         </label>
       </div>
+      {connection.tool === "lin" && (
+        <>
+          <label className="profile-choice">
+            <input
+              type="checkbox"
+              checked={connection.import_assignments ?? false}
+              onChange={(e) =>
+                onChange({
+                  ...connection,
+                  import_assignments: e.target.checked,
+                })
+              }
+              aria-describedby={`connection-${index}-import-hint`}
+            />
+            <span>Import assigned issues as projects</span>
+          </label>
+          <p className="field-hint" id={`connection-${index}-import-hint`}>
+            Optional. Automatically add issues assigned to you from the selected
+            profiles. Leave off to use Linear only as context. Connecting a work
+            workspace does not require tracking personal projects there.
+          </p>
+        </>
+      )}
       <div className="profile-selection-heading">
         <strong>
           {usesDefaultAccount

@@ -49,13 +49,14 @@ func (a *App) runConnectionTool(ctx context.Context, name string, raw json.RawMe
 	return a.connectionClient.Query(ctx, a.Config().Connections, q)
 }
 
-// syncCLIConnections imports bounded assignment metadata from every explicitly
-// selected Linear account. No source writes or worker starts occur here.
+// syncCLIConnections imports bounded assignment metadata only for connections
+// whose owner explicitly enabled project imports. Account access alone is not
+// enrollment. No source writes or worker starts occur here.
 func (a *App) syncCLIConnections(ctx context.Context) error {
 	cfg := a.Config()
 	var failures []error
 	for _, binding := range cfg.Connections {
-		if binding.Tool != "lin" {
+		if binding.Tool != "lin" || !binding.ImportAssignments {
 			continue
 		}
 		count := 0

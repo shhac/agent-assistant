@@ -5,6 +5,7 @@ Go CLI and daemon for personal-assistant coordination. Dashboard is dark-mode-fi
 ## Architecture and boundaries
 
 - Go owns deterministic policy, durable state, retries, scheduling, adapters and APIs. The model chooses coordination actions through constrained tools.
+- Local state owns the project registry. Linear and other connections are optional resources; local projects must work without them. Account access never implies project enrollment or relevance to personal work. Assignment imports require explicit opt-in.
 - The PA never writes project code or runs a general shell. Approved workers may implement within an isolated environment. No deployment, production-data access, or purchases, including through descendants.
 - All adapters must be testable using injected dependencies. Tests must not contact real Slack/Linear, start real agents, mutate Tailscale routes, or use live owner data.
 - Authority is scoped and inherited; retries are idempotent and uncertain external effects are reconciled before repeating. Unknown costs are not free.

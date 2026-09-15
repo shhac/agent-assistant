@@ -103,12 +103,7 @@ func (a *App) SyncLinear(ctx context.Context) error {
 	}
 	cfg := a.Config()
 	cliErr := a.syncCLIConnections(ctx)
-	for _, binding := range cfg.Connections {
-		if binding.Tool == "lin" {
-			return cliErr
-		} // Explicit CLI accounts supersede the legacy API integration.
-	}
-	if len(cfg.Linear.TeamIDs) == 0 {
+	if !cfg.LegacyLinearImportEnabled() {
 		return cliErr
 	}
 	c, err := linearapi.New(linearapi.Config{APIKeyEnv: cfg.Linear.APIKeyEnv, TeamIDs: cfg.Linear.TeamIDs})

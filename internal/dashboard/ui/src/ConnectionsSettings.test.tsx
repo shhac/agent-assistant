@@ -85,18 +85,16 @@ it.each([null, undefined])(
   async (profiles) => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({
-            tool: "agent-notion",
-            profiles: [],
-            available: true,
-            selectable: false,
-            detail: "Native default account",
-          }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          tool: "agent-notion",
+          profiles: [],
+          available: true,
+          selectable: false,
+          detail: "Native default account",
         }),
+      }),
     );
     const connection = {
       id: "docs",
@@ -114,3 +112,111 @@ it.each([null, undefined])(
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   },
 );
+
+function stubLinearProfiles() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tool: "lin",
+        profiles: [{ name: "work" }],
+        available: true,
+        selectable: true,
+        detail: "CLI accounts",
+      }),
+    }),
+  );
+}
+it("keeps new Linear connections as resources until imports are explicitly enabled", async () => {
+  stubLinearProfiles();
+  const changed = vi.fn();
+  const { rerender } = render(
+    <ConnectionsSettings connections={[]} onChange={changed} />,
+  );
+  expect(
+    screen.getByText("Your projects live in agent-assistant."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Add a connection" }));
+  const added = changed.mock.calls.at(-1)![0] as Connection[];
+  expect(added[0].tool).toBe("lin");
+  expect(added[0].import_assignments).toBe(false);
+  rerender(<ConnectionsSettings connections={added} onChange={changed} />);
+  await screen.findByRole("checkbox", { name: "work" });
+  const toggle = screen.getByRole("checkbox", {
+    name: "Import assigned issues as projects",
+  }) as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  fireEvent.click(toggle);
+  const enabled = changed.mock.calls.at(-1)![0] as Connection[];
+  expect(enabled[0].import_assignments).toBe(true);
+  rerender(<ConnectionsSettings connections={enabled} onChange={changed} />);
+  expect(toggle.checked).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "work" }));
+  const selected = changed.mock.calls.at(-1)![0] as Connection[];
+  expect(selected[0]).toMatchObject({
+    profiles: ["work"],
+    import_assignments: true,
+  });
+  rerender(<ConnectionsSettings connections={selected} onChange={changed} />);
+  fireEvent.click(toggle);
+  expect(changed.mock.calls.at(-1)![0][0].import_assignments).toBe(false);
+});
+it("defaults saved connections without an import setting to context only", async () => {
+  stubLinearProfiles();
+  render(
+    <ConnectionsSettings
+      connections={[
+        { id: "work", name: "Work", tool: "lin", profiles: ["work"] },
+      ]}
+      onChange={vi.fn()}
+    />,
+  );
+  await screen.findByRole("checkbox", { name: "work" });
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: "Import assigned issues as projects",
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(false);
+});
+it("clears import permission and profiles when switching services", async () => {
+  stubLinearProfiles();
+  const changed = vi.fn();
+  const { rerender } = render(
+    <ConnectionsSettings
+      connections={[
+        {
+          id: "work",
+          name: "Work",
+          tool: "lin",
+          profiles: ["work"],
+          import_assignments: true,
+        },
+      ]}
+      onChange={changed}
+    />,
+  );
+  await screen.findByRole("checkbox", { name: "work" });
+  fireEvent.change(screen.getByRole("combobox", { name: "Service" }), {
+    target: { value: "agent-notion" },
+  });
+  const updated = changed.mock.calls.at(-1)![0] as Connection[];
+  expect(updated).toEqual([
+    {
+      id: "work",
+      name: "Work",
+      tool: "agent-notion",
+      profiles: [],
+      import_assignments: false,
+    },
+  ]);
+  rerender(<ConnectionsSettings connections={updated} onChange={changed} />);
+  expect(
+    screen.queryByRole("checkbox", {
+      name: "Import assigned issues as projects",
+    }),
+  ).toBeNull();
+  await screen.findByText("CLI default account");
+});

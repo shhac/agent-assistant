@@ -1666,6 +1666,7 @@ function ConfigurationFields({
   onChange: (value: Config) => void;
 }) {
   const [listDrafts, setListDrafts] = useState<Record<string, string>>({});
+  const linear = (config.linear || {}) as Record<string, unknown>;
   function field(
     group: string,
     key: string,
@@ -1763,6 +1764,28 @@ function ConfigurationFields({
           </div>
           <div className="config-field-group">
             <h3>Linear</h3>
+            <label className="profile-choice">
+              <input
+                type="checkbox"
+                checked={linear.import_assignments === true}
+                onChange={(e) =>
+                  onChange({
+                    ...config,
+                    linear: {
+                      ...linear,
+                      import_assignments: e.target.checked,
+                    },
+                  })
+                }
+                aria-describedby="linear-import-hint"
+              />
+              <span>Import assigned issues as projects</span>
+            </label>
+            <p className="field-hint" id="linear-import-hint">
+              Optional. Import your assigned issues from the teams below using
+              the direct API. Projects in agent-assistant do not require Linear;
+              keep this off unless you want automatic imports from this account.
+            </p>
             {field("linear", "api_key_env", "API key environment variable", {
               env: true,
             })}
