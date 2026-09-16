@@ -13,6 +13,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/shhac/lib-agent-harness/completion"
 )
 
 // Config contains references to credentials, never their values. Endpoint is the
@@ -24,9 +26,7 @@ type Config struct {
 	WorkDirRoot string // Canonical daemon state directory; never a linked project.
 	ClaudeBin   string
 	ClaudeHome  string
-	claudeRun   func(context.Context, string, []string, string, []string, string) ([]byte, error)
 	CodexHome   string
-	codexRun    func(context.Context, string, []string, string, []string, string) ([]byte, error)
 	// BeforeRequest reserves durable capacity before each potentially billable call.
 	BeforeRequest func(context.Context) error
 	// OnTool durably records safe lifecycle metadata before and after execution.
@@ -43,26 +43,9 @@ type Config struct {
 	HTTPClient      *http.Client
 }
 
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-type ToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-type Usage struct {
-	InputTokens  int  `json:"input_tokens"`
-	OutputTokens int  `json:"output_tokens"`
-	TotalTokens  int  `json:"total_tokens"`
-	Known        bool `json:"known"`
-}
+type Message = completion.Message
+type ToolCall = completion.ToolCall
+type Usage = completion.Usage
 type Request struct {
 	Message string
 	// History is trusted server-owned dialogue, never raw client-supplied roles.
@@ -271,11 +254,8 @@ func (e *Engine) complete(ctx context.Context, messages []Message) (Message, Usa
 	return e.completeWithTools(ctx, messages, Tools())
 }
 func (e *Engine) completeWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, Usage, error) {
-	if e.cfg.Engine == "codex" {
-		return codexComplete(ctx, e.cfg, messages, tools)
-	}
-	if e.cfg.Engine == "claude" {
-		return claudeComplete(ctx, e.cfg, messages, tools)
+	if e.cfg.Engine == "codex" || e.cfg.Engine == "claude" {
+		return completion.Complete(ctx, harnessConfig(e.cfg), messages, tools)
 	}
 	return e.httpComplete(ctx, messages, tools)
 }
