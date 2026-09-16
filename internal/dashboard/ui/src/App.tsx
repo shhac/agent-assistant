@@ -695,33 +695,21 @@ function Projects({
           eyebrow="PROJECT CONTEXT"
           title={project.title}
           description={project.description}
-          action={<Status>{humanStatus(project.status)}</Status>}
-        />
-        <details className="project-setup-details">
-          <summary>Technical identifiers</summary>
-          <label htmlFor="project-setup-id">
-            Project ID
-            <input
-              id="project-setup-id"
-              value={project.id}
-              readOnly
-              onFocus={(e) => e.target.select()}
-            />
-          </label>
-          <p className="field-hint">
-            For diagnostics and external integrations. Worker setup uses the
-            project name automatically.
-          </p>
-        </details>
-        <ProjectDirectories
-          key={project.id}
-          project={project}
-          refresh={refresh}
-        />
-        <CoordinateProject
-          key={`coordinate-${project.id}`}
-          project={project}
-          refresh={refresh}
+          action={
+            <span className="project-states">
+              {(() => {
+                const health = state.attention.find(
+                  (a) => a.project_id === project.id,
+                );
+                return health && isHeldUp(health.execution) ? (
+                  <Status tone="amber">
+                    {executionLabel(health.execution)}
+                  </Status>
+                ) : null;
+              })()}
+              <Status>{humanStatus(project.status)}</Status>
+            </span>
+          }
         />
         <ProjectWork
           key={`work-${project.id}`}
@@ -730,40 +718,69 @@ function Projects({
           refresh={refresh}
           onInvestigate={onInvestigate}
         />
-        <WorkerPreparation
-          key={`worker-${project.id}`}
-          commissioned={
-            state.agents.filter((a) => a.project_id === project.id).length
-          }
+        <CoordinateProject
+          key={`coordinate-${project.id}`}
           project={project}
-          demo={state.demo}
-          onPrepared={() => {
-            setWorkersRevision((n) => n + 1);
-            void refresh();
-          }}
-        />
-        <section className="detail-section">
-          <p className="eyebrow">PROJECT GUIDANCE</p>
-          {criteriaLines(project.acceptance_criteria).length ? (
-            <ul className="criteria-list">
-              {criteriaLines(project.acceptance_criteria).map((line, i) => (
-                <li key={i}>
-                  <span className="criteria-dot" />
-                  {line}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">No acceptance criteria recorded.</p>
-          )}
-        </section>
-        <ProjectWorkers
-          key={project.id}
-          project={project}
-          state={state}
           refresh={refresh}
-          revision={workersRevision}
         />
+        <details className="project-reference">
+          <summary>Brief, folders and worker setup</summary>
+          <section className="detail-section">
+            <p className="eyebrow">PROJECT GUIDANCE</p>
+            {criteriaLines(project.acceptance_criteria).length ? (
+              <ul className="criteria-list">
+                {criteriaLines(project.acceptance_criteria).map((line, i) => (
+                  <li key={i}>
+                    <span className="criteria-dot" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No acceptance criteria recorded.</p>
+            )}
+          </section>
+          <ProjectDirectories
+            key={project.id}
+            project={project}
+            refresh={refresh}
+          />
+          <WorkerPreparation
+            key={`worker-${project.id}`}
+            commissioned={
+              state.agents.filter((a) => a.project_id === project.id).length
+            }
+            project={project}
+            demo={state.demo}
+            onPrepared={() => {
+              setWorkersRevision((n) => n + 1);
+              void refresh();
+            }}
+          />
+          <ProjectWorkers
+            key={project.id}
+            project={project}
+            state={state}
+            refresh={refresh}
+            revision={workersRevision}
+          />
+          <details className="project-setup-details">
+            <summary>Technical identifiers</summary>
+            <label htmlFor="project-setup-id">
+              Project ID
+              <input
+                id="project-setup-id"
+                value={project.id}
+                readOnly
+                onFocus={(e) => e.target.select()}
+              />
+            </label>
+            <p className="field-hint">
+              For diagnostics and external integrations. Worker setup uses the
+              project name automatically.
+            </p>
+          </details>
+        </details>
         <section className="section-block">
           <div className="section-heading">
             <h2>Evidence and activity</h2>

@@ -216,4 +216,64 @@ describe("project context and next outcome", () => {
       await screen.findByLabelText("What would you like to do next?"),
     ).toBeTruthy();
   });
+
+  it("puts current work above setup, planning and technical identifiers", async () => {
+    const project = {
+      id: "project-order",
+      title: "Agent assistant",
+      description: "Coordination dashboard",
+      status: "active",
+      acceptance_criteria: ["Reviewed"],
+      directories: ["/home/agent-assistant"],
+    };
+    const state = normalizeState({
+      assistant: { name: "Iris", personality: "" },
+      projects: [project],
+      work_items: [
+        {
+          id: "work-1",
+          project_id: project.id,
+          title: "Suggestions",
+          objective: "Offer suggestions",
+          acceptance_criteria: "Reviewed",
+          status: "active",
+          created_at: "2026-09-16T12:00:00Z",
+          updated_at: "2026-09-16T12:00:00Z",
+          review_revision: "rev-1",
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (path === "/api/state" ? state : {}),
+      })),
+    );
+    window.history.replaceState(null, "", "/#/projects/project-order");
+    render(<App />);
+
+    const work = await screen.findByLabelText("Project work");
+    const reference = screen.getByText("Brief, folders and worker setup");
+    const next = screen.getByLabelText("What would you like to do next?");
+
+    // Work first, then the conversational entry point, then everything that is
+    // setup or reference material.
+    expect(
+      work.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      next.compareDocumentPosition(reference) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Setup material is collapsed, and the project id is not in the first view.
+    expect((reference.parentElement as HTMLDetailsElement).open).toBe(false);
+    expect(screen.queryByText("Technical identifiers")).toBeTruthy();
+    expect(
+      (screen.getByText("Technical identifiers")
+        .parentElement as HTMLDetailsElement).open,
+    ).toBe(false);
+  });
 });

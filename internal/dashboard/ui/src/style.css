@@ -3252,3 +3252,18 @@ textarea {
   gap: 8px;
   flex-shrink: 0;
 }
+.project-reference {
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 18px;
+  background: var(--surface);
+}
+.project-reference > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-reference[open] > summary {
+  margin-bottom: 10px;
+}

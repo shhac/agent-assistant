@@ -10,6 +10,8 @@ import {
 } from "./api";
 import "./work.css";
 import { Assignment, needsAttention } from "./Assignment";
+import { EvidenceView } from "./EvidenceView";
+import { isQueued, orderQueue, startCondition } from "./queue";
 
 const statuses: Record<WorkItem["status"], string> = {
   ready: "Ready to coordinate",
@@ -43,6 +45,13 @@ export function ProjectWork({
   const items = state.work_items.filter(
     (item) => item.project_id === project.id,
   );
+  const hasAttempts = (item: WorkItem) =>
+    state.agents.some((agent) => agent.work_item_id === item.id);
+  const queued = orderQueue(
+    items.filter((item) => isQueued(item, hasAttempts(item))),
+  );
+  const queuedIds = new Set(queued.map((item) => item.id));
+  const current = items.filter((item) => !queuedIds.has(item.id));
   const [adding, setAdding] = useState(false);
   return (
     <section className="section-block project-work" aria-label="Project work">
@@ -78,7 +87,7 @@ export function ProjectWork({
         </p>
       )}
       <div className="work-list">
-        {items.map((item) => (
+        {current.map((item) => (
           <WorkCard
             key={item.id}
             item={item}
@@ -88,7 +97,89 @@ export function ProjectWork({
           />
         ))}
       </div>
+      {!!queued.length && (
+        <div className="work-queue" aria-label="Queued outcomes">
+          <div className="section-heading">
+            <h3>
+              Queue <span>{queued.length}</span>
+            </h3>
+            <span className="section-note">Not started yet</span>
+          </div>
+          <ol className="queue-list">
+            {queued.map((item, index) => (
+              <QueuedRow
+                key={item.id}
+                item={item}
+                position={index + 1}
+                predecessor={
+                  state.work_items.find(
+                    (work) => work.id === item.after_work_item_id,
+                  )?.title
+                }
+                state={state}
+                refresh={refresh}
+              />
+            ))}
+          </ol>
+        </div>
+      )}
     </section>
+  );
+}
+
+/**
+ * A queued outcome is a position in a sequence first. Its full brief, criteria
+ * and queue management stay one disclosure away so the order can be read
+ * without expanding anything.
+ */
+function QueuedRow({
+  item,
+  position,
+  predecessor,
+  state,
+  refresh,
+}: {
+  item: WorkItem;
+  position: number;
+  predecessor?: string;
+  state: State;
+  refresh: () => Promise<void>;
+}) {
+  return (
+    <li className="queue-row" aria-label={item.title}>
+      <span className="queue-position" aria-hidden="true">
+        {position}
+      </span>
+      <div className="queue-body">
+        <div className="queue-heading">
+          <strong>{item.title}</strong>
+          <span className={`work-status ${item.status}`}>
+            {statuses[item.status] || item.status.replaceAll("_", " ")}
+          </span>
+        </div>
+        <p className="queue-condition">{startCondition(item, predecessor)}</p>
+        <details className="queue-detail">
+          <summary>Brief and queue management</summary>
+          <p className="work-objective">{item.objective}</p>
+          <h4>Acceptance criteria</h4>
+          {criteriaLines(item.acceptance_criteria).length ? (
+            <ul>
+              {criteriaLines(item.acceptance_criteria).map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No criteria recorded.</p>
+          )}
+          <WorkCard
+            item={item}
+            state={state}
+            refresh={refresh}
+            controlsOnly
+          />
+        </details>
+      </div>
+    </li>
   );
 }
 
@@ -228,11 +319,14 @@ function WorkCard({
   state,
   refresh,
   onInvestigate,
+  controlsOnly = false,
 }: {
   item: WorkItem;
   state: State;
   refresh: () => Promise<void>;
   onInvestigate?: (prompt: string) => void;
+  /** Renders only queue management, for an outcome shown as a queue row. */
+  controlsOnly?: boolean;
 }) {
   const agents = state.agents.filter((agent) => agent.work_item_id === item.id);
   const predecessor = state.work_items.find(
@@ -318,6 +412,33 @@ function WorkCard({
       setBusy(false);
     }
   }
+  const queueControls = item.commission_requested && !agents.length && (
+    <div className="work-queue-controls">
+      <button
+        type="button"
+        className="button secondary"
+        disabled={state.demo || busy}
+        onClick={() => void withdraw()}
+      >
+        {busy ? "Updating queue…" : "Remove from queue"}
+      </button>
+      <p className="field-hint">
+        Keep the outcome as a draft and withdraw permission to start
+        automatically.
+      </p>
+      {error && (
+        <p className="error-notice" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+  if (controlsOnly)
+    return queueControls || (
+      <p className="field-hint">
+        This outcome is not authorized to start automatically.
+      </p>
+    );
   return (
     <article className="work-card" aria-label={item.title}>
       <div className="work-heading">
@@ -336,27 +457,7 @@ function WorkCard({
             : ""}
         </p>
       )}
-      {item.commission_requested && !agents.length && (
-        <div className="work-queue-controls">
-          <button
-            type="button"
-            className="button secondary"
-            disabled={state.demo || busy}
-            onClick={() => void withdraw()}
-          >
-            {busy ? "Updating queue…" : "Remove from queue"}
-          </button>
-          <p className="field-hint">
-            Keep the outcome as a draft and withdraw permission to start
-            automatically.
-          </p>
-          {error && (
-            <p className="error-notice" role="alert">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
+      {queueControls}
       {item.status_reason && (
         <p className="work-state-reason" role="status">
           {item.status_reason}
@@ -393,15 +494,10 @@ function WorkCard({
           <h4>
             {acceptanceCurrent ? "Accepted evidence" : "Reported evidence"}
           </h4>
-          {displayedEvidence.length ? (
-            <ul>
-              {displayedEvidence.map((line, i) => (
-                <li key={i}>{line}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">No evidence reported yet.</p>
-          )}
+          <EvidenceView
+            evidence={displayedEvidence}
+            accepted={!!acceptanceCurrent}
+          />
         </div>
       </div>
       {acceptanceCurrent && item.acceptance && (

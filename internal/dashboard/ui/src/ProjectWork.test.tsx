@@ -399,11 +399,24 @@ it("withdraws automatic queue permission while preserving the named draft", asyn
   const fetch = mockFetch(() => ({}));
   const refresh = vi.fn().mockResolvedValue(undefined);
   render(<ProjectWork project={project} state={state} refresh={refresh} />);
-  const card = screen.getByRole("article", { name: "Export next" });
-  expect(within(card).getByText(outcome.title)).toBeTruthy();
-  expect(within(card).getByText("Queued next")).toBeTruthy();
+  // Queued work reads as a position in a sequence: order, title, what it is
+  // waiting for and whether it may start, all without expanding anything.
+  const queue = screen.getByLabelText("Queued outcomes");
+  const row = within(queue).getByRole("listitem", { name: "Export next" });
+  expect(within(row).getByText("1")).toBeTruthy();
+  expect(within(row).getByText("Export next")).toBeTruthy();
+  expect(within(row).getByText("Queued next")).toBeTruthy();
+  expect(
+    within(row).getByText(
+      `Waits for ${outcome.title} to be accepted · automatic coordination authorized`,
+    ),
+  ).toBeTruthy();
+  // The full brief and queue management stay one disclosure away.
+  const detail = within(row).getByText("Brief and queue management");
+  expect((detail.parentElement as HTMLDetailsElement).open).toBe(false);
+  fireEvent.click(detail);
   fireEvent.click(
-    within(card).getByRole("button", { name: "Remove from queue" }),
+    within(row).getByRole("button", { name: "Remove from queue" }),
   );
   await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   expect(fetch.mock.calls[0][0]).toBe("/api/work-items/next/queue");
