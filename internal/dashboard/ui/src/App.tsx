@@ -1075,6 +1075,8 @@ function MemoryView({
   const [content, setContent] = useState("");
   const [kind, setKind] = useState("preference");
   const [busy, setBusy] = useState(false);
+  // Keyed per memory: acting on one card must not disable every other card.
+  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
   const [correcting, setCorrecting] = useState<string | null>(null);
@@ -1099,7 +1101,7 @@ function MemoryView({
   }
   async function correct(id: string) {
     if (!correction.trim()) return;
-    setBusy(true);
+    setPending(id);
     setError("");
     try {
       await api(`/api/memories/${encodeURIComponent(id)}/correct`, {
@@ -1112,11 +1114,11 @@ function MemoryView({
     } catch (err) {
       setError(errorText(err));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
   async function remove(id: string) {
-    setBusy(true);
+    setPending(id);
     setError("");
     try {
       await api(`/api/memories/${encodeURIComponent(id)}`, {
@@ -1127,7 +1129,7 @@ function MemoryView({
     } catch (err) {
       setError(errorText(err));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
   return (
@@ -1234,7 +1236,7 @@ function MemoryView({
                         <div className="forget-actions">
                           <button
                             className="text-button"
-                            disabled={busy || !correction.trim()}
+                            disabled={pending === m.id || !correction.trim()}
                             onClick={() => void correct(m.id)}
                           >
                             Save correction
@@ -1256,7 +1258,7 @@ function MemoryView({
                     <div className="forget-actions">
                       <button
                         className="text-button danger"
-                        disabled={busy}
+                        disabled={pending === m.id}
                         onClick={() => void remove(m.id)}
                       >
                         Confirm forget

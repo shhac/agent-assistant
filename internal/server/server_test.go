@@ -168,3 +168,65 @@ func TestStateExposesBlockedWorkWithNoOpenDecisions(t *testing.T) {
 		t.Fatal("attention reports no reason for the blocker")
 	}
 }
+
+// Correcting a memory is an owner-visible mutation on the daemon's only record
+// of what it believes, so a refusal has to reach the owner rather than looking
+// like success.
+func TestCorrectMemoryReportsRefusalsToTheOwner(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	store, err := core.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := core.NewService(store, cfg)
+	a := app.New(s, cfg, filepath.Join(dir, "config.json"), false)
+	auth, _ := NewAuth(dir, "http://127.0.0.1:8340", "", nil)
+	h := New(a, auth)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://127.0.0.1:8340"+path, strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:4321"
+		r.Header.Set("Authorization", "Bearer "+auth.admin)
+		r.Header.Set("X-Requested-With", "agent-assistant")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	created := call("POST", "/api/memories", `{"content":"Worker model information is unavailable.","kind":"observation"}`)
+	if created.Code != 201 {
+		t.Fatal(created.Body.String())
+	}
+	var memory core.Memory
+	_ = json.Unmarshal(created.Body.Bytes(), &memory)
+	if memory.Source != "owner" {
+		t.Fatalf("source = %q, want owner for a memory the owner recorded", memory.Source)
+	}
+
+	corrected := call("POST", "/api/memories/"+memory.ID+"/correct", `{"content":"The project worker runs Opus 5."}`)
+	if corrected.Code != 201 {
+		t.Fatal(corrected.Body.String())
+	}
+
+	again := call("POST", "/api/memories/"+memory.ID+"/correct", `{"content":"Third attempt."}`)
+	if again.Code != 409 {
+		t.Fatalf("correcting an already-corrected memory returned %d, want 409", again.Code)
+	}
+	missing := call("POST", "/api/memories/does-not-exist/correct", `{"content":"Anything."}`)
+	if missing.Code != 404 {
+		t.Fatalf("correcting an unknown memory returned %d, want 404", missing.Code)
+	}
+	empty := call("POST", "/api/memories/"+memory.ID+"/correct", `{"content":"  "}`)
+	if empty.Code != 400 {
+		t.Fatalf("an empty correction returned %d, want 400", empty.Code)
+	}
+
+	var state struct {
+		Memories []core.Memory `json:"memories"`
+	}
+	_ = json.Unmarshal(call("GET", "/api/state", "").Body.Bytes(), &state)
+	if len(state.Memories) != 2 {
+		t.Fatalf("expected the original and its replacement, got %d", len(state.Memories))
+	}
+}

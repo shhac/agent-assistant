@@ -31,6 +31,7 @@ const labels: Record<string, string> = {
   "decision.opened": "Decision raised",
   "decision.resolved": "Decision answered",
   "demo.created": "Demo workspace created",
+  "memory.corrected": "Memory corrected",
   "memory.created": "Remembered something new",
   "memory.forgotten": "Memory forgotten",
   "memory.updated": "Memory updated",

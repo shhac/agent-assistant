@@ -6,6 +6,7 @@ describe("activity presentation", () => {
     expect(activityLabel("memory.created")).toBe("Remembered something new");
     expect(activityLabel("agent.missed_check_in")).toBe("Worker missed a check-in");
     expect(activityLabel("work_item.review_ready")).toBe("Outcome ready for review");
+    expect(activityLabel("memory.corrected")).toBe("Memory corrected");
     expect(activityLabel(undefined)).toBe("Workspace");
   });
 

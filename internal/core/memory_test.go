@@ -103,9 +103,10 @@ func TestMemoryKindIsNeverInferred(t *testing.T) {
 	}
 }
 
-// The assistant's remember tool deduplicates on key; correcting must not
-// silently change an owner preference behind that upsert.
-func TestRememberKeepsClassificationWhenUpdatingByKey(t *testing.T) {
+// The assistant's remember tool deduplicates on key. The category the owner
+// chose survives that upsert; provenance follows whoever recorded the content,
+// so an assistant rewrite is not still attributed to the owner.
+func TestRememberKeepsClassificationAndAttributesTheWriter(t *testing.T) {
 	s, _ := fixture(t)
 	if _, err := s.RememberKind(testContext, "tone", "Keep updates brief.", "preference", "owner"); err != nil {
 		t.Fatal(err)
@@ -114,7 +115,97 @@ func TestRememberKeepsClassificationWhenUpdatingByKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Kind != "preference" || updated.Source != "owner" {
-		t.Fatalf("an update by key dropped the classification: %+v", updated)
+	if updated.Kind != "preference" {
+		t.Fatalf("an update by key dropped the owner's category: %+v", updated)
+	}
+	if updated.Source != "assistant" {
+		t.Fatalf("source = %q, want the writer of the current content", updated.Source)
+	}
+}
+
+// The assistant's remember tool records provenance; a blank source would make
+// every assistant memory read as "Source not recorded" in the workspace.
+func TestRememberRecordsAssistantProvenance(t *testing.T) {
+	s, _ := fixture(t)
+	m, err := s.Remember(testContext, "worker-model", "The project worker runs Opus 5.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Source != "assistant" {
+		t.Fatalf("source = %q, want assistant", m.Source)
+	}
+}
+
+// A correction keeps the old memory under the same key. An update must land on
+// the memory the owner is shown, not on the tombstone behind it — otherwise the
+// newest text is filed as already-corrected and the stale text stays live.
+func TestRememberAfterCorrectionUpdatesTheLiveMemory(t *testing.T) {
+	s, _ := fixture(t)
+	original, err := s.RememberKind(testContext, "tone", "Old text.", "preference", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := s.Correct(testContext, original.ID, "Corrected text.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.Remember(testContext, "tone", "Newest text.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != replacement.ID {
+		t.Fatalf("the update landed on %s, want the live memory %s", updated.ID, replacement.ID)
+	}
+	if !updated.SupersededAt.IsZero() {
+		t.Fatal("the live memory was marked as already corrected")
+	}
+	v, _ := s.Snapshot(testContext)
+	before := memoryByID(&v, original.ID)
+	if before == nil || before.Content != "Old text." {
+		t.Fatalf("the superseded original was rewritten: %+v", before)
+	}
+	if before.SupersededAt.IsZero() {
+		t.Fatal("the superseded original stopped being marked corrected")
+	}
+}
+
+// Forgetting either end of a correction chain must leave the list honest: no
+// replacement pointing at a memory that is gone, and no memory marked
+// corrected with nothing replacing it.
+func TestForgetRepairsTheCorrectionChain(t *testing.T) {
+	s, _ := fixture(t)
+	original, err := s.RememberKind(testContext, "tone", "Old text.", "preference", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := s.Correct(testContext, original.ID, "Corrected text.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Forget(testContext, original.ID); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Snapshot(testContext)
+	live := memoryByID(&v, replacement.ID)
+	if live == nil {
+		t.Fatal("forgetting the original removed the replacement")
+	}
+	if live.Supersedes != "" {
+		t.Fatalf("the replacement still claims a predecessor that is gone: %q", live.Supersedes)
+	}
+
+	s2, _ := fixture(t)
+	first, _ := s2.RememberKind(testContext, "tone", "Old text.", "preference", "owner")
+	second, _ := s2.Correct(testContext, first.ID, "Corrected text.", "")
+	if err := s2.Forget(testContext, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	v2, _ := s2.Snapshot(testContext)
+	restored := memoryByID(&v2, first.ID)
+	if restored == nil {
+		t.Fatal("forgetting the replacement removed the original too")
+	}
+	if !restored.SupersededAt.IsZero() {
+		t.Fatal("a memory is still marked corrected with nothing replacing it")
 	}
 }
