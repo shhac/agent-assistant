@@ -178,3 +178,49 @@ func TestAttentionIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// The demonstration workspace has to exercise the states the dashboard claims
+// to report, including the case where nothing waits on the owner's judgment
+// and a worker has still stopped. Otherwise the health, failure and queue
+// views are unreachable in preview mode.
+func TestDemoWorkspaceCoversTheStatesTheDashboardReports(t *testing.T) {
+	s, _ := fixture(t)
+	if err := s.SeedDemo(testContext); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Snapshot(testContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]bool{}
+	for _, w := range v.WorkItems {
+		statuses[w.Status] = true
+	}
+	for _, want := range []string{"active", "blocked", "review", "queued"} {
+		if !statuses[want] {
+			t.Fatalf("demo workspace has no %q outcome; states present: %v", want, statuses)
+		}
+	}
+
+	attention := DeriveAttention(v)
+	var stopped *ProjectAttention
+	for i := range attention {
+		if attention[i].Execution == "blocked" {
+			stopped = &attention[i]
+		}
+	}
+	if stopped == nil {
+		t.Fatal("demo workspace reports no blocked work")
+	}
+	if stopped.OpenDecisions != 0 {
+		t.Fatalf("the blocked demo project should have no open decision, got %d", stopped.OpenDecisions)
+	}
+	if !stopped.NeedsOwner() {
+		t.Fatalf("blocked demo work is not attributed to the owner: %+v", stopped)
+	}
+	for _, a := range v.Agents {
+		if a.ID == "demo-blocked-worker" && a.ModelFailureEvidence == "" {
+			t.Fatal("the blocked demo worker records no failure evidence to display")
+		}
+	}
+}

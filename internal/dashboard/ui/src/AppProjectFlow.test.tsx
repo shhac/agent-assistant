@@ -276,4 +276,53 @@ describe("project context and next outcome", () => {
         .parentElement as HTMLDetailsElement).open,
     ).toBe(false);
   });
+
+  it("shows a usage hold beside the work it is holding up", async () => {
+    const project = {
+      id: "project-hold",
+      title: "Release checklist",
+      description: "",
+      status: "active",
+      acceptance_criteria: [],
+      directories: [],
+    };
+    const state = normalizeState({
+      assistant: { name: "Iris", personality: "" },
+      projects: [project],
+      integrations: [
+        {
+          id: "worker-usage:managed-project-hold",
+          name: "Usage for Worker for Release checklist",
+          status: "paused",
+          detail: "Claude usage is at 94% consumed; new worker work is paused",
+        },
+        {
+          id: "worker-usage:managed-other-project",
+          name: "Usage for another worker",
+          status: "paused",
+          detail: "Unrelated hold",
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (path === "/api/state" ? state : {}),
+      })),
+    );
+    window.history.replaceState(null, "", "/#/projects/project-hold");
+    render(<App />);
+    expect(
+      await screen.findByText("New work is held by a usage limit"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Claude usage is at 94% consumed; new worker work is paused",
+      ),
+    ).toBeTruthy();
+    // Another project's hold is not this project's problem.
+    expect(screen.queryByText("Unrelated hold")).toBeNull();
+  });
 });

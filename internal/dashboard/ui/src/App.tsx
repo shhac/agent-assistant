@@ -601,6 +601,38 @@ function Overview({
     </section>
   );
 }
+/**
+ * A capacity hold is the reason work is not moving, so it belongs beside the
+ * work rather than only in Settings. Unrelated configuration stays out of this
+ * flow, and no account identifier or credential is shown.
+ */
+function WorkerUsageHold({
+  project,
+  integrations,
+}: {
+  project: Project;
+  integrations: State["integrations"];
+}) {
+  // Managed worker profiles are identified by their project; see the daemon's
+  // worker preparation, which names them "managed-<project id>".
+  const usage = integrations.find(
+    (i) => i.id === `worker-usage:managed-${project.id}`,
+  );
+  if (!usage || !["paused", "unavailable"].includes(usage.status)) return null;
+  return (
+    <div className="usage-hold" role="status">
+      <Icon name="Clock" size={16} />
+      <div>
+        <strong>
+          {usage.status === "paused"
+            ? "New work is held by a usage limit"
+            : "Subscription usage could not be read"}
+        </strong>
+        <p>{usage.detail || "No further detail was recorded."}</p>
+      </div>
+    </div>
+  );
+}
 function ProjectRow({
   project,
   state,
@@ -711,6 +743,7 @@ function Projects({
             </span>
           }
         />
+        <WorkerUsageHold project={project} integrations={state.integrations} />
         <ProjectWork
           key={`work-${project.id}`}
           project={project}
