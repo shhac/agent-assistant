@@ -122,8 +122,9 @@ export function ProjectWorkers({
         </button>
       </div>
       <p className="field-hint">
-        Each commissioned agent owns a scoped outcome. Your assistant coordinates
-        the work; the daemon manages sessions, messages and follow-up.
+        Each commissioned agent owns a scoped outcome. Your assistant
+        coordinates the work; the daemon manages sessions, messages and
+        follow-up.
       </p>
       {error && (
         <div className="error-notice" role="alert">
@@ -247,9 +248,13 @@ function Assignment({
   );
   const coordinator = agent.parent_id
     ? state.agents.find(
-        (peer) => peer.id === agent.parent_id && peer.project_id === agent.project_id,
+        (peer) =>
+          peer.id === agent.parent_id && peer.project_id === agent.project_id,
       )?.name || "Coordinator unavailable"
     : state.assistant.name || "Your assistant";
+  const outcome = state.work_items.find(
+    (work) => work.id === agent.work_item_id,
+  );
   const due = meaningfulDate(agent.next_check_in);
   const overdue =
     !terminal.has(agent.status) && due && due.getTime() < Date.now();
@@ -267,6 +272,7 @@ function Assignment({
         {label(agent.role)}
         {worker ? ` · ${worker.name}` : " · Worker settings unavailable"}
       </p>
+      {outcome && <p className="field-hint">Outcome: {outcome.title}</p>}
       <p className="worker-task">
         {agent.task || "No task description recorded."}
       </p>

@@ -103,7 +103,7 @@ func (s *Store) Close() error {
 	return err
 }
 func emptyState() Snapshot {
-	return Snapshot{Projects: []Project{}, Agents: []Agent{}, Decisions: []Decision{}, Messages: []Message{}, Memories: []Memory{}, Activity: []Activity{}, Integrations: []Integration{}, Events: map[string]bool{}, ModelCalls: map[string]int{}}
+	return Snapshot{WorkItems: []WorkItem{}, Steering: []SteeringMessage{}, SteeringReceipts: []SteeringReceipt{}, Projects: []Project{}, Agents: []Agent{}, Decisions: []Decision{}, Messages: []Message{}, Memories: []Memory{}, Activity: []Activity{}, Integrations: []Integration{}, Events: map[string]bool{}, ModelCalls: map[string]int{}}
 }
 func readState(ctx context.Context, conn *sql.Conn) (Snapshot, error) {
 	var data string
@@ -127,6 +127,8 @@ func readState(ctx context.Context, conn *sql.Conn) (Snapshot, error) {
 	if d.Snapshot.ModelCalls == nil {
 		d.Snapshot.ModelCalls = map[string]int{}
 	}
+	migrateWorkItems(&d.Snapshot)
+	refreshWorkItems(&d.Snapshot)
 	return d.Snapshot, nil
 }
 func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -156,6 +158,7 @@ func (s *Store) update(ctx context.Context, fn func(*Snapshot) error) error {
 	if err = fn(&state); err != nil {
 		return err
 	}
+	refreshWorkItems(&state)
 	data, err := json.Marshal(diskState{ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
 	if err != nil {
 		return err

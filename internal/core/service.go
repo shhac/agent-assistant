@@ -125,7 +125,7 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 	}
 	now := s.now().UTC()
 	cfg := s.configuration()
-	out := Agent{ID: uid(), ProjectID: in.ProjectID, ParentID: in.ParentID, ProfileID: in.ProfileID, Name: in.Name, Role: in.Role, Status: "queued", Task: in.Task, AcceptanceCriteria: in.AcceptanceCriteria, Capabilities: in.Capabilities, DispatchKey: uid(), Depth: 1, LastUpdate: now, NextCheckIn: now.Add(time.Duration(cfg.Limits.CheckInMinutes) * time.Minute), Summary: "Waiting for an approved worker runtime", Evidence: []string{}}
+	out := Agent{ID: uid(), ProjectID: in.ProjectID, WorkItemID: in.WorkItemID, ParentID: in.ParentID, ProfileID: in.ProfileID, Name: in.Name, Role: in.Role, Status: "queued", Task: in.Task, AcceptanceCriteria: in.AcceptanceCriteria, Capabilities: in.Capabilities, DispatchKey: uid(), Depth: 1, LastUpdate: now, NextCheckIn: now.Add(time.Duration(cfg.Limits.CheckInMinutes) * time.Minute), Summary: "Waiting for an approved worker runtime", Evidence: []string{}}
 	if out.Name == "" {
 		out.Name = profile.Name
 	}
@@ -139,12 +139,6 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 		p := project(v, in.ProjectID)
 		if p == nil {
 			return fmt.Errorf("project: %w", ErrNotFound)
-		}
-		if p.Status == "completed" {
-			return errors.New("completed project cannot receive new work")
-		}
-		if !p.ContractDefined {
-			return errors.New("define measurable acceptance criteria before commissioning work")
 		}
 		if in.ParentID != "" {
 			parent := agent(v, in.ParentID)
@@ -162,11 +156,21 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 					return fmt.Errorf("child capability %q exceeds parent authority", cap)
 				}
 			}
+			if out.WorkItemID != "" && out.WorkItemID != parent.WorkItemID {
+				return errors.New("delegated work must stay in its coordinator's work item")
+			}
+			out.WorkItemID = parent.WorkItemID
 			out.Depth = parent.Depth + 1
 		}
 		if out.Depth > cfg.Limits.MaxDepth {
 			return errors.New("delegation depth limit reached")
 		}
+		item, err := resolveDelegationWorkItem(v, p, out.WorkItemID, now)
+		if err != nil {
+			return err
+		}
+		out.WorkItemID = item.ID
+		item.UpdatedAt = now
 		p.Status = "active"
 		p.UpdatedAt = now
 		v.Agents = append(v.Agents, out)
@@ -316,6 +320,9 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 		if a.ProgressFingerprint != fingerprint {
 			a.ProgressFingerprint = fingerprint
 			a.LastProgressAt = sourceTime
+			if w := workItem(v, a.WorkItemID); w != nil {
+				w.UpdatedAt = sourceTime
+			}
 		}
 		a.Status = in.Status
 		a.Summary = in.Summary
@@ -397,7 +404,7 @@ func (s *Service) CreateDecision(ctx context.Context, in DecisionInput) (Decisio
 			return Decision{}, errors.New("decision choices cannot be blank")
 		}
 	}
-	out := Decision{ID: uid(), ProjectID: in.ProjectID, AgentID: in.AgentID, Title: in.Title, Context: in.Context, Recommendation: in.Recommendation, Choices: in.Choices, Status: "open", CreatedAt: s.now().UTC()}
+	out := Decision{ID: uid(), ProjectID: in.ProjectID, WorkItemID: in.WorkItemID, AgentID: in.AgentID, Title: in.Title, Context: in.Context, Recommendation: in.Recommendation, Choices: in.Choices, Status: "open", CreatedAt: s.now().UTC()}
 	err := s.store.update(ctx, func(v *Snapshot) error {
 		if in.ProjectID != "" && project(v, in.ProjectID) == nil {
 			return ErrNotFound
@@ -406,6 +413,16 @@ func (s *Service) CreateDecision(ctx context.Context, in DecisionInput) (Decisio
 			a := agent(v, in.AgentID)
 			if a == nil || a.ProjectID != in.ProjectID {
 				return errors.New("decision agent must belong to its project")
+			}
+			if out.WorkItemID != "" && out.WorkItemID != a.WorkItemID {
+				return errors.New("decision must belong to the agent's work item")
+			}
+			out.WorkItemID = a.WorkItemID
+		}
+		if out.WorkItemID != "" {
+			w := workItem(v, out.WorkItemID)
+			if w == nil || w.ProjectID != in.ProjectID {
+				return errors.New("decision work item must belong to its project")
 			}
 		}
 		v.Decisions = append(v.Decisions, out)
@@ -544,6 +561,21 @@ func (s *Service) CompleteProject(ctx context.Context, id string, evidence []str
 				return errors.New("project still has an unresolved decision")
 			}
 		}
+		for i := range v.WorkItems {
+			w := &v.WorkItems[i]
+			if w.ProjectID != id || workItemClosed(*w) {
+				continue
+			}
+			if !w.Legacy {
+				return errors.New("accept each work item before completing the project")
+			}
+			if err := workItemAcceptanceReady(v, w); err != nil {
+				return err
+			}
+			w.Acceptance = &AcceptanceRecord{Revision: workItemRevision(v, w), Evidence: append([]string{}, evidence...), Reviewer: "project completion", AcceptedAt: s.now().UTC()}
+			w.Status = "accepted"
+			w.UpdatedAt = s.now().UTC()
+		}
 		p.Status = "completed"
 		p.UpdatedAt = s.now().UTC()
 		record(v, p.UpdatedAt, id, "project.completed", strings.Join(evidence, "; "))
@@ -622,6 +654,9 @@ func (s *Service) dispatchAuthority(v *Snapshot, a *Agent) error {
 	if p := project(v, a.ProjectID); p == nil || p.Status == "completed" {
 		return errors.New("project no longer permits execution")
 	}
+	if w := workItem(v, a.WorkItemID); w == nil || workItemClosed(*w) {
+		return errors.New("work item no longer permits execution")
+	}
 	seen := map[string]bool{}
 	for current := a; current != nil; {
 		if seen[current.ID] {
@@ -644,7 +679,7 @@ func (s *Service) dispatchAuthority(v *Snapshot, a *Agent) error {
 			break
 		}
 		current = agent(v, current.ParentID)
-		if current == nil || terminal(current.Status) {
+		if current == nil || terminal(current.Status) || current.WorkItemID != a.WorkItemID || current.ProjectID != a.ProjectID {
 			return errors.New("parent no longer permits execution")
 		}
 	}

@@ -16,7 +16,26 @@ type UpdateProjectArgs struct {
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
 
+type CreateWorkItemArgs struct {
+	ProjectID          string   `json:"project_id"`
+	Title              string   `json:"title"`
+	Objective          string   `json:"objective"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+}
+type SteerWorkItemArgs struct {
+	ProjectID  string `json:"project_id"`
+	WorkItemID string `json:"work_item_id"`
+	MessageID  string `json:"message_id"`
+	Message    string `json:"message"`
+}
+type AcceptWorkItemArgs struct {
+	ProjectID      string   `json:"project_id"`
+	WorkItemID     string   `json:"work_item_id"`
+	ReviewRevision string   `json:"review_revision"`
+	Evidence       []string `json:"evidence"`
+}
 type DelegateArgs struct {
+	WorkItemID         string   `json:"work_item_id"`
 	ProjectID          string   `json:"project_id"`
 	ParentID           string   `json:"parent_id"`
 	WorkerProfile      string   `json:"worker_profile"`
@@ -25,6 +44,7 @@ type DelegateArgs struct {
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
 type DecisionArgs struct {
+	WorkItemID     string   `json:"work_item_id"`
 	ProjectID      string   `json:"project_id"`
 	Question       string   `json:"question"`
 	Recommendation string   `json:"recommendation"`
@@ -66,8 +86,11 @@ func Tools() []Tool {
 		tool("read_state", "Read current projects, work, decisions, preferences, available profiles and authority.", nil, nil),
 		tool("create_project", "Track a project in local assistant state with a title and optional existing absolute directory paths. No Linear issue, external tracker, or connection is required. Objective may be empty and acceptance_criteria may be empty until commissioning. This creates coordination metadata only; it never opens or edits project files.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
 		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Optionally link existing absolute directories; null preserves current links. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
-		tool("delegate", "Ask the daemon to commission an approved peer agent with a bounded outcome. The legacy parent_id identifies its responsible coordinator for escalation and inherited authority, not process ownership; empty means the PA. The daemon owns execution, recovery, scope and limits.", []string{"project_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
-		tool("ask_decision", "Prepare an unresolved owner decision. Include recommendation, viable alternatives, consequences and evidence.", []string{"project_id", "question", "recommendation", "why"}, []string{"options", "evidence"}),
+		tool("create_work_item", "Record the owner's next bounded outcome inside an existing ongoing project with measurable acceptance criteria. Projects can have many successive work items; creating one does not start execution.", []string{"project_id", "title", "objective"}, []string{"acceptance_criteria"}),
+		tool("steer_work_item", "Persist owner direction for a work item and deliver it through the daemon. Use a stable message_id for retries. Delivery is not acknowledgement or completion. Existing authority and prohibitions remain binding.", []string{"project_id", "work_item_id", "message_id", "message"}, nil),
+		tool("accept_work_item", "Accept exactly the current review_revision after comparing recorded artifacts and command outcomes against every work-item criterion and steering message. Stale revisions are rejected. Accepted work leaves the ongoing project open.", []string{"project_id", "work_item_id", "review_revision"}, []string{"evidence"}),
+		tool("delegate", "Ask the daemon to commission an approved peer agent with a bounded outcome. The legacy parent_id identifies its responsible coordinator for escalation and inherited authority, not process ownership; empty means the PA. The daemon owns execution, recovery, scope and limits.", []string{"project_id", "work_item_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
+		tool("ask_decision", "Prepare an unresolved owner decision. Include recommendation, viable alternatives, consequences and evidence.", []string{"project_id", "work_item_id", "question", "recommendation", "why"}, []string{"options", "evidence"}),
 		tool("remember_preference", "Remember an owner preference. This cannot grant permissions or change budgets.", []string{"key", "value"}, nil),
 		tool("message_agent", "Route a coordination instruction or answer to an existing agent through the daemon. Does not grant new authority or directly control its process.", []string{"agent_id", "message"}, nil),
 		tool("complete_project", "Accept a completed project only after all commissioned project work is finished and evidence satisfies the acceptance criteria.", []string{"project_id"}, []string{"evidence"}),

@@ -26,6 +26,7 @@ type Project struct {
 // ParentID retains the stored/wire name for its authority and escalation link;
 // it is not subprocess ownership or a restriction on peer communication.
 type Agent struct {
+	WorkItemID          string    `json:"work_item_id,omitempty"`
 	LastProgressAt      time.Time `json:"last_progress_at,omitempty"`
 	ProgressFingerprint string    `json:"progress_fingerprint,omitempty"`
 	BrokerUpdatedAt     time.Time `json:"broker_updated_at,omitempty"`
@@ -50,6 +51,7 @@ type Agent struct {
 	Evidence            []string  `json:"evidence"`
 }
 type Decision struct {
+	WorkItemID     string     `json:"work_item_id,omitempty"`
 	ID             string     `json:"id"`
 	ProjectID      string     `json:"project_id,omitempty"`
 	AgentID        string     `json:"agent_id,omitempty"`
@@ -94,6 +96,9 @@ type PendingOperation struct {
 }
 
 type Snapshot struct {
+	WorkItems         []WorkItem         `json:"work_items"`
+	Steering          []SteeringMessage  `json:"steering"`
+	SteeringReceipts  []SteeringReceipt  `json:"steering_receipts"`
 	ChatTurns         []ChatTurn         `json:"-"`
 	PendingOperations []PendingOperation `json:"pending_operations"`
 	Events            map[string]bool    `json:"-"`
@@ -119,6 +124,7 @@ type ProjectInput struct {
 // DelegateInput requests a daemon-owned assignment. ParentID selects the
 // responsible coordinator and constrains delegated capabilities.
 type DelegateInput struct {
+	WorkItemID         string   `json:"work_item_id,omitempty"`
 	ProjectID          string   `json:"project_id"`
 	ParentID           string   `json:"parent_id,omitempty"`
 	ProfileID          string   `json:"profile_id"`
@@ -136,6 +142,7 @@ type AgentUpdate struct {
 	ExternalID string    `json:"external_id,omitempty"`
 }
 type DecisionInput struct {
+	WorkItemID     string   `json:"work_item_id,omitempty"`
 	ProjectID      string   `json:"project_id,omitempty"`
 	AgentID        string   `json:"agent_id,omitempty"`
 	Title          string   `json:"title"`

@@ -259,12 +259,14 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 			return nil, err
 		}
 		return a.Core.RefineProjectWithDirectories(ctx, in.ProjectID, in.Objective, strings.Join(in.AcceptanceCriteria, "\n"), in.Directories)
+	case "create_work_item", "steer_work_item", "accept_work_item":
+		return a.workItemTool(ctx, name, raw)
 	case "delegate":
 		var in engine.DelegateArgs
 		if err := args(raw, &in); err != nil {
 			return nil, err
 		}
-		return a.commissionWorker(ctx, core.DelegateInput{ProjectID: in.ProjectID, ParentID: in.ParentID, ProfileID: in.WorkerProfile, Role: in.Role, Task: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
+		return a.commissionWorker(ctx, core.DelegateInput{WorkItemID: in.WorkItemID, ProjectID: in.ProjectID, ParentID: in.ParentID, ProfileID: in.WorkerProfile, Role: in.Role, Task: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
 	case "ask_decision":
 		var in engine.DecisionArgs
 		if err := args(raw, &in); err != nil {
@@ -274,7 +276,7 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		if len(in.Evidence) > 0 {
 			why += "\nEvidence: " + strings.Join(in.Evidence, "; ")
 		}
-		return a.Core.CreateDecision(ctx, core.DecisionInput{ProjectID: in.ProjectID, Title: in.Question, Context: why, Recommendation: in.Recommendation, Choices: in.Options})
+		return a.Core.CreateDecision(ctx, core.DecisionInput{WorkItemID: in.WorkItemID, ProjectID: in.ProjectID, Title: in.Question, Context: why, Recommendation: in.Recommendation, Choices: in.Options})
 	case "remember_preference":
 		var in engine.PreferenceArgs
 		if err := args(raw, &in); err != nil {

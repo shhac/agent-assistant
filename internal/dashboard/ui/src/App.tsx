@@ -1,6 +1,7 @@
 import { ProjectLink } from "./ProjectLink";
 import { WorkerPreparation } from "./WorkerPreparation";
 import { ProjectWorkers } from "./ProjectWorkers";
+import { ProjectWork } from "./ProjectWork";
 import { ChatPanel } from "./ChatPanel";
 import { NewProject, ProjectDirectories } from "./ProjectForms";
 import { Avatar, ThemePicker, validTheme } from "./Identity";
@@ -661,12 +662,15 @@ function Overview({
       </div>
       {decisions.length > 0 && (
         <div className="overview-decision">
-          <DecisionCard
-            decision={decisions[0]}
-            projects={state.projects}
-            refresh={refresh}
-            compact
-          />
+          {decisions.slice(0, 3).map((decision) => (
+            <DecisionCard
+              key={decision.id}
+              decision={decision}
+              projects={state.projects}
+              refresh={refresh}
+              compact
+            />
+          ))}
         </div>
       )}
       <section className="section-block">
@@ -835,6 +839,12 @@ function Projects({
           project={project}
           refresh={refresh}
         />
+        <ProjectWork
+          key={`work-${project.id}`}
+          project={project}
+          state={state}
+          refresh={refresh}
+        />
         <WorkerPreparation
           key={`worker-${project.id}`}
           project={project}
@@ -845,7 +855,7 @@ function Projects({
           }}
         />
         <section className="detail-section">
-          <p className="eyebrow">WHAT DONE LOOKS LIKE</p>
+          <p className="eyebrow">PROJECT GUIDANCE</p>
           {criteriaLines(project.acceptance_criteria).length ? (
             <ul className="criteria-list">
               {criteriaLines(project.acceptance_criteria).map((line, i) => (

@@ -84,16 +84,17 @@ type PeerMessage struct {
 }
 
 type Run struct {
-	Message     *PeerMessage       `json:"message,omitempty"`
-	Instruction *Instruction       `json:"instruction,omitempty"`
-	Delegation  *DelegationRequest `json:"delegation,omitempty"`
-	ID          string             `json:"id"`
-	DispatchKey string             `json:"dispatch_key"`
-	Status      string             `json:"status"`
-	Summary     string             `json:"summary"`
-	Evidence    []string           `json:"evidence"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	Decision    *Decision          `json:"decision,omitempty"`
+	SteeringAcknowledgements []string           `json:"steering_acknowledgements,omitempty"`
+	Message                  *PeerMessage       `json:"message,omitempty"`
+	Instruction              *Instruction       `json:"instruction,omitempty"`
+	Delegation               *DelegationRequest `json:"delegation,omitempty"`
+	ID                       string             `json:"id"`
+	DispatchKey              string             `json:"dispatch_key"`
+	Status                   string             `json:"status"`
+	Summary                  string             `json:"summary"`
+	Evidence                 []string           `json:"evidence"`
+	UpdatedAt                time.Time          `json:"updated_at"`
+	Decision                 *Decision          `json:"decision,omitempty"`
 }
 
 var ErrNotFound = errors.New("worker run not found")

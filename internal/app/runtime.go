@@ -186,6 +186,9 @@ func (a *App) tick(ctx context.Context, noDispatch bool) error {
 		}
 	}
 	if !noDispatch && !snap.Paused {
+		if err = a.deliverSteering(ctx); err != nil {
+			failures = append(failures, err)
+		}
 		if err = a.propagateDecisions(ctx); err != nil && !errors.Is(err, errWorkerUsageHeld) {
 			failures = append(failures, err)
 		}
@@ -315,6 +318,14 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 	if run.Status == "interrupted" && agent.ResumeKey != "" && (agent.Status == "resuming" || agent.Status == "reconciling") {
 		return a.Core.MarkUncertain(ctx, agent.ID, "Resume acknowledgement is unresolved; the broker still reports interruption. Inspect this operation before another resume.")
 	}
+	if agent.ExternalID != "" && run.ID != agent.ExternalID {
+		return errors.New("worker update identity does not match")
+	}
+	if len(run.SteeringAcknowledgements) > 0 {
+		if err := a.Core.AcknowledgeSteering(ctx, agent.ID, run.SteeringAcknowledgements); err != nil {
+			return err
+		}
+	}
 	status := run.Status
 	if status == "queued" {
 		status = "running"
@@ -430,7 +441,7 @@ func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.D
 		if err := a.workerUsageAllowed(ctx, parent.ProfileID); err != nil {
 			return &noEffect{err}
 		}
-		child, err := a.commissionWorker(ctx, core.DelegateInput{ProjectID: parent.ProjectID, ParentID: parent.ID, ProfileID: d.WorkerProfile, Role: d.Role, Task: d.Task, AcceptanceCriteria: d.AcceptanceCriteria, Capabilities: d.Capabilities})
+		child, err := a.commissionWorker(ctx, core.DelegateInput{WorkItemID: parent.WorkItemID, ProjectID: parent.ProjectID, ParentID: parent.ID, ProfileID: d.WorkerProfile, Role: d.Role, Task: d.Task, AcceptanceCriteria: d.AcceptanceCriteria, Capabilities: d.Capabilities})
 		if err != nil {
 			return &noEffect{err}
 		}
@@ -491,34 +502,27 @@ func (a *App) reviewFinished(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, p := range snap.Projects {
-		if p.Status == "completed" {
+	for _, item := range snap.WorkItems {
+		if item.Status != "review" || item.ReviewRevision == "" {
 			continue
 		}
-		count := 0
-		ready := true
-		for _, ag := range snap.Agents {
-			if ag.ProjectID != p.ID {
-				continue
-			}
-			count++
-			if ag.Status != "completed" {
-				ready = false
+		blocked := false
+		for _, decision := range snap.Decisions {
+			if decision.Status == "open" && (decision.ProjectID == "" || (decision.ProjectID == item.ProjectID && (decision.WorkItemID == "" || decision.WorkItemID == item.ID))) {
+				blocked = true
+				break
 			}
 		}
-		for _, d := range snap.Decisions {
-			if d.ProjectID == p.ID && d.Status == "open" {
-				ready = false
-			}
-		}
-		if count == 0 || !ready {
+		if blocked {
 			continue
 		}
-		if err = a.once(ctx, "project-review:"+p.ID+":"+reviewRevision(snap, p.ID, a.Config().Model.Engine+"/"+a.Config().Model.Model+"/"+a.Config().Model.Effort), func() error {
-			if a.Config().Model.Model == "" {
-				return a.Core.RecordActivity(ctx, p.ID, "project.review_ready", "All commissioned workers supplied evidence. Configure the PA model or review acceptance evidence before closing this project.")
+		model := a.Config().Model
+		key := "work-item-review:" + item.ID + ":" + item.ReviewRevision + ":" + model.Engine + "/" + model.Model + "/" + model.Effort
+		if err := a.once(ctx, key, func() error {
+			if model.Model == "" {
+				return a.Core.RecordActivity(ctx, item.ProjectID, "work_item.review_ready", "Work evidence is ready for acceptance review: "+item.Title)
 			}
-			return a.ReviewProject(ctx, p.ID)
+			return a.ReviewWorkItem(ctx, item)
 		}); err != nil {
 			return err
 		}
@@ -539,6 +543,14 @@ func (a *App) notify(ctx context.Context, send func(context.Context, string) err
 			return send(ctx, d.Title+"\nRecommendation: "+d.Recommendation+"\n"+d.Context+"\nResolve this decision in the dashboard.")
 		})
 	}
+	for _, item := range snap.WorkItems {
+		if item.Status != "accepted" || item.Acceptance == nil {
+			continue
+		}
+		_ = a.once(ctx, "notify:accepted:"+item.ID+":"+item.Acceptance.Revision, func() error {
+			return send(ctx, "Completed: "+item.Title+". Acceptance evidence is recorded in the dashboard; the project remains open for its next outcome.")
+		})
+	}
 	for _, p := range snap.Projects {
 		if p.Status != "completed" {
 			continue
@@ -556,20 +568,6 @@ func (a *App) notify(ctx context.Context, send func(context.Context, string) err
 			return send(ctx, ag.Name+" needs attention: "+ag.Summary+". I preserved its session and have not launched a duplicate.")
 		})
 	}
-}
-
-func reviewRevision(s core.Snapshot, projectID, model string) string {
-	agents := []core.Agent{}
-	for _, ag := range s.Agents {
-		if ag.ProjectID == projectID {
-			agents = append(agents, ag)
-		}
-	}
-	raw, _ := json.Marshal(struct {
-		Agents []core.Agent
-		Model  string
-	}{agents, model})
-	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
 type noEffect struct{ err error }

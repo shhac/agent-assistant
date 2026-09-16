@@ -10,7 +10,37 @@ export interface Project {
   scratch_directory?: string;
   updated_at?: string;
 }
+export interface WorkItem {
+  id: string;
+  project_id: string;
+  title: string;
+  objective: string;
+  acceptance_criteria: string;
+  status: "ready" | "active" | "review" | "accepted" | "legacy_completed";
+  created_at: string;
+  updated_at: string;
+  review_revision: string;
+  acceptance?: {
+    revision: string;
+    evidence: string[];
+    reviewer: string;
+    accepted_at: string;
+  };
+  legacy?: boolean;
+}
+export interface SteeringMessage {
+  id: string;
+  work_item_id: string;
+  content: string;
+  created_at: string;
+}
+export interface SteeringReceipt {
+  message_id: string;
+  agent_id: string;
+  acknowledged_at: string;
+}
 export interface Agent {
+  work_item_id?: string;
   id: string;
   parent_id?: string;
   name: string;
@@ -28,6 +58,7 @@ export interface Agent {
   evidence?: string[];
 }
 export interface Decision {
+  work_item_id?: string;
   id: string;
   agent_id?: string;
   project_id?: string;
@@ -99,6 +130,9 @@ export interface WorkerProfile {
   [key: string]: unknown;
 }
 export interface State {
+  work_items: WorkItem[];
+  steering: SteeringMessage[];
+  steering_receipts: SteeringReceipt[];
   pending_operations: PendingOperation[];
   assistant: {
     name: string;
@@ -163,6 +197,9 @@ export async function api<T>(
 }
 export function normalizeState(raw: Partial<State>): State {
   return {
+    work_items: raw.work_items ?? [],
+    steering: raw.steering ?? [],
+    steering_receipts: raw.steering_receipts ?? [],
     assistant: raw.assistant ?? { name: "", personality: "" },
     pending_operations: raw.pending_operations ?? [],
     projects: raw.projects ?? [],

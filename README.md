@@ -166,11 +166,21 @@ External brokers remain trusted enforcement boundaries. They must provide idempo
 
 ## Agents and coordination
 
-Each commissioned agent owns a bounded outcome and acceptance criteria. The assistant coordinates the owner's commitments; a project coordinator is useful when the work needs one. Agents exchange messages through the daemon, which owns sessions, routing, recovery and execution limits.
+Projects are ongoing areas of responsibility. Each requested outcome is a work item with its own objective and acceptance criteria; commissioned agents carry execution assignments within that item. The assistant coordinates the owner's commitments; a project coordinator is useful when the work needs one. Agents exchange messages through the daemon, which owns sessions, routing, recovery and execution limits.
 
 Same-project peer messages carry daemon-supplied sender identity and do not grant permissions, change acceptance criteria or bypass a coordinator. Questions still escalate through the responsible coordinator to the assistant and, when needed, the owner. The project Workers panel shows that escalation contact by name. Existing `parent_id` records describe that authority and escalation relationship; they do not mean the assistant model directly owns another process.
 
 The built-in specialist broker offers `send_message`. Delivery and acknowledgement have separate durable records, so a held acknowledgement does not repeat a delivered message. An unavailable recipient produces a not-delivered response so the sender can continue or escalate; uncertain delivery requires inspection. The roster is refreshed on starts, resumes and delivered messages, not continuously. Built-in workers remain specialists; project-manager runtimes still require a compatible external broker.
+
+## Ongoing projects and work outcomes
+
+Ask the assistant what to do next, then authorize the outcome. It can define the work item, prepare an execution profile and commission the agents needed. The project's **Work** section shows each outcome, its criteria, execution attempts, evidence and steering history. A finished outcome leaves the project available for the next request.
+
+Direction belongs to the work item, so replacing or resuming an agent does not lose it. Ask the assistant to steer the work or add direction from the Work section. Delivery and an agent's explicit acknowledgement are distinct; neither proves the direction was implemented. New attempts receive the same durable context.
+
+Acceptance records the exact revision of the contract, attempts, evidence and item decisions reviewed. Changed evidence rejects a stale acceptance request. The assistant can review and accept through its constrained tools; the dashboard offers the same check beside the criteria and evidence. Unresolved decisions, unfinished attempts, missing completion evidence and unacknowledged steering prevent acceptance. Acceptance is a review record, not a merge or deployment.
+
+Existing assignments migrate into a compatibility work item. Historical project completions remain historical; migration does not invent review evidence. Explicit project completion remains available separately from accepting an outcome.
 
 ## Worker subscription limits
 
