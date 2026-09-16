@@ -47,11 +47,6 @@ func (s *Service) seedKnowledgeHub(v *Snapshot, now time.Time) error {
 // Without these the health, failure, queue and evidence views cannot be seen in
 // demonstration mode at all.
 func (s *Service) seedReleaseChecklist(v *Snapshot, now time.Time) error {
-	// A second fictional project covers the execution states the dashboard
-	// has to report honestly: work running, work stopped with no decision
-	// waiting on the owner, a scheduled provider retry, and an outcome
-	// queued behind another. Without these the health, failure, queue and
-	// evidence views are unreachable in demonstration mode.
 	q := Project{ContractDefined: true, ID: "demo-delivery", Title: "Release checklist", Description: "Get the release steps reliable and repeatable.", AcceptanceCriteria: "Each step is automated or explicitly owned, with evidence.", Status: "active", UpdatedAt: now}
 	if err := s.store.prepareProject(&q); err != nil {
 		return err

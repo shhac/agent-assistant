@@ -85,10 +85,6 @@ func agentAttentionState(status string) string {
 	return status
 }
 
-// DeriveAttention summarizes each project's execution health, open decisions
-// and unacknowledged interrupted operations. Projects with nothing recorded are
-// omitted, so an empty result means nothing is known to need attention — not
-// that everything succeeded.
 // attentionIndex accumulates one row per open project while the snapshot is
 // scanned, remembering how strong a claim has been made on each row so a later
 // scan can only improve it.

@@ -20,7 +20,6 @@ const icons: Record<string, string> = {
   Expand:
     "M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5M3 3l6 6M21 3l-6 6M3 21l6-6M21 21l-6-6",
   Shrink: "M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5",
-  Bell: "M5 17h14l-2-3V9a5 5 0 00-10 0v5zM10 21h4",
   Alert: "M12 3l9 17H3zM12 9v5M12 17h.01",
   Clock: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2",
 };

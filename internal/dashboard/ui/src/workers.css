@@ -135,18 +135,6 @@
   padding-left: 12px;
   color: var(--text-soft);
 }
-.worker-assignment-details summary {
-  cursor: pointer;
-  color: var(--text-soft);
-}
-.worker-assignment-details h5,
-.worker-decisions h5 {
-  font-size: 12px;
-  margin: 16px 0 8px;
-}
-.worker-assignment-details ul {
-  padding-left: 22px;
-}
 .worker-decisions {
   margin-top: 16px;
   border-top: 1px solid var(--line);

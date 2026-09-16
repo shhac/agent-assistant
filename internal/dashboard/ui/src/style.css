@@ -598,20 +598,6 @@ nav {
   font-size: 11px;
   margin-top: 4px;
 }
-.boundary-note {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  border-top: 1px solid var(--surface-raised);
-  margin-top: 28px;
-  padding-top: 19px;
-  font-size: 9px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.boundary-note svg {
-  flex-shrink: 0;
-}
 .status {
   display: inline-flex;
   gap: 6px;
@@ -1016,13 +1002,6 @@ nav {
 .user-message > p {
   color: var(--text);
 }
-.thinking {
-  font-size: 10px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .error-notice {
   font-size: 11px;
   line-height: 1.7;
@@ -1084,46 +1063,6 @@ nav {
   border: 1px solid var(--muted);
   border-radius: 3px;
   margin-top: 5px;
-}
-.agent-row {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 17px;
-  margin-bottom: 10px;
-}
-.agent-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 33px;
-  height: 33px;
-  border: 1px solid var(--line);
-  background: var(--surface-raised);
-  border-radius: 50%;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-.agent-row > div {
-  flex: 1;
-  min-width: 0;
-}
-.agent-row strong {
-  display: block;
-  font-size: 12px;
-}
-.agent-row small {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  margin-top: 5px;
-  line-height: 1.6;
-}
-.agent-row > .status {
-  align-self: flex-start;
 }
 .attention-work {
   margin-bottom: 18px;
@@ -1913,9 +1852,6 @@ code {
   .empty-state p {
     font-size: 11px;
   }
-  .boundary-note {
-    font-size: 9px;
-  }
   .decision-card {
     padding: 18px;
   }
@@ -2029,15 +1965,6 @@ code {
   .dialog-footer > .button {
     width: 100%;
   }
-  .agent-row {
-    flex-wrap: wrap;
-  }
-  .agent-row > .status {
-    margin-left: 46px;
-  }
-  .agent-row > div {
-    min-width: calc(100% - 50px);
-  }
 }
 @media (max-width: 385px) {
   .nav-item {
@@ -2128,13 +2055,6 @@ code {
 .coordinate-project > .error-notice,
 .coordinate-project > .coordinate-sent {
   width: 100%;
-}
-.agent-evidence {
-  padding-left: 17px;
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.7;
-  overflow-wrap: anywhere;
 }
 .configuration-fields {
   margin-top: 25px;
@@ -3195,13 +3115,6 @@ textarea {
 .project-folder-choice > strong {
   font-size: 12px;
   font-weight: 500;
-}
-.optional-field {
-  display: inline;
-  font-size: 10px;
-  color: var(--muted);
-  margin-left: 9px;
-  font-weight: normal;
 }
 .project-locations {
   border-bottom: 1px solid var(--line);

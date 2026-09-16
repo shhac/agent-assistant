@@ -372,7 +372,7 @@ func (b *Broker) update(id string, fn func(*storedRun) error) error {
 func (b *Broker) Info() map[string]any {
 	return map[string]any{"engine": b.cfg.Engine, "model": b.cfg.Model, "effort": b.cfg.Effort, "project_id": b.cfg.ProjectID, "image": b.cfg.Image, "workspace": b.cfg.Workspace, "capabilities": []string{"implement", "review"}, "manager": false, "network": "none"}
 }
-func (b *Broker) terminal(id, status, summary string, evidence []string) {
+func (b *Broker) terminal(id, status, summary string) {
 	_ = b.update(id, func(r *storedRun) error {
 		if r.Run.Status == "cancelled" || r.PendingStatus == "cancelled" || r.PendingStatus == "paused" {
 			return nil

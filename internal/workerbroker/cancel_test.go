@@ -138,7 +138,7 @@ func TestCleanupFailureDoesNotClaimCancelled(t *testing.T) {
 	if current.Run.Status != "running" || current.PendingStatus != "cancelled" {
 		t.Fatal("unknown cleanup reported terminal", current.Run.Status)
 	}
-	b.terminal(run.ID, "interrupted", "Context cancelled", nil)
+	b.terminal(run.ID, "interrupted", "Context cancelled")
 	current, _ = b.snapshot(run.ID)
 	if current.PendingStatus != "cancelled" {
 		t.Fatal("interruption overwrote requested cancellation")

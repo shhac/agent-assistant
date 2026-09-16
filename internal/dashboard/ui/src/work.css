@@ -90,18 +90,6 @@
   color: var(--text-soft);
   font-size: 12px;
 }
-.work-attempt {
-  padding: 12px 0;
-  font-size: 12px;
-}
-.work-attempt > span {
-  margin-left: 12px;
-  color: var(--muted);
-}
-.work-attempt > p {
-  margin: 8px 0 0;
-  color: var(--text-soft);
-}
 .work-form {
   display: grid;
   gap: 12px;

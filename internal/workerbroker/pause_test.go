@@ -230,7 +230,7 @@ func TestPauseCleanupFailureNeverClaimsCheckpointIsStopped(t *testing.T) {
 	if current.Run.Status != "running" || current.PendingStatus != "paused" {
 		t.Fatal("unconfirmed cleanup released execution", current)
 	}
-	b.terminal(run.ID, "interrupted", "Shutdown", nil)
+	b.terminal(run.ID, "interrupted", "Shutdown")
 	current, _ = b.snapshot(run.ID)
 	if current.PendingStatus != "paused" {
 		t.Fatal("shutdown lost owner pause")

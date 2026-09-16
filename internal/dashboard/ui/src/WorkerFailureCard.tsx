@@ -10,12 +10,10 @@ import type { Agent } from "./api";
 export function WorkerFailureCard({
   agent,
   onInvestigate,
-  controls,
 }: {
   agent: Agent;
   /** Hands the question to the assistant conversation. Never resumes work. */
   onInvestigate?: (prompt: string) => void;
-  controls?: React.ReactNode;
 }) {
   const explanation = explainFailure(agent);
   if (!explanation) return null;
@@ -93,7 +91,6 @@ export function WorkerFailureCard({
         </div>
       )}
 
-      {controls}
 
       {onInvestigate && (
         <button

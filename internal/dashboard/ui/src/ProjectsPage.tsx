@@ -179,7 +179,7 @@ export function Projects({
   );
 }
 
-export function CoordinateProject({
+function CoordinateProject({
   project,
   refresh,
 }: {

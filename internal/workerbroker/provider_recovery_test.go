@@ -302,7 +302,7 @@ func TestRestartPreservesPendingModelBlockerAfterCleanup(t *testing.T) {
 			case "unknown":
 				b.modelFailure(id, errors.New("unclassified model failure"))
 			case "budget":
-				b.terminal(id, "blocked", "Cumulative model allowance exhausted", nil)
+				b.terminal(id, "blocked", "Cumulative model allowance exhausted")
 			}
 			before, _ := b.snapshot(id)
 			if before.Run.Status != "running" || before.PendingStatus != "blocked" {

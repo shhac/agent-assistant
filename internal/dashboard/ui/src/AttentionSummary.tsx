@@ -8,7 +8,7 @@ const recoveryLabels: Record<string, string> = {
   held: "Held until you decide",
 };
 
-export function attentionTone(item: ProjectAttention): string {
+function attentionTone(item: ProjectAttention): string {
   if (item.next_action === "owner" && isHeldUp(item.execution)) return "amber";
   if (item.execution === "review") return "amber";
   return "";

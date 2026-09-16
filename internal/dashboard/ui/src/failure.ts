@@ -61,7 +61,7 @@ function evidencePhrase(evidence?: string): string {
   );
 }
 
-export function failureKindPhrase(kind?: string): string {
+function failureKindPhrase(kind?: string): string {
   if (!kind) return "The attempt stopped";
   return kindPhrases[kind] || "The attempt stopped with a provider error";
 }
