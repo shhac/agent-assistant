@@ -208,7 +208,7 @@ describe("conversation", () => {
     const refresh = vi.fn(async () => {});
     render(panel(initial(), refresh));
     await tick(0);
-    const activity = screen.getByRole("list", {
+    const activity = screen.getByRole("group", {
       name: "Assistant tool activity",
     });
     expect(within(activity).getByText("Preparing worker")).toBeTruthy();
@@ -222,6 +222,10 @@ describe("conversation", () => {
     };
     await tick();
     expect(within(activity).getByText("Completed")).toBeTruthy();
+    // A finished step collapses into a count so it stops competing with the
+    // reply, while still being one click away.
+    const settled = within(activity).getByText("1 step completed");
+    expect((settled.parentElement as HTMLDetailsElement).open).toBe(false);
     expect(screen.queryByText("Gathering the threads…")).toBeNull();
     expect(refresh.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(server.posts()).toHaveLength(0);
@@ -497,5 +501,43 @@ describe("conversation", () => {
     );
     fireEvent.click(screen.getByRole("link", { name: "Garden planner" }));
     expect(open).toHaveBeenCalledWith("proj-123");
+  });
+
+  it("shows current worker state so an older reply is not the only status", async () => {
+    backend([]);
+    const state = initial();
+    render(
+      panel(
+        {
+          ...state,
+          messages: [
+            {
+              id: "m1",
+              role: "assistant",
+              content: "The worker is running again after the resume.",
+              created_at: "2026-09-16T16:10:00Z",
+            },
+          ],
+          attention: [
+            {
+              project_id: "p1",
+              execution: "blocked",
+              next_action: "owner",
+              open_decisions: 0,
+              pending_operations: 0,
+            },
+          ],
+        },
+        vi.fn(async () => {}),
+      ),
+    );
+    await tick(0);
+    expect(
+      screen.getByText(/Live status: 1 outcome is not moving/),
+    ).toBeTruthy();
+    // The historical reply is preserved, not rewritten.
+    expect(
+      screen.getByText("The worker is running again after the resume."),
+    ).toBeTruthy();
   });
 });

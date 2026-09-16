@@ -5,6 +5,7 @@ import {
   APIError,
   errorText,
   pendingDecisions,
+  type ChatToolEvent,
   type ChatTurn,
   type State,
 } from "./api";
@@ -102,6 +103,71 @@ function delivery(turn: VisibleTurn) {
       return "Reply failed · not automatically retried";
   }
 }
+/**
+ * Tool activity, weighted by what still needs watching. Running and failed
+ * operations stay visible; finished ones collapse into a count so a long
+ * successful turn does not bury the reply it produced.
+ */
+function ToolActivity({ events }: { events: ChatToolEvent[] }) {
+  const settled = events.filter((e) => e.status === "completed");
+  const notable = events.filter((e) => e.status !== "completed");
+  return (
+    <div
+      className="chat-tools"
+      role="group"
+      aria-label="Assistant tool activity"
+    >
+      {!!notable.length && (
+        <ul>
+          {notable.map((event) => (
+            <ToolRow key={event.id} event={event} />
+          ))}
+        </ul>
+      )}
+      {!!settled.length && (
+        <details className="chat-tools-settled">
+          <summary>
+            {settled.length} {settled.length === 1 ? "step" : "steps"} completed
+          </summary>
+          <ul>
+            {settled.map((event) => (
+              <ToolRow key={event.id} event={event} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+function ToolRow({ event }: { event: ChatToolEvent }) {
+  return (
+    <li className={`chat-tool chat-tool-${event.status}`}>
+      <span className="chat-tool-marker" aria-hidden="true">
+        {event.status === "completed"
+          ? "✓"
+          : ["failed", "interrupted"].includes(event.status)
+            ? "!"
+            : ""}
+      </span>
+      <span className="chat-tool-description">
+        {event.label || "Using a tool"}
+        <small>
+          {event.status === "running"
+            ? "In progress"
+            : event.status === "completed"
+              ? "Completed"
+              : event.status === "interrupted"
+                ? "Outcome unconfirmed"
+                : "Failed"}
+        </small>
+      </span>
+      <details>
+        <summary>Tool details</summary>
+        <code>{event.tool}</code>
+      </details>
+    </li>
+  );
+}
 export function ChatPanel({
   state,
   refresh,
@@ -162,6 +228,11 @@ export function ChatPanel({
   ].sort(chronological);
   const turnsByMessage = new Map(
     turns.map((t) => [t.user_message_id || t.id, t]),
+  );
+  const heldUp = state.attention.filter((a) =>
+    ["blocked", "interrupted", "reconciling", "retry_wait"].includes(
+      a.execution,
+    ),
   );
   const running = turns.find((t) => t.status === "running");
   const queueCount = turns.filter((t) => t.status === "queued").length;
@@ -477,46 +548,7 @@ export function ChatPanel({
                         </div>
                       )}
                       {!!turn.events?.length && (
-                        <ul
-                          className="chat-tools"
-                          aria-label="Assistant tool activity"
-                        >
-                          {turn.events.map((event) => (
-                            <li
-                              key={event.id}
-                              className={`chat-tool chat-tool-${event.status}`}
-                            >
-                              <span
-                                className="chat-tool-marker"
-                                aria-hidden="true"
-                              >
-                                {event.status === "completed"
-                                  ? "✓"
-                                  : ["failed", "interrupted"].includes(
-                                        event.status,
-                                      )
-                                    ? "!"
-                                    : ""}
-                              </span>
-                              <span className="chat-tool-description">
-                                {event.label || "Using a tool"}
-                                <small>
-                                  {event.status === "running"
-                                    ? "In progress"
-                                    : event.status === "completed"
-                                      ? "Completed"
-                                      : event.status === "interrupted"
-                                        ? "Outcome unconfirmed"
-                                        : "Failed"}
-                                </small>
-                              </span>
-                              <details>
-                                <summary>Tool details</summary>
-                                <code>{event.tool}</code>
-                              </details>
-                            </li>
-                          ))}
-                        </ul>
+                        <ToolActivity events={turn.events} />
                       )}
                       {turn.status === "running" && (
                         <Waiting
@@ -570,6 +602,16 @@ export function ChatPanel({
         )}
       </div>
       <div className="chat-composer-wrap">
+        {/* A reply is accurate for the moment it was written. This states the
+            current state so an older "it is running" is never the only
+            status an owner can see after work has stopped. */}
+        {!!heldUp.length && (
+          <p className="chat-live-status" role="status">
+            Live status: {heldUp.length}{" "}
+            {heldUp.length === 1 ? "outcome is" : "outcomes are"} not moving.
+            Replies above describe the moment they were written.
+          </p>
+        )}
         {error && (
           <div className="error-notice" role="alert">
             {error}
