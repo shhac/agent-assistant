@@ -474,14 +474,38 @@ func (s *Service) CreateDecision(ctx context.Context, in DecisionInput) (Decisio
 	return out, err
 }
 func (s *Service) Remember(ctx context.Context, key, value string) (Memory, error) {
+	return s.RememberKind(ctx, key, value, "", "")
+}
+
+// MemoryKinds are the categories an owner can choose between. An empty kind is
+// preserved as uncategorized; nothing infers one from the text.
+func MemoryKinds() []string { return []string{"preference", "observation"} }
+
+func validMemoryKind(kind string) bool {
+	return kind == "" || contains(MemoryKinds(), kind)
+}
+
+// RememberKind records a memory, optionally categorized. It keeps the existing
+// upsert on key so the assistant's remember tool still deduplicates.
+func (s *Service) RememberKind(ctx context.Context, key, value, kind, source string) (Memory, error) {
 	if !required(key, value) {
 		return Memory{}, errors.New("memory key and content are required")
 	}
-	out := Memory{ID: uid(), Key: key, Content: value, UpdatedAt: s.now().UTC()}
+	if !validMemoryKind(kind) {
+		return Memory{}, errors.New("memory kind must be preference or observation")
+	}
+	out := Memory{ID: uid(), Key: key, Content: value, Kind: kind, Source: source, UpdatedAt: s.now().UTC()}
 	err := s.store.update(ctx, func(v *Snapshot) error {
 		for i, m := range v.Memories {
 			if m.Key == key {
 				out.ID = m.ID
+				if out.Kind == "" {
+					out.Kind = m.Kind
+				}
+				if out.Source == "" {
+					out.Source = m.Source
+				}
+				out.Supersedes, out.SupersededAt = m.Supersedes, m.SupersededAt
 				v.Memories[i] = out
 				record(v, out.UpdatedAt, "", "memory.updated", key)
 				return nil
@@ -493,6 +517,41 @@ func (s *Service) Remember(ctx context.Context, key, value string) (Memory, erro
 	})
 	return out, err
 }
+
+// Correct supersedes a memory rather than overwriting it: the replacement
+// records what it replaced, and the original is kept so the owner can see what
+// was believed before. The activity entry names the memory, not its content.
+func (s *Service) Correct(ctx context.Context, id, content, kind string) (Memory, error) {
+	if !required(content) {
+		return Memory{}, errors.New("corrected memory content is required")
+	}
+	if !validMemoryKind(kind) {
+		return Memory{}, errors.New("memory kind must be preference or observation")
+	}
+	now := s.now().UTC()
+	var out Memory
+	err := s.store.update(ctx, func(v *Snapshot) error {
+		for i, m := range v.Memories {
+			if m.ID != id {
+				continue
+			}
+			if !m.SupersededAt.IsZero() {
+				return fmt.Errorf("memory was already corrected: %w", ErrConflict)
+			}
+			out = Memory{ID: uid(), Key: m.Key, Content: content, Kind: kind, Source: m.Source, Supersedes: m.ID, UpdatedAt: now}
+			if kind == "" {
+				out.Kind = m.Kind
+			}
+			v.Memories[i].SupersededAt = now
+			v.Memories = append(v.Memories, out)
+			record(v, now, "", "memory.corrected", m.Key)
+			return nil
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
+
 func (s *Service) Forget(ctx context.Context, id string) error {
 	return s.store.update(ctx, func(v *Snapshot) error {
 		for i, m := range v.Memories {

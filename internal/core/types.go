@@ -85,11 +85,21 @@ type Message struct {
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Memory separates a durable preference from a time-sensitive observation so a
+// stale fact is not read as a standing instruction. Kind and Source are empty
+// for anything recorded before they existed; that is reported as uncategorized
+// rather than guessed at. Correcting a memory supersedes it and keeps the
+// original, so the record of what was believed is never silently rewritten.
 type Memory struct {
-	ID        string    `json:"id"`
-	Key       string    `json:"key"`
-	Content   string    `json:"content"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Key          string    `json:"key"`
+	Content      string    `json:"content"`
+	Kind         string    `json:"kind,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	Supersedes   string    `json:"supersedes,omitempty"`
+	SupersededAt time.Time `json:"superseded_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Activity struct {
 	ID        string    `json:"id"`

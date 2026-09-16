@@ -634,4 +634,85 @@ describe("decision alternatives", () => {
     ).toBeTruthy();
     state.integrations = [];
   });
+
+  it("separates standing preferences from observations and corrects rather than rewrites", async () => {
+    state.memories = [
+      {
+        id: "mem-pref",
+        content: "Always use Opus for the project worker.",
+        kind: "preference",
+        source: "owner",
+        updated_at: "2026-09-15T10:00:00Z",
+      },
+      {
+        id: "mem-obs",
+        content: "Worker model information is unavailable.",
+        kind: "observation",
+        source: "assistant",
+        updated_at: "2026-09-16T10:00:00Z",
+      },
+    ];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Memory$/ }));
+    await screen.findByText(/Standing preference/);
+    const cards = document.querySelectorAll(".memory-card");
+    expect((cards[0] as HTMLElement).textContent).toContain(
+      "Standing preference · From you",
+    );
+    expect((cards[1] as HTMLElement).textContent).toContain(
+      "Observation, true when recorded · From your assistant",
+    );
+
+    const observation = cards[1] as HTMLElement;
+    fireEvent.click(
+      within(observation).getByRole("button", { name: "Correct" }),
+    );
+    const field = screen.getByLabelText("What should it say instead?");
+    expect((field as HTMLTextAreaElement).value).toBe(
+      "Worker model information is unavailable.",
+    );
+    expect(
+      screen.getByText(/The original is kept and marked corrected/),
+    ).toBeTruthy();
+    fireEvent.change(field, {
+      target: { value: "The project worker runs Opus 5." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.path === "/api/memories/mem-obs/correct"),
+      ).toBe(true),
+    );
+    const correction = calls.find(
+      (c) => c.path === "/api/memories/mem-obs/correct",
+    )!;
+    expect(correction.options?.method).toBe("POST");
+    expect(JSON.parse(String(correction.options?.body))).toEqual({
+      content: "The project worker runs Opus 5.",
+    });
+    // Correcting is not forgetting.
+    expect(calls.some((c) => c.options?.method === "DELETE")).toBe(false);
+    state.memories = [];
+  });
+
+  it("records which kind of memory the owner chose", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Memory$/ }));
+    fireEvent.change(screen.getByLabelText("Something worth remembering"), {
+      target: { value: "Bring a recommendation with each decision." },
+    });
+    fireEvent.change(screen.getByLabelText("What kind of thing is this?"), {
+      target: { value: "observation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remember this" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === "/api/memories")).toBe(true),
+    );
+    expect(
+      JSON.parse(String(calls.find((c) => c.path === "/api/memories")!.options?.body)),
+    ).toEqual({
+      content: "Bring a recommendation with each decision.",
+      kind: "observation",
+    });
+  });
 });

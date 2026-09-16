@@ -130,7 +130,12 @@ export interface ChatTurn {
 }
 export interface Memory {
   id: string;
+  key?: string;
   content: string;
+  kind?: string;
+  source?: string;
+  supersedes?: string;
+  superseded_at?: string;
   updated_at?: string;
 }
 export interface Activity {

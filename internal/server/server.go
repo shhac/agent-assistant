@@ -179,6 +179,7 @@ func New(a *app.App, auth *Auth) http.Handler {
 		var in struct {
 			Content string `json:"content"`
 			Key     string `json:"key,omitempty"`
+			Kind    string `json:"kind,omitempty"`
 		}
 		if decode(w, r, &in) != nil {
 			return
@@ -186,7 +187,24 @@ func New(a *app.App, auth *Auth) http.Handler {
 		if in.Key == "" {
 			in.Key = in.Content
 		}
-		v, err := a.Core.Remember(r.Context(), in.Key, in.Content)
+		v, err := a.Core.RememberKind(r.Context(), in.Key, in.Content, in.Kind, "owner")
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 201, v)
+	})
+	// Correcting is deliberately its own route: recording and correcting are
+	// different acts, and the original memory is kept either way.
+	mux.HandleFunc("POST /api/memories/{id}/correct", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Content string `json:"content"`
+			Kind    string `json:"kind,omitempty"`
+		}
+		if decode(w, r, &in) != nil {
+			return
+		}
+		v, err := a.Core.Correct(r.Context(), r.PathValue("id"), in.Content, in.Kind)
 		if err != nil {
 			problem(w, err)
 			return
