@@ -360,3 +360,38 @@
     gap: 2px;
   }
 }
+
+/* The one canonical assignment view, linked from anywhere else it is named. */
+.assignment {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 10px;
+  background: var(--bg-deep);
+}
+.assignment.needs-attention {
+  border-color: var(--orange);
+}
+.assignment-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.assignment-heading > strong {
+  font-size: 13px;
+}
+.assignment-meta {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.assignment-summary {
+  margin: 10px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

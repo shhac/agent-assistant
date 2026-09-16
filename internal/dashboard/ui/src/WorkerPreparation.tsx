@@ -7,6 +7,8 @@ export function WorkerPreparation(props: {
   project: Project;
   demo: boolean;
   onPrepared?: () => void;
+  /** Assignments already commissioned for this project, if any. */
+  commissioned?: number;
 }) {
   return <Preparation key={props.project.id} {...props} />;
 }
@@ -14,10 +16,12 @@ function Preparation({
   project,
   demo,
   onPrepared,
+  commissioned,
 }: {
   project: Project;
   demo: boolean;
   onPrepared?: () => void;
+  commissioned?: number;
 }) {
   const directories = project.directories || [];
   const [workspace, setWorkspace] = useState(
@@ -95,8 +99,19 @@ function Preparation({
         </p>
       ) : prepared ? (
         <p className="worker-ready" role="status">
-          A worker is prepared for <strong>{project.title}</strong>. Tell your
-          assistant what you want to do next to start coordinating work.
+          {commissioned ? (
+            <>
+              This is the reusable worker configuration for{" "}
+              <strong>{project.title}</strong>. Work is already commissioned;
+              its progress and controls are shown with the outcome.
+            </>
+          ) : (
+            <>
+              A worker is prepared for <strong>{project.title}</strong>. Tell
+              your assistant what you want to do next to start coordinating
+              work.
+            </>
+          )}
         </p>
       ) : (
         <>

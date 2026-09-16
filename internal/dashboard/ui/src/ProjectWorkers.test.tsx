@@ -180,9 +180,19 @@ describe("project workers", () => {
     expect(within(run).getByText("Pick the date format")).toBeTruthy();
     expect(screen.queryByText("Unrelated decision")).toBeNull();
     expect(screen.queryByText("Unrelated task")).toBeNull();
-    fireEvent.click(within(run).getByText("Acceptance criteria and evidence"));
-    expect(within(run).getByText("Keyboard accessible")).toBeTruthy();
-    expect(within(run).getByText("Calendar test passes")).toBeTruthy();
+    // Criteria, evidence, progress and worker controls belong to the outcome's
+    // own assignment view; this card states the commissioning facts and links
+    // there rather than restating them.
+    expect(within(run).queryByText("Keyboard accessible")).toBeNull();
+    expect(within(run).queryByText("Calendar test passes")).toBeNull();
+    expect(
+      within(run).queryByRole("button", {
+        name: `Conversation and controls for ${agent.name}`,
+      }),
+    ).toBeNull();
+    expect(
+      within(run).getByText(/shown with the outcome above/),
+    ).toBeTruthy();
   });
   it("edits a managed worker using its login's model catalog and preserves drafts during refresh", async () => {
     const fetch = vi.fn(async (path: string, options?: RequestInit) => {

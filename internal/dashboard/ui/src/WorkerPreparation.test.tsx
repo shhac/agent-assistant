@@ -201,3 +201,34 @@ describe("worker settings", () => {
     expect(change.mock.lastCall?.[0][2].id).toMatch(/^external-/);
   });
 });
+
+it("does not invite the owner to start work that is already commissioned", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        workers: [{ id: "managed-p1", managed: true, project_id: "p1" }],
+      }),
+    })),
+  );
+  render(
+    <WorkerPreparation
+      project={{
+        id: "p1",
+        title: "Garden planner",
+        description: "",
+        acceptance_criteria: [],
+        status: "active",
+        directories: ["/home/garden"],
+      }}
+      demo={false}
+      commissioned={1}
+    />,
+  );
+  expect(
+    await screen.findByText(/reusable worker configuration/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/to start coordinating work/)).toBeNull();
+});

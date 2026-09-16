@@ -9,7 +9,7 @@ import {
   type WorkItem,
 } from "./api";
 import "./work.css";
-import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
+import { Assignment, needsAttention } from "./Assignment";
 
 const statuses: Record<WorkItem["status"], string> = {
   ready: "Ready to coordinate",
@@ -33,10 +33,12 @@ export function ProjectWork({
   project,
   state,
   refresh,
+  onInvestigate,
 }: {
   project: Project;
   state: State;
   refresh: () => Promise<void>;
+  onInvestigate?: (prompt: string) => void;
 }) {
   const items = state.work_items.filter(
     (item) => item.project_id === project.id,
@@ -77,7 +79,13 @@ export function ProjectWork({
       )}
       <div className="work-list">
         {items.map((item) => (
-          <WorkCard key={item.id} item={item} state={state} refresh={refresh} />
+          <WorkCard
+            key={item.id}
+            item={item}
+            state={state}
+            refresh={refresh}
+            onInvestigate={onInvestigate}
+          />
         ))}
       </div>
     </section>
@@ -219,26 +227,19 @@ function WorkCard({
   item,
   state,
   refresh,
+  onInvestigate,
 }: {
   item: WorkItem;
   state: State;
   refresh: () => Promise<void>;
+  onInvestigate?: (prompt: string) => void;
 }) {
   const agents = state.agents.filter((agent) => agent.work_item_id === item.id);
   const predecessor = state.work_items.find(
     (work) => work.id === item.after_work_item_id,
   );
-  const attention = agents.filter((agent) =>
-    [
-      "interrupted",
-      "retry_wait",
-      "blocked",
-      "reconciling",
-      "pause_requested",
-      "paused",
-      "stop_requested",
-    ].includes(agent.status),
-  );
+  const attention = agents.filter(needsAttention);
+  const settled = agents.filter((agent) => !needsAttention(agent));
   const evidence = [
     ...new Set(agents.flatMap((agent) => agent.evidence || [])),
   ];
@@ -364,22 +365,14 @@ function WorkCard({
       {!!attention.length && (
         <div className="work-attention" aria-label="Worker attention">
           {attention.map((agent) => (
-            <div key={agent.id}>
-              <strong>
-                {agent.name} · {workerStateLabel(agent.status)}
-              </strong>
-              <p>
-                {agent.summary ||
-                  "The assistant needs to check the existing worker session before continuing."}
-              </p>
-              <small>{agent.recoveries ?? 0} recovery attempts recorded</small>
-              <WorkerConversation
-                agent={agent}
-                refresh={refresh}
-                demo={state.demo}
-                outcomeTitle={item.title}
-              />
-            </div>
+            <Assignment
+              key={agent.id}
+              agent={agent}
+              outcomeTitle={item.title}
+              demo={state.demo}
+              refresh={refresh}
+              onInvestigate={onInvestigate}
+            />
           ))}
         </div>
       )}
@@ -493,23 +486,20 @@ function WorkCard({
           )}
         </div>
       )}
-      {!!agents.length && (
+      {!!settled.length && (
         <details className="work-attempts">
-          <summary>Agent work · {agents.length}</summary>
-          {agents.map((agent) => (
-            <div className="work-attempt" key={agent.id}>
-              <strong>{agent.name}</strong>
-              <span>
-                {agent.status === "completed"
-                  ? "Reported complete"
-                  : agent.status.replaceAll("_", " ")}
-              </span>
-              <p>
-                {agent.summary ||
-                  agent.task ||
-                  "Waiting for a progress report."}
-              </p>
-            </div>
+          <summary>
+            Other assignments · {settled.length}
+          </summary>
+          {settled.map((agent) => (
+            <Assignment
+              key={agent.id}
+              agent={agent}
+              outcomeTitle={item.title}
+              demo={state.demo}
+              refresh={refresh}
+              onInvestigate={onInvestigate}
+            />
           ))}
         </details>
       )}

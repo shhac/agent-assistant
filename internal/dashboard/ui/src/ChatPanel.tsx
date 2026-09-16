@@ -109,6 +109,7 @@ export function ChatPanel({
   expanded,
   onExpand,
   onProjectOpen,
+  prefill,
 }: {
   state: State;
   refresh: () => Promise<void>;
@@ -116,6 +117,7 @@ export function ChatPanel({
   expanded: boolean;
   onExpand: () => void;
   onProjectOpen?: (id: string) => void;
+  prefill?: { text: string; nonce: number } | null;
 }) {
   const [message, setMessage] = useState("");
   const draftRef = useRef("");
@@ -123,6 +125,14 @@ export function ChatPanel({
     draftRef.current = value;
     setMessage(value);
   }
+  // A handoff from elsewhere in the workspace proposes a message; it never
+  // sends one, so the owner still decides what to ask and when.
+  useEffect(() => {
+    if (!prefill) return;
+    draftRef.current = prefill.text;
+    setMessage(prefill.text);
+    document.getElementById("chat-message")?.focus();
+  }, [prefill]);
   const [turns, setTurns] = useState<VisibleTurn[]>([]);
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");

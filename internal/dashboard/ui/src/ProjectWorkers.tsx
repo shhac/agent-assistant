@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   api,
-  criteriaLines,
   errorText,
   pendingDecisions,
   type Agent,
   type Project,
   type State,
 } from "./api";
-import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
+import { workerStateLabel } from "./WorkerConversation";
 import { WorkerEditor } from "./WorkerEditor";
 import "./workers.css";
 
@@ -223,12 +222,11 @@ export function ProjectWorkers({
       ) : (
         <div className="project-worker-list">
           {agents.map((agent) => (
-            <Assignment
+            <CommissionedAssignment
               key={agent.id}
               agent={agent}
               worker={workers.find((worker) => worker.id === agent.profile_id)}
               state={state}
-              refresh={refresh}
             />
           ))}
         </div>
@@ -236,16 +234,14 @@ export function ProjectWorkers({
     </section>
   );
 }
-function Assignment({
+function CommissionedAssignment({
   agent,
   worker,
   state,
-  refresh,
 }: {
   agent: Agent;
   worker?: ProjectWorker;
   state: State;
-  refresh: () => Promise<void>;
 }) {
   const decisions = pendingDecisions(state.decisions).filter(
     (decision) => decision.agent_id === agent.id,
@@ -262,7 +258,6 @@ function Assignment({
   const due = meaningfulDate(agent.next_check_in);
   const overdue =
     !terminal.has(agent.status) && due && due.getTime() < Date.now();
-  const criteria = criteriaLines(agent.acceptance_criteria || "");
   return (
     <article
       className="project-worker-card assignment-card"
@@ -280,18 +275,17 @@ function Assignment({
       <p className="worker-task">
         {agent.task || "No task description recorded."}
       </p>
-      <p>{agent.summary || "No progress report yet."}</p>
       <p className="field-hint">
-        {agent.recoveries ?? 0} recovery attempts recorded
-        {!!agent.provider_failures &&
-          ` · ${agent.provider_failures} consecutive provider failures`}
+        Progress, evidence and worker controls are shown with the outcome above.
+        {outcome && (
+          <>
+            {" "}
+            <a href={`#/projects/${encodeURIComponent(agent.project_id)}`}>
+              Open {outcome.title}
+            </a>
+          </>
+        )}
       </p>
-      <WorkerConversation
-        agent={agent}
-        refresh={refresh}
-        demo={state.demo}
-        outcomeTitle={outcome?.title}
-      />
       {overdue && (
         <p className="worker-health">
           Check-in overdue. Progress needs checking; silence alone does not
@@ -324,29 +318,6 @@ function Assignment({
         The worker report time comes from its runtime. Local updates can reflect
         supervision without new worker progress.
       </p>
-      <details className="worker-assignment-details">
-        <summary>Acceptance criteria and evidence</summary>
-        <h5>Acceptance criteria</h5>
-        {criteria.length ? (
-          <ul>
-            {criteria.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted">No acceptance criteria recorded.</p>
-        )}
-        <h5>Reported evidence</h5>
-        {agent.evidence?.length ? (
-          <ul>
-            {agent.evidence.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted">No evidence reported yet.</p>
-        )}
-      </details>
       {!!decisions.length && (
         <div className="worker-decisions">
           <h5>Outstanding decisions</h5>

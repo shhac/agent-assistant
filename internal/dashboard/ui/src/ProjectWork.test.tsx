@@ -314,18 +314,38 @@ it("shows worker interruption and recovery count prominently even alongside othe
   };
   render(<ProjectWork project={project} state={state} refresh={vi.fn()} />);
   const attention = screen.getByLabelText("Worker attention");
+  expect(within(attention).getByText("Garden builder")).toBeTruthy();
+  expect(within(attention).getByText("Interrupted")).toBeTruthy();
   expect(
-    within(attention).getByText("Garden builder · Interrupted"),
-  ).toBeTruthy();
-  expect(
-    within(attention).getByText("2 recovery attempts recorded"),
+    within(attention).getByText(/2 recovery attempts recorded/),
   ).toBeTruthy();
   expect(
     within(attention).getByRole("button", {
       name: "Conversation and controls for Garden builder",
     }),
   ).toBeTruthy();
+  // The stopped assignment explains itself in place, and states who acts next
+  // rather than handing the owner an undifferentiated summary line.
+  expect(
+    within(attention).getByLabelText("What stopped Garden builder"),
+  ).toBeTruthy();
+  expect(within(attention).getByText("Execution was interrupted")).toBeTruthy();
   expect(screen.queryByText("In progress")).toBeNull();
+});
+
+it("inspects and controls an assignment in exactly one place", () => {
+  const state = fixture();
+  state.agents[0] = { ...state.agents[0], status: "interrupted", recoveries: 1 };
+  render(<ProjectWork project={project} state={state} refresh={vi.fn()} />);
+  // Two copies of one assignment meant two independent conversation polls.
+  expect(
+    screen.getAllByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  ).toHaveLength(1);
+  expect(screen.getAllByLabelText("Assignment for Garden builder")).toHaveLength(
+    1,
+  );
 });
 it("queues the next outcome explicitly after a named predecessor", async () => {
   const fetch = mockFetch(() => ({}));

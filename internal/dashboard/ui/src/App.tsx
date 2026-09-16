@@ -69,6 +69,10 @@ export function App() {
   const [newProject, setNewProject] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatPrefill, setChatPrefill] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState("");
   const request = useRef(0);
@@ -189,6 +193,12 @@ export function App() {
     setChatExpanded(false);
     setPage(next);
     setSelectedProject(null);
+  }
+  // Hands a question to the conversation. It proposes a message and never
+  // resumes, retries or otherwise touches the worker.
+  function askAssistant(text: string) {
+    setChatPrefill({ text, nonce: Date.now() });
+    setChatOpen(true);
   }
   async function togglePause() {
     if (!state) return;
@@ -355,6 +365,7 @@ export function App() {
           )}
           {page === "Projects" && (
             <Projects
+              onInvestigate={askAssistant}
               state={state}
               selected={selectedProject}
               onSelect={(id) => (id ? openProject(id) : navigate("Projects"))}
@@ -442,6 +453,7 @@ export function App() {
         aria-label={`Conversation with ${name}`}
       >
         <ChatPanel
+          prefill={chatPrefill}
           onProjectOpen={openProject}
           state={state}
           refresh={refresh}
@@ -655,12 +667,14 @@ function Projects({
   onSelect,
   onNew,
   refresh,
+  onInvestigate,
 }: {
   state: State;
   selected: string | null;
   onSelect: (id: string | null) => void;
   onNew: () => void;
   refresh: () => Promise<void>;
+  onInvestigate?: (prompt: string) => void;
 }) {
   const [workersRevision, setWorkersRevision] = useState(0);
   const project = state.projects.find((p) => p.id === selected);
@@ -714,9 +728,13 @@ function Projects({
           project={project}
           state={state}
           refresh={refresh}
+          onInvestigate={onInvestigate}
         />
         <WorkerPreparation
           key={`worker-${project.id}`}
+          commissioned={
+            state.agents.filter((a) => a.project_id === project.id).length
+          }
           project={project}
           demo={state.demo}
           onPrepared={() => {
