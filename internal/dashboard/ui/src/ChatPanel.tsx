@@ -12,6 +12,7 @@ import {
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { dateLabel, Icon } from "./ui";
 import { isHeldUp } from "./states";
+import { fullDateLabel } from "./ui";
 import "./chat.css";
 type VisibleTurn = Omit<ChatTurn, "status"> & {
   status:
@@ -132,6 +133,87 @@ function ToolRow({ event }: { event: ChatToolEvent }) {
         <code>{event.tool}</code>
       </details>
     </li>
+  );
+}
+/**
+ * What happened to one owner message: its delivery state, any recovery the
+ * owner can choose, the assistant's tool activity and its working indicator.
+ * Rendered for a message that has a turn; absent when it has none.
+ */
+function TurnStatus({
+  turn,
+  name,
+  cancelling,
+  onCancel,
+  onRestore,
+  onDiscard,
+  onRetry,
+}: {
+  turn?: VisibleTurn;
+  name: string;
+  cancelling: Set<string>;
+  onCancel: (turn: VisibleTurn) => void;
+  onRestore: (turn: VisibleTurn) => void;
+  onDiscard: (turn: VisibleTurn) => void;
+  onRetry: (turn: VisibleTurn) => void;
+}) {
+  if (!turn) return null;
+  return (
+    <div className="chat-turn-status">
+      <span className="message-delivery">{delivery(turn)}</span>
+      {["queued", "waiting"].includes(turn.status) && (
+        <button
+          type="button"
+          className="chat-turn-action"
+          disabled={cancelling.has(turn.id)}
+          onClick={() => void onCancel(turn)}
+          aria-label={`Cancel queued message: ${turn.message}`}
+        >
+          Cancel
+        </button>
+      )}
+      {turn.error && (
+        <p className="chat-turn-error" role="alert">
+          {turn.error}
+        </p>
+      )}
+      {turn.status === "unconfirmed" && (
+        <div className="chat-recovery">
+          <p>
+            Your message is kept here while delivery is checked. Retrying
+            delivery cannot start a second reply.
+          </p>
+          <button type="button" onClick={() => void onRetry(turn)}>
+            Retry delivery
+          </button>
+        </div>
+      )}
+      {turn.status === "rejected" && (
+        <div className="chat-recovery">
+          <button type="button" onClick={() => onRestore(turn)}>
+            Restore message to draft
+          </button>
+          <button type="button" onClick={() => onDiscard(turn)}>
+            Discard message
+          </button>
+        </div>
+      )}
+      {!!turn.events?.length && <ToolActivity events={turn.events} />}
+      {turn.status === "running" && (
+        <Waiting
+          label={
+            turn.model_status ||
+            turn.loading_phrase ||
+            `${name} is working through it…`
+          }
+          detail={
+            fullDateLabel(turn.retry_at)
+              ? `Next attempt after ${fullDateLabel(turn.retry_at)}. Recorded actions will not be replayed.`
+              : "An answer or a clear decision is on its way."
+          }
+        />
+      )}
+    </div>
   );
 }
 export function ChatPanel({
@@ -443,92 +525,25 @@ export function ChatPanel({
                 projects={state.projects}
                 onProjectOpen={onProjectOpen}
               />
-              {turnsByMessage.has(m.id) &&
-                (() => {
-                  const turn = turnsByMessage.get(m.id)!;
-                  return (
-                    <div className="chat-turn-status">
-                      <span className="message-delivery">{delivery(turn)}</span>
-                      {["queued", "waiting"].includes(turn.status) && (
-                        <button
-                          type="button"
-                          className="chat-turn-action"
-                          disabled={cancelling.has(turn.id)}
-                          onClick={() => void cancel(turn)}
-                          aria-label={`Cancel queued message: ${turn.message}`}
-                        >
-                          Cancel
-                        </button>
-                      )}
-                      {turn.error && (
-                        <p className="chat-turn-error" role="alert">
-                          {turn.error}
-                        </p>
-                      )}
-                      {turn.status === "unconfirmed" && (
-                        <div className="chat-recovery">
-                          <p>
-                            Your message is kept here while delivery is checked.
-                            Retrying delivery cannot start a second reply.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => void enqueue(turn)}
-                          >
-                            Retry delivery
-                          </button>
-                        </div>
-                      )}
-                      {turn.status === "rejected" && (
-                        <div className="chat-recovery">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDraft(
-                                draftRef.current
-                                  ? `${draftRef.current}\n\n${turn.message}`
-                                  : turn.message,
-                              );
-                              setTurns((current) =>
-                                current.filter((t) => t.id !== turn.id),
-                              );
-                              document.getElementById("chat-message")?.focus();
-                            }}
-                          >
-                            Restore message to draft
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setTurns((current) =>
-                                current.filter((t) => t.id !== turn.id),
-                              )
-                            }
-                          >
-                            Discard message
-                          </button>
-                        </div>
-                      )}
-                      {!!turn.events?.length && (
-                        <ToolActivity events={turn.events} />
-                      )}
-                      {turn.status === "running" && (
-                        <Waiting
-                          label={
-                            turn.model_status ||
-                            turn.loading_phrase ||
-                            `${name} is working through it…`
-                          }
-                          detail={
-                            turn.retry_at && !turn.retry_at.startsWith("0001-")
-                              ? `Next attempt after ${new Date(turn.retry_at).toLocaleTimeString()}. Recorded actions will not be replayed.`
-                              : "An answer or a clear decision is on its way."
-                          }
-                        />
-                      )}
-                    </div>
+              <TurnStatus
+                turn={turnsByMessage.get(m.id)}
+                name={name}
+                cancelling={cancelling}
+                onCancel={cancel}
+                onRestore={(t) => {
+                  setDraft(
+                    draftRef.current
+                      ? `${draftRef.current}\n\n${t.message}`
+                      : t.message,
                   );
-                })()}
+                  setTurns((current) => current.filter((x) => x.id !== t.id));
+                  document.getElementById("chat-message")?.focus();
+                }}
+                onDiscard={(t) =>
+                  setTurns((current) => current.filter((x) => x.id !== t.id))
+                }
+                onRetry={enqueue}
+              />
             </article>
           ))
         ) : (
