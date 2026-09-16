@@ -60,6 +60,7 @@ export interface Agent {
   model_failure_engine?: string;
   model_failure_phase?: string;
   model_failure_code?: string;
+  model_failure_evidence?: string;
   model_exit_code?: number;
   context_compactions?: number;
   context_bytes?: number;

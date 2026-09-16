@@ -92,6 +92,7 @@ type Run struct {
 	ModelFailureEngine       string             `json:"model_failure_engine,omitempty"`
 	ModelFailurePhase        string             `json:"model_failure_phase,omitempty"`
 	ModelFailureCode         string             `json:"model_failure_code,omitempty"`
+	ModelFailureEvidence     string             `json:"model_failure_evidence,omitempty"`
 	ModelExitCode            *int               `json:"model_exit_code,omitempty"`
 	ControlCapabilities      []string           `json:"control_capabilities,omitempty"`
 	PauseRequested           bool               `json:"pause_requested,omitempty"`

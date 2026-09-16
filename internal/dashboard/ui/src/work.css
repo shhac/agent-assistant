@@ -259,3 +259,104 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Failure card: what stopped, what the evidence shows, and who acts next. */
+.failure-card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+  margin: 14px 0;
+  background: var(--surface);
+}
+.failure-card.needs-owner {
+  border-left-color: var(--orange);
+}
+.failure-headline {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.failure-headline strong {
+  font-size: 14px;
+  line-height: 1.4;
+}
+.failure-headline p {
+  margin: 4px 0 0;
+}
+.failure-symbol {
+  color: var(--orange);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.failure-card.needs-owner .failure-symbol {
+  color: var(--orange);
+}
+.failure-facts {
+  margin: 16px 0 0;
+  display: grid;
+  gap: 12px;
+}
+.failure-facts > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+}
+.failure-facts dt {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.failure-facts dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.failure-summary {
+  margin-top: 16px;
+}
+.failure-summary pre {
+  margin: 6px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.failure-card > .button {
+  margin-top: 16px;
+}
+.failure-technical {
+  margin-top: 16px;
+  font-size: 12px;
+}
+.failure-technical > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.failure-technical dl {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.failure-technical dl > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+}
+.failure-technical dt {
+  color: var(--muted);
+}
+.failure-technical dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 780px) {
+  .failure-facts > div,
+  .failure-technical dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

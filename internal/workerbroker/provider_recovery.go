@@ -26,8 +26,9 @@ func (b *Broker) modelFailure(id string, err error) {
 				kind = failure.Kind
 			}
 		}
+		evidence := failureEvidence(failure, kind)
 		if errors.Is(err, engine.ErrContextPressure) {
-			kind = completion.ErrorContextLimit
+			kind, evidence = completion.ErrorContextLimit, evidenceLocalPreflight
 		}
 		_ = b.update(id, func(r *storedRun) error {
 			if r.Run.Status == "cancelled" || r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
@@ -35,6 +36,7 @@ func (b *Broker) modelFailure(id string, err error) {
 			}
 			r.Run.ProviderFailureKind = string(kind)
 			setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
+			r.Run.ModelFailureEvidence = evidence
 			if errors.Is(err, engine.ErrContextPressure) {
 				r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "preflight", "working_context_budget"
 			}
@@ -54,6 +56,7 @@ func (b *Broker) modelFailure(id string, err error) {
 		r.Run.ProviderFailures++
 		r.Run.ProviderFailureKind = string(failure.Kind)
 		setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
+		r.Run.ModelFailureEvidence = evidenceTyped
 		if r.Run.ProviderFailures >= maxProviderFailures || r.ModelCalls >= b.cfg.MaxTurns {
 			r.Run.RetryAt = time.Time{}
 			r.PendingStatus = "blocked"
@@ -93,6 +96,7 @@ func (b *Broker) clearProviderFailure(id string) {
 		r.Run.ProviderFailures = 0
 		r.Run.ProviderFailureKind = ""
 		r.Run.ModelFailureEngine, r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "", "", ""
+		r.Run.ModelFailureEvidence = ""
 		r.Run.ModelExitCode = nil
 		r.Run.RetryAt = time.Time{}
 		return nil
@@ -114,4 +118,25 @@ func setModelFailureDetails(run *worker.Run, configuredEngine string, failure *c
 		code := *failure.ExitCode
 		run.ModelExitCode = &code
 	}
+}
+
+// Model-failure evidence names which provider evidence was available, never a
+// reconstructed cause. A retryable rejection always arrived as a typed
+// envelope; the other two values distinguish the two ways an attempt can end
+// up reported as "unknown", which are otherwise indistinguishable to an owner.
+const (
+	evidenceTyped          = "typed_envelope"
+	evidenceUntyped        = "untyped_error"
+	evidenceUnclassified   = "unclassified_kind"
+	evidenceLocalPreflight = "local_preflight"
+)
+
+func failureEvidence(failure *completion.RequestError, kind completion.ErrorKind) string {
+	if failure == nil {
+		return evidenceUntyped
+	}
+	if kind == completion.ErrorUnknown && failure.Kind != completion.ErrorUnknown {
+		return evidenceUnclassified
+	}
+	return evidenceTyped
 }

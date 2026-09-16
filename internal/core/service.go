@@ -358,6 +358,7 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 		a.ContextCompactions, a.ContextBytes = in.ContextCompactions, in.ContextBytes
 		a.RetryAt, a.ProviderFailures, a.ProviderFailureKind = in.RetryAt, in.ProviderFailures, in.ProviderFailureKind
 		a.ModelFailureEngine, a.ModelFailurePhase, a.ModelFailureCode, a.ModelExitCode = in.ModelFailureEngine, in.ModelFailurePhase, in.ModelFailureCode, in.ModelExitCode
+		a.ModelFailureEvidence = in.ModelFailureEvidence
 		a.Summary = in.Summary
 		a.Evidence = append([]string{}, in.Evidence...)
 		if a.ExternalID == "" {

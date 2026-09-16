@@ -343,3 +343,63 @@ func TestModelFailureDiagnosticsPersistAndClearOnSuccess(t *testing.T) {
 		t.Fatal("stale diagnosis survived successful recovery")
 	}
 }
+
+// An owner seeing "unknown" cannot tell whether the provider returned an
+// unrecognised classification or whether no typed envelope arrived at all.
+// Recording which evidence existed keeps that distinction without inventing a
+// cause for either case.
+func TestModelFailureRecordsWhichEvidenceWasAvailable(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		kind     string
+		evidence string
+	}{
+		{"untyped failure", errors.New("worker process ended unexpectedly"), "unknown", evidenceUntyped},
+		{"unclassified provider kind", &completion.RequestError{Kind: completion.ErrorKind("teapot")}, "unknown", evidenceUnclassified},
+		{"classified provider kind", &completion.RequestError{Kind: completion.ErrorAuthentication}, "authentication", evidenceTyped},
+		{"local context measurement", engine.ErrContextPressure, "context_limit", evidenceLocalPreflight},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+			defer b.Close()
+			id := providerRun(t, b)
+			b.modelFailure(id, c.err)
+			r, err := b.snapshot(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Run.ProviderFailureKind != c.kind {
+				t.Fatalf("kind = %q, want %q", r.Run.ProviderFailureKind, c.kind)
+			}
+			if r.Run.ModelFailureEvidence != c.evidence {
+				t.Fatalf("evidence = %q, want %q", r.Run.ModelFailureEvidence, c.evidence)
+			}
+			if c.evidence == evidenceUntyped && (r.Run.ModelFailureCode != "" || r.Run.ModelFailurePhase != "") {
+				t.Fatalf("invented a diagnosis for an untyped failure: %+v", r.Run)
+			}
+			b.clearProviderFailure(id)
+			r, _ = b.snapshot(id)
+			if r.Run.ModelFailureEvidence != "" {
+				t.Fatal("stale failure evidence survived successful recovery")
+			}
+		})
+	}
+}
+
+// A retryable rejection always arrived as a typed envelope; the scheduled retry
+// must not be described as if its classification were missing.
+func TestRetryableModelFailureRecordsTypedEvidence(t *testing.T) {
+	b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+	defer b.Close()
+	id := providerRun(t, b)
+	b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorOverloaded, RetryAfter: time.Minute})
+	r, err := b.snapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Run.ModelFailureEvidence != evidenceTyped {
+		t.Fatalf("evidence = %q, want %q", r.Run.ModelFailureEvidence, evidenceTyped)
+	}
+}
