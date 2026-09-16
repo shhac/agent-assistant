@@ -19,6 +19,7 @@ import (
 )
 
 type App struct {
+	workerUsage      workerUsageMeter
 	loadingComplete  func(context.Context, engine.Config, []engine.Message, []engine.Tool) (engine.Message, engine.Usage, error)
 	loadingDiscover  func(context.Context, engine.Config) ([]engine.ModelOption, error)
 	workerPreflight  func(context.Context, config.Model) error
@@ -110,6 +111,11 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	defer a.mu.RUnlock()
 	if status, ok := a.statuses["chat"]; ok {
 		s.Integrations = append(s.Integrations, status)
+	}
+	for _, profile := range cfg.Workers {
+		if status, ok := a.statuses["worker-usage:"+profile.ID]; ok {
+			s.Integrations = append(s.Integrations, status)
+		}
 	}
 	for i, st := range s.Integrations {
 		if live, ok := a.statuses[st.ID]; ok && !ignoreLive[st.ID] {

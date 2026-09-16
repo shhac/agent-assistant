@@ -175,18 +175,18 @@ func (a *App) tick(ctx context.Context, noDispatch bool) error {
 		}
 		if agent.Status == "completed" || agent.Status == "cancelled" {
 			if !noDispatch && !snap.Paused && agent.ParentID != "" {
-				if err := a.forwardProgress(ctx, agent, worker.Run{ID: agent.ExternalID, Status: agent.Status, Summary: agent.Summary, Evidence: agent.Evidence, UpdatedAt: agent.BrokerUpdatedAt}); err != nil {
+				if err := a.forwardProgress(ctx, agent, worker.Run{ID: agent.ExternalID, Status: agent.Status, Summary: agent.Summary, Evidence: agent.Evidence, UpdatedAt: agent.BrokerUpdatedAt}); err != nil && !errors.Is(err, errWorkerUsageHeld) {
 					failures = append(failures, err)
 				}
 			}
 			continue
 		}
-		if err := a.superviseAgent(ctx, agent, noDispatch || snap.Paused); err != nil {
+		if err := a.superviseAgent(ctx, agent, noDispatch || snap.Paused); err != nil && !errors.Is(err, errWorkerUsageHeld) {
 			failures = append(failures, fmt.Errorf("%s: %w", agent.Name, err))
 		}
 	}
 	if !noDispatch && !snap.Paused {
-		if err = a.propagateDecisions(ctx); err != nil {
+		if err = a.propagateDecisions(ctx); err != nil && !errors.Is(err, errWorkerUsageHeld) {
 			failures = append(failures, err)
 		}
 		if err = a.reviewFinished(ctx); err != nil {
@@ -204,6 +204,14 @@ func (a *App) tick(ctx context.Context, noDispatch bool) error {
 func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch bool) error {
 	if agent.Status == "queued" && noDispatch {
 		return nil
+	}
+	if agent.Status == "queued" {
+		if err := a.workerUsageAllowed(ctx, agent.ProfileID); err != nil {
+			if errors.Is(err, errWorkerUsageHeld) {
+				return nil
+			}
+			return err
+		}
 	}
 	c, err := a.broker(ctx, agent.ProfileID)
 	if err != nil {
@@ -265,6 +273,12 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 	// whose response was lost is never repeated, even if the broker still says
 	// interrupted; its operation receipt requires inspection.
 	if run.Status == "interrupted" && !noDispatch && agent.Status != "resuming" && !(agent.Status == "reconciling" && agent.ResumeKey != "") {
+		if err := a.workerUsageAllowed(ctx, agent.ProfileID); err != nil {
+			if errors.Is(err, errWorkerUsageHeld) {
+				return nil
+			}
+			return err
+		}
 		prepared, resumeErr := a.Core.PrepareResume(ctx, agent.ID)
 		if resumeErr != nil {
 			return resumeErr
@@ -396,6 +410,11 @@ func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.D
 		return errors.New("delegation requires stable request ID")
 	}
 	return a.once(ctx, "delegation:"+parent.ID+":"+d.RequestID, func() error {
+		// Admission precedes child creation: a quota hold must not consume the
+		// delegation key or leave a child whose identity its parent never receives.
+		if err := a.workerUsageAllowed(ctx, parent.ProfileID); err != nil {
+			return &noEffect{err}
+		}
 		child, err := a.Core.Delegate(ctx, core.DelegateInput{ProjectID: parent.ProjectID, ParentID: parent.ID, ProfileID: d.WorkerProfile, Role: d.Role, Task: d.Task, AcceptanceCriteria: d.AcceptanceCriteria, Capabilities: d.Capabilities})
 		if err != nil {
 			return &noEffect{err}
@@ -403,7 +422,7 @@ func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.D
 		if parent.ExternalID == "" {
 			return errors.New("delegating parent has no external session")
 		}
-		_, err = a.sendInstruction(ctx, parent, "delegation-ack:"+parent.ID+":"+d.RequestID, "Child commissioned: "+child.ID+". It is queued under your authority; track its evidence and resolve routine questions.")
+		_, err = a.sendAdmittedInstruction(ctx, parent, "delegation-ack:"+parent.ID+":"+d.RequestID, "Child commissioned: "+child.ID+". It is queued under your authority; track its evidence and resolve routine questions.")
 		if err != nil {
 			return errors.New("child was commissioned but acknowledgement needs inspection: " + err.Error())
 		}
@@ -543,6 +562,18 @@ type noEffect struct{ err error }
 func (e *noEffect) Error() string { return e.err.Error() }
 func (e *noEffect) Unwrap() error { return e.err }
 func (a *App) sendInstruction(ctx context.Context, ag core.Agent, key, message string) (worker.Run, error) {
+	if a.Demo || a.dispatchDisabled.Load() {
+		return worker.Run{}, &noEffect{errors.New("worker instructions disabled for this boot")}
+	}
+	if err := a.workerUsageAllowed(ctx, ag.ProfileID); err != nil {
+		return worker.Run{}, &noEffect{err}
+	}
+	return a.sendAdmittedInstruction(ctx, ag, key, message)
+}
+
+// The caller has admitted this operation against usage. Delegation checks once,
+// before child creation, so a second quota refresh cannot strand its acknowledgement.
+func (a *App) sendAdmittedInstruction(ctx context.Context, ag core.Agent, key, message string) (worker.Run, error) {
 	if a.Demo || a.dispatchDisabled.Load() {
 		return worker.Run{}, &noEffect{errors.New("worker instructions disabled for this boot")}
 	}

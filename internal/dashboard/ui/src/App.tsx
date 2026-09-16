@@ -7,6 +7,7 @@ import { AssistantSetup } from "./AssistantSetup";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { ModelSettings } from "./ModelSettings";
 import { ChatSettings } from "./ChatSettings";
+import { WorkerUsageSettings } from "./WorkerUsageSettings";
 import {
   useCallback,
   useEffect,
@@ -1738,6 +1739,7 @@ function ConfigurationFields({
             max: 10,
           })}
         </div>
+        <WorkerUsageSettings config={config} onChange={onChange} />
       </details>
     </div>
   );

@@ -164,11 +164,31 @@ Managed state and recovery records live under the daemon’s state directory. Th
 
 External brokers remain trusted enforcement boundaries. They must provide idempotency, truthful progress timestamps, isolated workspaces and role-specific tools. Managers coordinate through the daemon so descendant scope and shared limits remain enforced.
 
+## Worker subscription limits
+
+**Settings → Capacity and supervision → Worker subscription usage** controls when to hold new worker starts, resumes, and follow-up instructions. Codex and Claude default to **90% consumed**: reaching the threshold in any applicable short or weekly quota window holds new work, while existing workers continue. Queued work is retried when usage falls below the threshold. The gate uses the worker’s configured CLI login, including any per-worker profile, rather than assuming it shares the assistant’s account.
+
+The equivalent configuration is:
+
+```json
+{
+  "limits": {
+    "worker_usage": {
+      "codex_max_used_percent": 90,
+      "claude_max_used_percent": 90,
+      "on_unavailable": "allow"
+    }
+  }
+}
+```
+
+Set an engine’s threshold to `0` to disable its gate. `on_unavailable` defaults to `allow`, so a missing or failed meter does not stop work; choose `pause` to hold new work until usage can be checked. External broker accounts cannot be inspected locally and follow that unavailable-usage policy. Usage is cached for up to one minute; the provider may also cache its report. These are admission limits, not a hard cap: already-running workers and assistant chat can continue consuming usage.
+
 ## Operating boundaries
 
 The PA has no shell, code-writing, deployment, production-data, or purchase tool. Worker commissions carry immutable deployment, production-data-access, and purchase prohibitions. A broker must enforce those outside its prompts. Inference and approved worker execution are permitted operating usage.
 
-The current limits bound concurrent execution, delegation depth, recovery attempts, model turns and durable model-call reservations per UTC day. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, account headroom polling, quiet hours/digests, transcript-retention controls, raster avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
+The current limits bound concurrent execution, delegation depth, recovery attempts, model turns and durable model-call reservations per UTC day. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, quiet hours/digests, transcript-retention controls, raster avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
 
 Completion requires recorded evidence and no unfinished descendants or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
 

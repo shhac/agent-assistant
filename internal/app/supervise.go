@@ -185,6 +185,9 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 	if snap.Paused {
 		return worker.Run{}, errors.New("coordination is paused")
 	}
+	if err := a.workerUsageAllowed(ctx, agent.ProfileID); err != nil {
+		return worker.Run{}, &noEffect{err}
+	}
 	client, err := a.broker(ctx, agent.ProfileID)
 	if err != nil {
 		return worker.Run{}, err

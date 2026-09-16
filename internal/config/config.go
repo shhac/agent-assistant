@@ -104,13 +104,23 @@ type Linear struct {
 	TeamIDs           []string `json:"team_ids"`
 }
 type Limits struct {
-	MaxModelCallsPerDay int `json:"max_model_calls_per_day"`
-	MaxModelTurns       int `json:"max_model_turns"`
-	MaxAgents           int `json:"max_agents"`
-	MaxDepth            int `json:"max_depth"`
-	MaxRecoveries       int `json:"max_recoveries"`
-	CheckInMinutes      int `json:"check_in_minutes"`
+	WorkerUsage         WorkerUsage `json:"worker_usage"`
+	MaxModelCallsPerDay int         `json:"max_model_calls_per_day"`
+	MaxModelTurns       int         `json:"max_model_turns"`
+	MaxAgents           int         `json:"max_agents"`
+	MaxDepth            int         `json:"max_depth"`
+	MaxRecoveries       int         `json:"max_recoveries"`
+	CheckInMinutes      int         `json:"check_in_minutes"`
 }
+
+// WorkerUsage controls admission of new work against native CLI subscription quotas.
+// A zero threshold disables that engine's usage gate.
+type WorkerUsage struct {
+	CodexMaxUsedPercent  int    `json:"codex_max_used_percent"`
+	ClaudeMaxUsedPercent int    `json:"claude_max_used_percent"`
+	OnUnavailable        string `json:"on_unavailable"`
+}
+
 type Worker struct {
 	ModelProfile *Model   `json:"model_profile,omitempty"`
 	Managed      bool     `json:"managed,omitempty"`
@@ -137,7 +147,7 @@ func Default() Config {
 		Connections: []Connection{},
 		Slack:       Slack{BotTokenEnv: "SLACK_BOT_TOKEN", AppTokenEnv: "SLACK_APP_TOKEN"},
 		Linear:      Linear{APIKeyEnv: "LINEAR_API_KEY", TeamIDs: []string{}},
-		Limits:      Limits{MaxModelCallsPerDay: 100, MaxModelTurns: 8, MaxAgents: 4, MaxDepth: 3, MaxRecoveries: 2, CheckInMinutes: 30}, Workers: []Worker{},
+		Limits:      Limits{WorkerUsage: WorkerUsage{CodexMaxUsedPercent: 90, ClaudeMaxUsedPercent: 90, OnUnavailable: "allow"}, MaxModelCallsPerDay: 100, MaxModelTurns: 8, MaxAgents: 4, MaxDepth: 3, MaxRecoveries: 2, CheckInMinutes: 30}, Workers: []Worker{},
 	}
 }
 
@@ -358,6 +368,15 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.CheckInMinutes < 1 || c.Limits.CheckInMinutes > 1440 {
 		return errors.New("limits.check_in_minutes must be between 1 and 1440")
+	}
+	if c.Limits.WorkerUsage.CodexMaxUsedPercent < 0 || c.Limits.WorkerUsage.CodexMaxUsedPercent > 100 {
+		return errors.New("limits.worker_usage.codex_max_used_percent must be between 0 and 100; 0 disables the limit")
+	}
+	if c.Limits.WorkerUsage.ClaudeMaxUsedPercent < 0 || c.Limits.WorkerUsage.ClaudeMaxUsedPercent > 100 {
+		return errors.New("limits.worker_usage.claude_max_used_percent must be between 0 and 100; 0 disables the limit")
+	}
+	if c.Limits.WorkerUsage.OnUnavailable != "allow" && c.Limits.WorkerUsage.OnUnavailable != "pause" {
+		return errors.New("limits.worker_usage.on_unavailable must be allow or pause")
 	}
 	if err := c.Model.Validate(); err != nil {
 		return fmt.Errorf("model: %w", err)
