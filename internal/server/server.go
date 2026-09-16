@@ -29,10 +29,13 @@ func New(a *app.App, auth *Auth) http.Handler {
 			problem(w, err)
 			return
 		}
+		// Attention is derived per request from the snapshot the owner is
+		// already being shown, so it cannot disagree with it or outlive it.
 		respond(w, 200, struct {
 			core.Snapshot
-			Demo bool `json:"demo"`
-		}{s, a.Demo})
+			Attention []core.ProjectAttention `json:"attention"`
+			Demo      bool                    `json:"demo"`
+		}{s, core.DeriveAttention(s), a.Demo})
 	})
 	mux.HandleFunc("POST /api/operations/{id}/acknowledge", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

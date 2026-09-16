@@ -35,6 +35,11 @@ import {
 import { WorkerSettings } from "./WorkerSettings";
 import { PendingOperations } from "./PendingOperations";
 import { DecisionHistory } from "./DecisionHistory";
+import {
+  AttentionSummary,
+  executionLabel,
+  isHeldUp,
+} from "./AttentionSummary";
 import { groupActivity } from "./activity";
 import {
   dateLabel,
@@ -498,35 +503,14 @@ function Overview({
           </button>
         }
       />
-      <div
-        className={`attention-banner ${decisions.length ? "needs-attention" : ""}`}
-      >
-        <span className="attention-symbol">
-          <Icon name={decisions.length ? "Decisions" : "Check"} size={23} />
-        </span>
-        <div>
-          <h2>
-            {decisions.length
-              ? `${decisions.length} ${decisions.length === 1 ? "decision needs" : "decisions need"} your judgment`
-              : "No decisions waiting on you"}
-          </h2>
-          <p>
-            {decisions.length
-              ? "Your assistant has gathered the context. You make the call."
-              : state.projects.length
-                ? "Your assistant will bring you anything that needs a decision."
-                : "Start with one meaningful outcome. The coordination happens from there."}
-          </p>
-        </div>
-        {decisions.length > 0 && (
-          <button
-            className="text-button"
-            onClick={() => onNavigate("Decisions")}
-          >
-            Review <Icon name="Arrow" size={16} />
-          </button>
-        )}
-      </div>
+      <AttentionSummary
+        attention={state.attention}
+        projects={state.projects}
+        decisionCount={decisions.length}
+        onOpen={onProject}
+        onReview={() => onNavigate("Decisions")}
+        hasProjects={state.projects.length > 0}
+      />
       {decisions.length > 0 && (
         <div className="overview-decision">
           {decisions.slice(0, 3).map((decision) => (
@@ -618,6 +602,10 @@ function ProjectRow({
   const decisions = pendingDecisions(state.decisions).filter(
     (d) => d.project_id === project.id,
   );
+  // Lifecycle and execution health are separate facts: an active project can
+  // hold blocked work, and only the second is a reason to look now.
+  const health = state.attention.find((a) => a.project_id === project.id);
+  const heldUp = health && isHeldUp(health.execution);
   return (
     <button className="project-row" onClick={onSelect}>
       <span className="project-symbol">
@@ -641,17 +629,22 @@ function ProjectRow({
           )}
         </span>
       </span>
-      <Status
-        tone={
-          decisions.length
-            ? "amber"
-            : project.status === "completed"
-              ? "green"
-              : ""
-        }
-      >
-        {humanStatus(project.status)}
-      </Status>
+      <span className="project-states">
+        {heldUp && (
+          <Status tone="amber">{executionLabel(health.execution)}</Status>
+        )}
+        <Status
+          tone={
+            decisions.length
+              ? "amber"
+              : project.status === "completed"
+                ? "green"
+                : ""
+          }
+        >
+          {humanStatus(project.status)}
+        </Status>
+      </span>
       <Icon name="Chevron" size={15} />
     </button>
   );

@@ -146,6 +146,20 @@ export interface Integration {
   status: string;
   detail?: string;
 }
+export interface ProjectAttention {
+  project_id: string;
+  work_item_id?: string;
+  agent_id?: string;
+  agent_name?: string;
+  execution: string;
+  reason?: string;
+  next_action: string;
+  recovery?: string;
+  recovery_at?: string;
+  last_progress_at?: string;
+  open_decisions: number;
+  pending_operations: number;
+}
 export interface PendingOperation {
   id: string;
   summary: string;
@@ -177,6 +191,7 @@ export interface State {
   messages: Message[];
   memories: Memory[];
   activity: Activity[];
+  attention: ProjectAttention[];
   integrations: Integration[];
   paused: boolean;
   demo: boolean;
@@ -239,6 +254,7 @@ export function normalizeState(raw: Partial<State>): State {
     messages: raw.messages ?? [],
     memories: raw.memories ?? [],
     activity: raw.activity ?? [],
+    attention: raw.attention ?? [],
     integrations: raw.integrations ?? [],
     paused: raw.paused ?? false,
     demo: raw.demo ?? false,

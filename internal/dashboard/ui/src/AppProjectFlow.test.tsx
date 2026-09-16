@@ -123,4 +123,97 @@ describe("project context and next outcome", () => {
       }),
     ).toBeNull();
   });
+
+  // The condition from the owner's review: nothing is waiting on their
+  // judgment, the project reads Active, and a worker has stopped.
+  it("shows a blocked worker on the overview when no decision is waiting", async () => {
+    const project = {
+      id: "project-suggestions",
+      title: "Agent assistant",
+      description: "Coordination dashboard",
+      status: "active",
+      acceptance_criteria: [],
+      directories: [],
+    };
+    const state = normalizeState({
+      assistant: { name: "Iris", personality: "" },
+      projects: [project],
+      decisions: [],
+      work_items: [
+        {
+          id: "work-suggestions",
+          project_id: project.id,
+          title: "Suggestions",
+          objective: "Offer suggestions",
+          acceptance_criteria: "Reviewed",
+          status: "blocked",
+          status_reason: "Execution is blocked",
+          created_at: "2026-09-16T12:00:00Z",
+          updated_at: "2026-09-16T16:53:00Z",
+          review_revision: "rev-1",
+        },
+      ],
+      agents: [
+        {
+          id: "agent-suggestions",
+          project_id: project.id,
+          work_item_id: "work-suggestions",
+          name: "Suggestions worker",
+          role: "worker",
+          status: "blocked",
+          summary: "The attempt stopped without a classified provider error.",
+          provider_failure_kind: "unknown",
+          model_failure_evidence: "untyped_error",
+        },
+      ],
+      attention: [
+        {
+          project_id: project.id,
+          work_item_id: "work-suggestions",
+          agent_id: "agent-suggestions",
+          agent_name: "Suggestions worker",
+          execution: "blocked",
+          reason: "The attempt stopped without a classified provider error.",
+          next_action: "owner",
+          recovery: "held",
+          last_progress_at: "2026-09-16T16:53:00Z",
+          open_decisions: 0,
+          pending_operations: 0,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (path === "/api/state" ? state : {}),
+      })),
+    );
+    render(<App />);
+
+    const attention = await screen.findByRole("region", {
+      name: "Work needing attention",
+    });
+    expect(screen.queryByText("No decisions waiting on you")).toBeNull();
+    expect(attention.textContent).toContain("Suggestions worker");
+    expect(attention.textContent).toContain("You act next");
+
+    // The attention summary precedes the project list, so the blocker is the
+    // first thing the overview reports rather than something to scroll for.
+    const projectsSection = screen.getByText("Projects in motion");
+    expect(
+      attention.compareDocumentPosition(projectsSection) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // The project still reads Active; health is reported separately.
+    fireEvent.click(
+      within(attention).getByRole("button", { name: /Agent assistant/ }),
+    );
+    expect(window.location.hash).toBe("#/projects/project-suggestions");
+    expect(
+      await screen.findByLabelText("What would you like to do next?"),
+    ).toBeTruthy();
+  });
 });

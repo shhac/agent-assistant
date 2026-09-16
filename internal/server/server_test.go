@@ -81,3 +81,90 @@ func TestDashboardProjectDecisionMemoryFlow(t *testing.T) {
 		t.Fatal("embedded UI missing")
 	}
 }
+
+// The dashboard receives execution health alongside the state it is already
+// showing, so a stopped worker is visible without opening each project, and a
+// quiet decision queue never stands in for a healthy one.
+func TestStateExposesBlockedWorkWithNoOpenDecisions(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Workers = []config.Worker{{ID: "test", Name: "Suggestions worker", Endpoint: "http://127.0.0.1:9999", Capabilities: []string{"implement"}}}
+	store, err := core.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := core.NewService(store, cfg)
+	a := app.New(s, cfg, filepath.Join(dir, "config.json"), false)
+	auth, _ := NewAuth(dir, "http://127.0.0.1:8340", "", nil)
+	h := New(a, auth)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://127.0.0.1:8340"+path, strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:4321"
+		r.Header.Set("Authorization", "Bearer "+auth.admin)
+		r.Header.Set("X-Requested-With", "agent-assistant")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	attention := func() []core.ProjectAttention {
+		t.Helper()
+		var out struct {
+			Attention []core.ProjectAttention `json:"attention"`
+			Decisions []core.Decision         `json:"decisions"`
+		}
+		if err := json.Unmarshal(call("GET", "/api/state", "").Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range out.Decisions {
+			if d.Status == "open" {
+				t.Fatalf("fixture unexpectedly has an open decision: %+v", d)
+			}
+		}
+		return out.Attention
+	}
+
+	created := call("POST", "/api/projects", `{"title":"Suggestions","description":"Suggest","acceptance_criteria":"Reviewed"}`)
+	if created.Code != 201 {
+		t.Fatal(created.Body.String())
+	}
+	var project core.Project
+	_ = json.Unmarshal(created.Body.Bytes(), &project)
+	for _, item := range attention() {
+		if item.NextAction == "owner" {
+			t.Fatalf("a fresh project should not demand the owner: %+v", item)
+		}
+	}
+
+	ctx := context.Background()
+	agent, err := s.Delegate(ctx, core.DelegateInput{ProjectID: project.ID, ProfileID: "test", Role: "worker", Task: "Draft suggestions", AcceptanceCriteria: "Reviewed", Capabilities: []string{"implement"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginDispatch(ctx, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDispatched(ctx, agent.ID, "external-"+agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAgent(ctx, agent.ID, core.AgentUpdate{Status: "blocked", Summary: "The attempt stopped without a classified provider error.", ProviderFailureKind: "unknown", ModelFailureEvidence: "untyped_error"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := attention()
+	if len(got) == 0 {
+		t.Fatal("no attention reported while a worker is blocked")
+	}
+	if got[0].Execution != "blocked" {
+		t.Fatalf("execution = %q, want blocked", got[0].Execution)
+	}
+	if got[0].NextAction != "owner" || got[0].OpenDecisions != 0 {
+		t.Fatalf("blocked work with no open decision must still be the owner's turn: %+v", got[0])
+	}
+	if got[0].AgentID != agent.ID || got[0].AgentName != "Suggestions worker" {
+		t.Fatalf("attention does not name the affected worker: %+v", got[0])
+	}
+	if got[0].Reason == "" {
+		t.Fatal("attention reports no reason for the blocker")
+	}
+}
