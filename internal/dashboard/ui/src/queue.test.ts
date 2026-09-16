@@ -47,6 +47,15 @@ describe("queue order", () => {
     ];
     expect(orderQueue(cyclic)).toHaveLength(2);
     expect(orderQueue([])).toEqual([]);
+
+    // A self-referencing item can never satisfy the placement rule; it must
+    // still be listed, in the order it was recorded.
+    const selfReferencing = [
+      item({ id: "first" }),
+      item({ id: "loop", after_work_item_id: "loop" }),
+    ];
+    const ordered = orderQueue(selfReferencing);
+    expect(ordered.map((w) => w.id)).toEqual(["first", "loop"]);
   });
 
   it("states the start condition and whether it may start automatically", () => {

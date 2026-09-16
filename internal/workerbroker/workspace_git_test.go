@@ -85,3 +85,33 @@ func TestEvidenceDigestKeepsThePrefixesTheDashboardGroupsBy(t *testing.T) {
 		t.Fatal("evidence no longer states that command success is not acceptance")
 	}
 }
+
+// The artifact lines are composed apart from the digest, and the dashboard
+// files them under "Artifacts" by these prefixes. Unpinned, a rename would move
+// a file path under the heading that explains what the evidence does not
+// establish, presenting a path as an epistemic caveat.
+func TestArtifactEvidenceKeepsThePrefixesTheDashboardGroupsBy(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"changes.patch", "commands.json", "summary.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := artifactPaths(dir)
+	want := []string{"Patch: ", "Command results: ", "Changed-file summary: "}
+	if len(lines) != len(want) {
+		t.Fatalf("artifact evidence lines = %d, want %d", len(lines), len(want))
+	}
+	for i, prefix := range want {
+		if !strings.HasPrefix(lines[i], prefix) {
+			t.Fatalf("artifact line %d = %q, want the prefix %q the dashboard groups by", i, lines[i], prefix)
+		}
+	}
+
+	b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+	defer b.Close()
+	fallback := b.artifactEvidence("run-1")
+	if len(fallback) != 1 || !strings.HasPrefix(fallback[0], "Worker artifacts: ") {
+		t.Fatalf("fallback artifact evidence = %v, want the \"Worker artifacts: \" prefix", fallback)
+	}
+}

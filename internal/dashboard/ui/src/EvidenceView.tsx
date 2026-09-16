@@ -1,18 +1,9 @@
 import {
   classifyEvidence,
-  evidenceGroupLabels,
+  evidenceGroups,
   evidenceSummary,
   splitLiteral,
-  type EvidenceGroup,
 } from "./evidence";
-
-const order: EvidenceGroup[] = [
-  "files",
-  "commands",
-  "artifacts",
-  "diagnostics",
-  "notes",
-];
 
 /** Recognises the artifact path at the end of an artifact evidence line. */
 function artifactParts(text: string): { label: string; path: string } {
@@ -34,9 +25,9 @@ export function EvidenceView({
   evidence: string[];
   accepted: boolean;
 }) {
-  const classified = classifyEvidence(evidence);
   if (!evidence.length)
     return <p className="muted">No evidence reported yet.</p>;
+  const classified = classifyEvidence(evidence);
   return (
     <div className="evidence">
       <p className="evidence-summary">{evidenceSummary(evidence, accepted)}</p>
@@ -46,13 +37,13 @@ export function EvidenceView({
           criteria are met.
         </p>
       )}
-      {order.map((group) => {
+      {evidenceGroups.map(({ group, label }) => {
         const lines = classified.byGroup[group];
         if (!lines.length) return null;
         return (
           <details className="evidence-group" key={group}>
             <summary>
-              {evidenceGroupLabels[group]} · {lines.length}
+              {label} · {lines.length}
             </summary>
             <ul>
               {lines.map((line, i) => {

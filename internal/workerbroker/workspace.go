@@ -215,7 +215,7 @@ func (b *Broker) artifacts(r storedRun) ([]string, error) {
 	if err = os.WriteFile(filepath.Join(dir, "summary.txt"), []byte(summary+strings.Join(changed, "\n")), 0600); err != nil {
 		return nil, err
 	}
-	evidence := []string{"Patch: " + filepath.Join(dir, "changes.patch"), "Command results: " + filepath.Join(dir, "commands.json"), "Changed-file summary: " + filepath.Join(dir, "summary.txt")}
+	evidence := artifactPaths(dir)
 	return append(evidence, evidenceDigest(changed, r.Commands, diff.String())...), nil
 }
 func lines(s string) []string {
@@ -298,4 +298,14 @@ func evidenceExcerpt(value string, limit int) string {
 		end--
 	}
 	return value[:end] + fmt.Sprintf(" [TRUNCATED: %d additional bytes omitted]", len(value)-end)
+}
+
+// artifactPaths names the files an attempt preserved. The dashboard groups
+// these lines as artifacts by their prefixes, so they are a contract with it.
+func artifactPaths(dir string) []string {
+	return []string{
+		"Patch: " + filepath.Join(dir, "changes.patch"),
+		"Command results: " + filepath.Join(dir, "commands.json"),
+		"Changed-file summary: " + filepath.Join(dir, "summary.txt"),
+	}
 }

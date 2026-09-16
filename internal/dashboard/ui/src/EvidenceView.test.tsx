@@ -91,4 +91,24 @@ describe("evidence", () => {
     );
     expect(evidenceSummary([], false)).toBe("No evidence reported yet");
   });
+
+  it("does not invent counts when the broker recorded no summary line", () => {
+    const fallback = ["Worker artifacts: /state/runs/run-2/artifacts"];
+    expect(evidenceSummary(fallback, false)).toBe(
+      "1 evidence record · acceptance not yet verified",
+    );
+    render(<EvidenceView evidence={fallback} accepted={false} />);
+    expect(document.body.textContent).not.toContain("files changed");
+    expect(document.body.textContent).not.toContain("commands completed");
+    expect(
+      screen.getByText("/state/runs/run-2/artifacts"),
+    ).toBeTruthy();
+  });
+
+  it("falls back cleanly when the broker summary wording drifts", () => {
+    const drifted = ["Broker evidence: something else entirely."];
+    expect(evidenceSummary(drifted, false)).toBe(
+      "1 evidence record · acceptance not yet verified",
+    );
+  });
 });

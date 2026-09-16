@@ -14,20 +14,20 @@ export type EvidenceGroup =
   | "diagnostics"
   | "notes";
 
-export interface EvidenceCounts {
+interface EvidenceCounts {
   changedFiles: number | null;
   commandsTotal: number | null;
   commandsFailed: number | null;
 }
 
-export interface EvidenceLine {
+interface EvidenceLine {
   text: string;
   group: EvidenceGroup;
   /** Command and patch lines carry literal output after the first line. */
   literal: boolean;
 }
 
-export interface ClassifiedEvidence {
+interface ClassifiedEvidence {
   lines: EvidenceLine[];
   counts: EvidenceCounts;
   byGroup: Record<EvidenceGroup, EvidenceLine[]>;
@@ -51,13 +51,11 @@ function groupOf(line: string): { group: EvidenceGroup; literal: boolean } {
     return { group: "commands", literal: false };
   if (line.startsWith("Content patch SHA-256: "))
     return { group: "diagnostics", literal: true };
-  if (line.startsWith("Broker evidence: "))
-    return { group: "notes", literal: false };
   return { group: "notes", literal: false };
 }
 
 /** Reads the counts the broker already computed; never recomputes them. */
-export function evidenceCounts(lines: string[]): EvidenceCounts {
+function evidenceCounts(lines: string[]): EvidenceCounts {
   const summary = lines.find((line) => line.startsWith("Broker evidence: "));
   const empty: EvidenceCounts = {
     changedFiles: null,
@@ -129,10 +127,11 @@ export function splitLiteral(text: string): { heading: string; body: string } {
     : { heading: text.slice(0, at), body: text.slice(at + 1) };
 }
 
-export const evidenceGroupLabels: Record<EvidenceGroup, string> = {
-  files: "Changed files",
-  commands: "Commands and results",
-  artifacts: "Artifacts",
-  diagnostics: "Diagnostic metadata",
-  notes: "What this evidence does and does not establish",
-};
+/** Display order and heading together, so the two cannot drift apart. */
+export const evidenceGroups = [
+  { group: "files", label: "Changed files" },
+  { group: "commands", label: "Commands and results" },
+  { group: "artifacts", label: "Artifacts" },
+  { group: "diagnostics", label: "Diagnostic metadata" },
+  { group: "notes", label: "What this evidence does and does not establish" },
+] as const satisfies readonly { group: EvidenceGroup; label: string }[];

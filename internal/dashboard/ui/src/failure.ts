@@ -47,6 +47,20 @@ const evidencePhrases: Record<string, string> = {
     "This was measured by the daemon before the request was sent, not reported by the provider.",
 };
 
+/**
+ * What the recorded evidence establishes. An unrecognised value is reported as
+ * unrecognised rather than as an empty account: this daemon and the dashboard
+ * are versioned together but need not be deployed together.
+ */
+function evidencePhrase(evidence?: string): string {
+  if (!evidence)
+    return "This attempt was recorded before failure evidence was captured, so what the provider returned is not known.";
+  return (
+    evidencePhrases[evidence] ||
+    "The failure was recorded in a form this dashboard does not recognise, so what it establishes is not known here."
+  );
+}
+
 export function failureKindPhrase(kind?: string): string {
   if (!kind) return "The attempt stopped";
   return kindPhrases[kind] || "The attempt stopped with a provider error";
@@ -59,7 +73,7 @@ export function explainFailure(agent: Agent): FailureExplanation | null {
   if (agent.status === "retry_wait") {
     return {
       headline: failureKindPhrase(agent.provider_failure_kind),
-      known: evidencePhrases[agent.model_failure_evidence || ""] || "",
+      known: evidencePhrase(agent.model_failure_evidence),
       unknown: "",
       recovery: agent.retry_at
         ? "A retry is scheduled. Saved work is preserved and completed tool calls are not repeated."
@@ -100,9 +114,7 @@ export function explainFailure(agent: Agent): FailureExplanation | null {
   const evidence = agent.model_failure_evidence;
   return {
     headline: failureKindPhrase(agent.provider_failure_kind),
-    known: evidence
-      ? evidencePhrases[evidence] || ""
-      : "This attempt was recorded before failure evidence was captured, so what the provider returned is not known.",
+    known: evidencePhrase(evidence),
     unknown:
       agent.model_failure_code || evidence === "typed_envelope"
         ? ""

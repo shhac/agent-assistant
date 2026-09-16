@@ -153,4 +153,59 @@ describe("worker failure card", () => {
     );
     expect(container.innerHTML).toBe("");
   });
+
+  // The daemon's own preflight measurement is not something the provider said,
+  // and this is the branch carrying the "do not assume compaction" warning.
+  it("distinguishes the daemon's own measurement from a provider report", () => {
+    render(
+      <WorkerFailureCard
+        agent={{
+          ...base,
+          provider_failure_kind: "context_limit",
+          model_failure_evidence: "local_preflight",
+          model_failure_phase: "preflight",
+          model_failure_code: "working_context_budget",
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/measured by the daemon before the request was sent/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/working context reached its budget/),
+    ).toBeTruthy();
+  });
+
+  it("accounts for a worker whose state is still being checked", () => {
+    render(<WorkerFailureCard agent={{ ...base, status: "reconciling" }} />);
+    expect(
+      screen.getByText("The worker's state is being checked before any retry"),
+    ).toBeTruthy();
+    expect(screen.getByText("Your assistant")).toBeTruthy();
+    expect(
+      screen.getByText(/Silence alone does not confirm a blocker/),
+    ).toBeTruthy();
+  });
+
+  // An evidence value this build does not recognise must not produce a card
+  // that states neither what is known nor what is not.
+  it("still says what is unestablished for an unrecognised evidence value", () => {
+    render(
+      <WorkerFailureCard
+        agent={{
+          ...base,
+          provider_failure_kind: "unknown",
+          model_failure_evidence: "some_future_value",
+        }}
+      />,
+    );
+    const card = screen.getByLabelText("What stopped Suggestions worker");
+    expect(card.textContent).toContain("What is not known");
+    expect(
+      screen.getByText(/underlying cause is not established/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/a form this dashboard does not recognise/),
+    ).toBeTruthy();
+  });
 });
