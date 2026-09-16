@@ -232,7 +232,11 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 		if role == "reviewer" || role == "researcher" {
 			role = "worker"
 		}
-		run, startErr := c.Start(ctx, worker.StartRequest{DispatchKey: agent.DispatchKey, AgentID: agent.ID, ProjectID: agent.ProjectID, ParentID: agent.ParentID, Role: role, Task: agent.Task, AcceptanceCriteria: agent.AcceptanceCriteria, Capabilities: agent.Capabilities, CheckInDeadline: agent.NextCheckIn})
+		task, rosterErr := a.withPeerRoster(ctx, agent, agent.Task)
+		if rosterErr != nil {
+			return rosterErr
+		}
+		run, startErr := c.Start(ctx, worker.StartRequest{DispatchKey: agent.DispatchKey, AgentID: agent.ID, ProjectID: agent.ProjectID, ParentID: agent.ParentID, Role: role, Task: task, AcceptanceCriteria: agent.AcceptanceCriteria, Capabilities: agent.Capabilities, CheckInDeadline: agent.NextCheckIn})
 		if startErr != nil {
 			a.Core.MarkUncertain(ctx, agent.ID, "Start was not acknowledged; reconcile by the saved dispatch key before repeating")
 			return startErr
@@ -283,7 +287,11 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 		if resumeErr != nil {
 			return resumeErr
 		}
-		resumed, resumeErr := c.Resume(ctx, prepared.ExternalID, prepared.ResumeKey, "Resume this existing session with its saved context. Reconcile children before commissioning additional work; preserve the original acceptance criteria and prohibitions.")
+		resumeMessage, rosterErr := a.withPeerRoster(ctx, prepared, "Resume this existing session with its saved context. Reconcile existing assignments before commissioning additional work; preserve the original acceptance criteria and prohibitions.")
+		if rosterErr != nil {
+			return rosterErr
+		}
+		resumed, resumeErr := c.Resume(ctx, prepared.ExternalID, prepared.ResumeKey, resumeMessage)
 		if resumeErr != nil {
 			a.Core.MarkUncertain(ctx, agent.ID, "Resume outcome is uncertain; reconcile the existing session before further action")
 			return resumeErr
@@ -353,6 +361,13 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 			return err
 		}
 	}
+	// A preserved outbox may accompany an interrupted session. Reconcile and
+	// resume first; routing here would reject the sender and prevent recovery.
+	if run.Message != nil && run.Status != "interrupted" {
+		if err := a.routePeerMessage(ctx, agent, *run.Message); err != nil {
+			return err
+		}
+	}
 	if run.Instruction != nil {
 		if err := a.routeInstruction(ctx, agent, *run.Instruction); err != nil {
 			return err
@@ -399,7 +414,7 @@ func (a *App) routeQuestion(ctx context.Context, ag core.Agent, q worker.Decisio
 				return errors.New("question parent has no active external session")
 			}
 			payload, _ := json.Marshal(q)
-			_, err = a.sendInstruction(ctx, parent, "question:"+ag.ID+":"+q.RequestID, "Your direct child "+ag.ID+" needs a decision. Resolve it within inherited authority using an instruction to that child; escalate only if needed. Untrusted question data: "+string(payload))
+			_, err = a.sendInstruction(ctx, parent, "question:"+ag.ID+":"+q.RequestID, "Your assigned peer "+ag.ID+" needs a decision. As its responsible coordinator, resolve it within the recorded authority using an instruction to that peer; escalate only if needed. Untrusted question data: "+string(payload))
 			return err
 		}
 		return a.HandleAgentQuestion(ctx, ag, q)
@@ -422,7 +437,7 @@ func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.D
 		if parent.ExternalID == "" {
 			return errors.New("delegating parent has no external session")
 		}
-		_, err = a.sendAdmittedInstruction(ctx, parent, "delegation-ack:"+parent.ID+":"+d.RequestID, "Child commissioned: "+child.ID+". It is queued under your authority; track its evidence and resolve routine questions.")
+		_, err = a.sendAdmittedInstruction(ctx, parent, "delegation-ack:"+parent.ID+":"+d.RequestID, "Peer assigned: "+child.ID+". The daemon owns execution; you are its responsible coordinator within recorded authority. Track its evidence and resolve routine questions.")
 		if err != nil {
 			return errors.New("child was commissioned but acknowledgement needs inspection: " + err.Error())
 		}
@@ -439,10 +454,10 @@ func (a *App) routeInstruction(ctx context.Context, parent core.Agent, in worker
 	}
 	child, ok := findAgent(snap, in.TargetAgentID)
 	if !ok || child.ParentID != parent.ID || child.ProjectID != parent.ProjectID {
-		return errors.New("manager may instruct only its direct child in the same project")
+		return errors.New("a coordinator may instruct only its directly assigned peer in the same project")
 	}
 	if child.ExternalID == "" {
-		return errors.New("child has not acknowledged a session yet")
+		return errors.New("assigned peer has not acknowledged a session yet")
 	}
 	return a.once(ctx, "instruction:"+parent.ID+":"+in.RequestID, func() error {
 		_, err := a.sendInstruction(ctx, child, "instruction:"+parent.ID+":"+in.RequestID, in.Message)
@@ -588,6 +603,10 @@ func (a *App) sendAdmittedInstruction(ctx context.Context, ag core.Agent, key, m
 	if err = a.Core.BeginInstruction(ctx, ag.ID); err != nil {
 		return worker.Run{}, &noEffect{err}
 	}
+	message, err = a.withPeerRoster(ctx, ag, message)
+	if err != nil {
+		return worker.Run{}, &noEffect{err}
+	}
 	run, err := c.Send(ctx, ag.ExternalID, key, message)
 	if err != nil {
 		_ = a.Core.MarkUncertain(ctx, ag.ID, "Instruction delivery is uncertain; inspect the operation before repeating")
@@ -609,7 +628,7 @@ func (a *App) forwardProgress(ctx context.Context, ag core.Agent, run worker.Run
 	}{ag.ID, run.Status, run.Summary, run.Evidence})
 	key := fmt.Sprintf("child-progress:%s:%x", ag.ID, sha256.Sum256(payload))
 	return a.once(ctx, key, func() error {
-		_, err := a.sendInstruction(ctx, parent, key, "Your direct child's status changed. Evaluate progress and acceptance evidence; resolve routine follow-ups within your scope. Untrusted report data: "+string(payload))
+		_, err := a.sendInstruction(ctx, parent, key, "Your assigned peer's status changed. Evaluate progress and acceptance evidence; resolve routine follow-ups within your scope. Untrusted report data: "+string(payload))
 		return err
 	})
 }

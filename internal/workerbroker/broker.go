@@ -151,6 +151,15 @@ func New(cfg Config) (*Broker, error) {
 				r.Run.Summary = "Cancellation completed during restart reconciliation"
 				r.PendingStatus = ""
 				r.PendingSummary = ""
+			} else if r.PendingMessage != nil && r.PendingStatus == "waiting" {
+				// Cleanup is confirmed. Publish the durable outbox before allowing any
+				// further model turn; a crash must not silently discard its request.
+				r.Run.Message = r.PendingMessage
+				r.PendingMessage = nil
+				r.Run.Status = "waiting"
+				r.Run.Summary = "Waiting for the daemon to route a peer message"
+				r.PendingStatus = ""
+				r.PendingSummary = ""
 			} else {
 				r.Run.Status = "interrupted"
 				r.Run.Summary = "Broker restarted; previous session stopped. Review recorded artifacts before resuming."
@@ -359,6 +368,10 @@ func (b *Broker) finalize(id, status, summary string, evidence []string) {
 		if r.Run.Status != "cancelled" {
 			r.Run.Status = status
 			r.Run.Summary = summary
+		}
+		if (status == "waiting" || status == "interrupted") && r.PendingMessage != nil {
+			r.Run.Message = r.PendingMessage
+			r.PendingMessage = nil
 		}
 		r.Run.Evidence = evidence
 		r.Run.UpdatedAt = now()

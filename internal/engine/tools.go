@@ -66,11 +66,11 @@ func Tools() []Tool {
 		tool("read_state", "Read current projects, work, decisions, preferences, available profiles and authority.", nil, nil),
 		tool("create_project", "Track a project in local assistant state with a title and optional existing absolute directory paths. No Linear issue, external tracker, or connection is required. Objective may be empty and acceptance_criteria may be empty until commissioning. This creates coordination metadata only; it never opens or edits project files.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
 		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Optionally link existing absolute directories; null preserves current links. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
-		tool("delegate", "Commission an approved worker or manager. Use an empty parent_id when reporting directly to the PA. The daemon enforces inherited scope and limits.", []string{"project_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
+		tool("delegate", "Ask the daemon to commission an approved peer agent with a bounded outcome. The legacy parent_id identifies its responsible coordinator for escalation and inherited authority, not process ownership; empty means the PA. The daemon owns execution, recovery, scope and limits.", []string{"project_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),
 		tool("ask_decision", "Prepare an unresolved owner decision. Include recommendation, viable alternatives, consequences and evidence.", []string{"project_id", "question", "recommendation", "why"}, []string{"options", "evidence"}),
 		tool("remember_preference", "Remember an owner preference. This cannot grant permissions or change budgets.", []string{"key", "value"}, nil),
-		tool("message_agent", "Send a coordination instruction or answer to an existing agent. Does not grant new authority.", []string{"agent_id", "message"}, nil),
-		tool("complete_project", "Accept a completed project only after all descendant work is finished and evidence satisfies the acceptance criteria.", []string{"project_id"}, []string{"evidence"}),
+		tool("message_agent", "Route a coordination instruction or answer to an existing agent through the daemon. Does not grant new authority or directly control its process.", []string{"agent_id", "message"}, nil),
+		tool("complete_project", "Accept a completed project only after all commissioned project work is finished and evidence satisfies the acceptance criteria.", []string{"project_id"}, []string{"evidence"}),
 		tool("report_status", "Record an evidence-backed coordination update; this does not mark project work accepted or completed.", []string{"project_id", "summary"}, []string{"evidence"}),
 	}
 }

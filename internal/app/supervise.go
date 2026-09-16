@@ -208,6 +208,12 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 	if _, err = a.Core.ClaimEvent(ctx, key); err != nil {
 		return worker.Run{}, err
 	}
+	message, err = a.withPeerRoster(ctx, agent, message)
+	if err != nil {
+		// No broker request has been made; permit a later deliberate attempt.
+		_ = a.Core.ReleaseEvent(ctx, key)
+		return worker.Run{}, err
+	}
 	result, err := client.Send(ctx, agent.ExternalID, key, message)
 	if err == nil {
 		err = a.Core.CompleteEvent(ctx, key)

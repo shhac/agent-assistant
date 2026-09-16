@@ -12,6 +12,7 @@ export interface Project {
 }
 export interface Agent {
   id: string;
+  parent_id?: string;
   name: string;
   role: string;
   status: string;

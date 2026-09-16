@@ -47,7 +47,7 @@ For your own assistant:
 ./agent-assistant serve --open
 ```
 
-Choose engine, model and reasoning effort from the installed CLI’s live catalog in **Settings → Assistant and worker models**, independently for the assistant (`model`) and local coding workers (`worker_model`). The assistant defaults to `codex / gpt-6-astra / high`; the built-in downstream worker defaults to `codex / gpt-5.6-terra / high`. External manager brokers own their model selection. Explicit saved profiles are preserved when defaults change.
+Choose engine, model and reasoning effort from the installed CLI’s live catalog in **Settings → Assistant and worker models**, independently for the assistant (`model`) and local coding workers (`worker_model`). The assistant defaults to `codex / gpt-6-astra / high`; the built-in specialist worker defaults to `codex / gpt-5.6-terra / high`. External manager brokers own their model selection. Explicit saved profiles are preserved when defaults change.
 
 ```sh
 ./agent-assistant config set model.engine codex
@@ -162,7 +162,15 @@ Managed state and recovery records live under the daemon’s state directory. Th
 
 `--max-turns` on a manually operated broker is its cumulative model-call cap, including resumes and messages. Output, command duration and per-attempt wall time are bounded. Stable dispatch keys and durable receipts prevent blind retries of uncertain effects. Tests use fake CLIs, runtimes, providers, and brokers; a full real-runtime installation and paid worker run have not been exercised during development.
 
-External brokers remain trusted enforcement boundaries. They must provide idempotency, truthful progress timestamps, isolated workspaces and role-specific tools. Managers coordinate through the daemon so descendant scope and shared limits remain enforced.
+External brokers remain trusted enforcement boundaries. They must provide idempotency, truthful progress timestamps, isolated workspaces and role-specific tools. Coordinators request work through the daemon, which enforces inherited scope and shared limits.
+
+## Agents and coordination
+
+Each commissioned agent owns a bounded outcome and acceptance criteria. The assistant coordinates the owner's commitments; a project coordinator is useful when the work needs one. Agents exchange messages through the daemon, which owns sessions, routing, recovery and execution limits.
+
+Same-project peer messages carry daemon-supplied sender identity and do not grant permissions, change acceptance criteria or bypass a coordinator. Questions still escalate through the responsible coordinator to the assistant and, when needed, the owner. The project Workers panel shows that escalation contact by name. Existing `parent_id` records describe that authority and escalation relationship; they do not mean the assistant model directly owns another process.
+
+The built-in specialist broker offers `send_message`. Delivery and acknowledgement have separate durable records, so a held acknowledgement does not repeat a delivered message. An unavailable recipient produces a not-delivered response so the sender can continue or escalate; uncertain delivery requires inspection. The roster is refreshed on starts, resumes and delivered messages, not continuously. Built-in workers remain specialists; project-manager runtimes still require a compatible external broker.
 
 ## Worker subscription limits
 
@@ -190,7 +198,7 @@ The PA has no shell, code-writing, deployment, production-data, or purchase tool
 
 The current limits bound concurrent execution, delegation depth, recovery attempts, model turns and durable model-call reservations per UTC day. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, quiet hours/digests, transcript-retention controls, raster avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
 
-Completion requires recorded evidence and no unfinished descendants or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
+Completion requires recorded evidence and no unfinished assignments or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
 
 ## Development
 

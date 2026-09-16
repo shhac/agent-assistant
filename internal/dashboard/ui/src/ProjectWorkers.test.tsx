@@ -71,6 +71,29 @@ const response = (body: unknown, ok = true) => ({
 });
 
 describe("project workers", () => {
+  it("shows the responsible coordinator by name without leaking missing or foreign identities", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ workers: [worker] })));
+    const coordinator = { ...agent, id: "hidden-coordinator", name: "Garden coordinator", role: "manager" };
+    const view = render(
+      <ProjectWorkers project={project} state={normalizeState({
+        assistant: { name: "Quill", personality: "Concise" },
+        agents: [coordinator, { ...agent, parent_id: coordinator.id }],
+      })} refresh={async () => {}} />,
+    );
+    await screen.findByText("Garden builder");
+    const assignment = screen.getByRole("article", { name: agent.name });
+    expect(within(assignment).getByText("Garden coordinator")).toBeTruthy();
+    expect(view.container.textContent).not.toContain("hidden-");
+    view.rerender(
+      <ProjectWorkers project={project} state={normalizeState({
+        agents: [{ ...coordinator, project_id: "foreign-project", name: "Private coordinator" },
+          { ...agent, parent_id: coordinator.id }],
+      })} refresh={async () => {}} />,
+    );
+    expect(within(assignment).getByText("Coordinator unavailable")).toBeTruthy();
+    expect(view.container.textContent).not.toContain("Private coordinator");
+    expect(view.container.textContent).not.toContain("hidden-");
+  });
   it("separates preparation from commissioned work without exposing identifiers", async () => {
     vi.stubGlobal(
       "fetch",

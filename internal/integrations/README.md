@@ -55,7 +55,7 @@ The broker implements these JSON endpoints under its configured base URL:
 
 All POST requests carry an `Idempotency-Key`. The broker must durably associate it with the operation before launching or messaging an agent, return the same result for identical retries, and reject reuse with changed contents. `GET` by dispatch key must establish whether the original operation exists. A 404 must never mean merely that the broker is still eventually indexing an already-started run. A transport failure, malformed success or 5xx from a mutation is an uncertain outcome, not permission to launch another agent.
 
-The start JSON includes `dispatch_key`, `agent_id`, `project_id`, optional `parent_id`, `role`, `task`, `acceptance_criteria`, `capabilities`, immutable `prohibitions` and `check_in_deadline`. Managers receive only `coordinate` in executable `capabilities`; `delegation_capabilities` records their allowed descendant scope. A manager must send delegation requests to the daemon rather than start hidden children itself, so aggregate limits and ancestry remain enforced.
+The start JSON includes `dispatch_key`, `agent_id`, `project_id`, optional `parent_id`, `role`, `task`, `acceptance_criteria`, `capabilities`, immutable `prohibitions` and `check_in_deadline`. Managers receive only `coordinate` in executable `capabilities`; `delegation_capabilities` records their allowed delegation scope. A coordinator requests assignments through the daemon, which owns their execution and enforces aggregate limits and authority. The legacy `parent_id` names the responsible coordinator for authority and escalation; it does not imply process ownership.
 
 Responses are one run object:
 
@@ -74,8 +74,13 @@ Recognized statuses are `queued`, `running`, `waiting`, `blocked`, `interrupted`
 
 A run can additionally return:
 
-- `decision`: `{request_id, question, recommendation, options: [], why, evidence: []}` for its actual parent to resolve.
-- `delegation`: `{request_id, worker_profile, role, task, acceptance_criteria, capabilities: []}` for a manager to commission a child through the daemon.
-- `instruction`: `{request_id, target_agent_id, message}` for a manager to address its direct child. The daemon validates ancestry; IDs are not authority.
+- `decision`: `{request_id, question, recommendation, options: [], why, evidence: []}` for its responsible coordinator to resolve.
+- `delegation`: `{request_id, worker_profile, role, task, acceptance_criteria, capabilities: []}` for a coordinator to commission a scoped assignment through the daemon.
+- `instruction`: `{request_id, target_agent_id, message}` for a coordinator to instruct its directly assigned agent. The daemon validates the authority link; IDs are not authority.
+- `message`: `{request_id, target_agent_id, message}` for a same-project peer to exchange information through the daemon. The sender comes from the reporting run, never the payload; self/cross-project targets are rejected. Content is limited to 8,000 bytes and request IDs to 128 bytes. This surface does not grant coordinator authority. Delivery and sender acknowledgement are tracked separately. Unavailable recipients receive no message and the sender gets a not-delivered response, avoiding a wait that could prevent a queued recipient from starting. Uncertain delivery requires inspection before replay.
 
 Request IDs must remain stable across status reads until resolved. They are separate from operation idempotency keys and run IDs. The application deduplicates these requests and delivers decisions with the messages endpoint. Any required request that cannot be resolved within existing authority goes to the PA and finally the owner.
+
+The daemon appends a bounded project peer address book to task/message text, preserving the existing start-request shape for older brokers. It lists up to 64 other unfinished assignments within an 8 KiB encoded budget and can become stale; the daemon rechecks identities, scope and authority when routing. Peer content is explicitly marked untrusted and cannot replace acceptance criteria or prohibitions. Brokers must retain an outbound request until its matching daemon acknowledgement, including if other inbound messages arrive.
+
+Delivery outcomes return through the existing messages endpoint with key `peer-message-ack:<sender-agent-id>:<request-id>`. Matching that key acknowledges the pending outbound request, whether delivered or rejected; unrelated inbound messages must not clear it. An acknowledgement confirms transport acceptance only, not agreement or task completion.

@@ -20,6 +20,11 @@ type Project struct {
 	SourceID           string    `json:"source_id,omitempty"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
+
+// Agent is a durable, scoped assignment owned by the daemon, independent of
+// the assistant model turn that commissioned it. Role describes responsibility.
+// ParentID retains the stored/wire name for its authority and escalation link;
+// it is not subprocess ownership or a restriction on peer communication.
 type Agent struct {
 	LastProgressAt      time.Time `json:"last_progress_at,omitempty"`
 	ProgressFingerprint string    `json:"progress_fingerprint,omitempty"`
@@ -110,6 +115,9 @@ type ProjectInput struct {
 	AcceptanceCriteria string   `json:"acceptance_criteria"`
 	SourceID           string   `json:"source_id,omitempty"`
 }
+
+// DelegateInput requests a daemon-owned assignment. ParentID selects the
+// responsible coordinator and constrains delegated capabilities.
 type DelegateInput struct {
 	ProjectID          string   `json:"project_id"`
 	ParentID           string   `json:"parent_id,omitempty"`

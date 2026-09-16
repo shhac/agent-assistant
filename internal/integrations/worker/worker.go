@@ -29,6 +29,16 @@ type Client struct {
 	http    *http.Client
 	allowed map[string]bool
 }
+
+// Peer is a daemon-provided address book entry, not a grant of authority.
+type Peer struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Role   string `json:"role"`
+	Task   string `json:"task"`
+	Status string `json:"status"`
+}
+
 type StartRequest struct {
 	DelegationCapabilities []string  `json:"delegation_capabilities,omitempty"`
 	DispatchKey            string    `json:"dispatch_key"`
@@ -65,7 +75,16 @@ type Instruction struct {
 	Message       string `json:"message"`
 }
 
+// PeerMessage requests a daemon-routed exchange of information. It does not
+// carry sender-supplied identity or coordinator authority.
+type PeerMessage struct {
+	RequestID     string `json:"request_id"`
+	TargetAgentID string `json:"target_agent_id"`
+	Message       string `json:"message"`
+}
+
 type Run struct {
+	Message     *PeerMessage       `json:"message,omitempty"`
 	Instruction *Instruction       `json:"instruction,omitempty"`
 	Delegation  *DelegationRequest `json:"delegation,omitempty"`
 	ID          string             `json:"id"`

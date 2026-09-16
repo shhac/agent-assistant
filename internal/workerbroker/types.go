@@ -57,6 +57,7 @@ func (f CommandFunc) Run(ctx context.Context, args []string, in []byte) ([]byte,
 }
 
 type storedRun struct {
+	PendingMessage *worker.PeerMessage `json:"pending_message,omitempty"`
 	PendingStatus  string              `json:"pending_status,omitempty"`
 	PendingSummary string              `json:"pending_summary,omitempty"`
 	Run            worker.Run          `json:"run"`

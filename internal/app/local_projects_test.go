@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestLocalProjectLifecycleWithoutLinear(t *testing.T) {
 						w.WriteHeader(400)
 						return
 					}
-					if req.ProjectID == "" || req.Task != "Improve the local assistant" {
+					if req.ProjectID == "" || !strings.HasPrefix(req.Task, "Improve the local assistant\n\nDaemon project peer address book") {
 						t.Errorf("unexpected commission: %+v", req)
 					}
 					run.DispatchKey = req.DispatchKey

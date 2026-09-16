@@ -35,6 +35,7 @@ func workerTools() []engine.Tool {
 		workerTool("read_file", "Read a relative text file inside the isolated workspace.", []string{"path"}, nil),
 		workerTool("write_file", "Write a relative text file inside the isolated workspace.", []string{"path", "content"}, nil),
 		workerTool("run_command", "Run an offline build, test or inspection command inside the isolated Docker container. Never install dependencies or contact remote services.", []string{"command"}, nil),
+		workerTool("send_message", "Ask the daemon to send bounded task information to a project peer. This grants no authority and waits for a delivery acknowledgement; use ask_decision for approval or scope changes.", []string{"target_agent_id", "message"}, nil),
 		workerTool("ask_decision", "Stop for a prepared question to the responsible coordinator.", []string{"question", "recommendation", "why"}, []string{"options", "evidence"}),
 		workerTool("finish", "Report an acceptance summary after actual changes and checks. The daemon collects patch and command evidence for independent PA review.", []string{"summary"}, nil),
 	}

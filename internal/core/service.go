@@ -664,14 +664,18 @@ func pendingOperation(v Snapshot, id string) PendingOperation {
 		out.Summary = "A worker question needs delivery or decision confirmation."
 	case "instruction", "decision-answer":
 		out.Summary = "An agent instruction or owner answer needs delivery confirmation."
+	case "peer-message":
+		out.Summary = "A peer message needs delivery confirmation; it was not replayed."
+	case "peer-message-ack":
+		out.Summary = "A peer message delivery acknowledgement needs confirmation."
 	case "delegation":
-		out.Summary = "A requested child commission or its acknowledgement needs confirmation."
+		out.Summary = "A requested agent assignment or its acknowledgement needs confirmation."
 	case "project-review":
 		out.Summary = "An acceptance review needs inspection; its model actions were not replayed."
 	case "notify":
 		out.Summary = "An owner notification needs delivery confirmation."
 	case "child-progress":
-		out.Summary = "A child progress report needs delivery confirmation to its manager."
+		out.Summary = "An agent progress report needs delivery confirmation to its coordinator."
 	}
 	for _, a := range v.Agents {
 		if contains(parts, a.ID) {

@@ -122,8 +122,8 @@ export function ProjectWorkers({
         </button>
       </div>
       <p className="field-hint">
-        Prepared workers are available for assignments. Commissioned work below
-        shows what your assistant has actually handed over.
+        Each commissioned agent owns a scoped outcome. Your assistant coordinates
+        the work; the daemon manages sessions, messages and follow-up.
       </p>
       {error && (
         <div className="error-notice" role="alert">
@@ -245,6 +245,11 @@ function Assignment({
   const decisions = pendingDecisions(state.decisions).filter(
     (decision) => decision.agent_id === agent.id,
   );
+  const coordinator = agent.parent_id
+    ? state.agents.find(
+        (peer) => peer.id === agent.parent_id && peer.project_id === agent.project_id,
+      )?.name || "Coordinator unavailable"
+    : state.assistant.name || "Your assistant";
   const due = meaningfulDate(agent.next_check_in);
   const overdue =
     !terminal.has(agent.status) && due && due.getTime() < Date.now();
@@ -273,6 +278,10 @@ function Assignment({
         </p>
       )}
       <dl className="worker-facts">
+        <div>
+          <dt>Escalates to</dt>
+          <dd>{coordinator}</dd>
+        </div>
         <div>
           <dt>Last worker report</dt>
           <dd>{timestamp(agent.broker_updated_at)}</dd>

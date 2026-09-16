@@ -218,10 +218,19 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		run.Messages = append(run.Messages, message)
-		if run.Run.Status == "blocked" || run.Run.Status == "interrupted" {
+		if run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {
 			run.Run.Status = "queued"
 			run.Run.Decision = nil
+			if run.Run.Message != nil && key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID {
+				run.Run.Message = nil
+			}
 			run.Run.Summary = "Existing isolated workspace queued to continue"
+			// Recovery may preserve an undelivered outbox after artifact collection
+			// failed. Resume coordination first; never overwrite it with another turn.
+			if run.Run.Message != nil {
+				run.Run.Status = "waiting"
+				run.Run.Summary = "Waiting for the daemon to route a peer message"
+			}
 		}
 	}
 	run.Run.UpdatedAt = now()
