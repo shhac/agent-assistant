@@ -51,9 +51,9 @@ func (a *App) Run(ctx context.Context, noDispatch bool) error {
 	if cfg.Slack.OwnerUserID != "" {
 		slackClient, err = slackapi.New(slackapi.Config{BotTokenEnv: cfg.Slack.BotTokenEnv, AppTokenEnv: cfg.Slack.AppTokenEnv, OwnerUserID: cfg.Slack.OwnerUserID}, inbox{a.Core})
 		if err != nil {
-			a.Status("slack", "Slack", "error", err.Error())
+			a.Status("slack", "Slack bot messaging", "error", err.Error())
 		} else {
-			a.Status("slack", "Slack", "configured", "Owner DM listener starting")
+			a.Status("slack", "Slack bot messaging", "configured", "Owner DM listener starting")
 			listeners.Add(1)
 			go func() {
 				defer listeners.Done()
@@ -68,7 +68,7 @@ func (a *App) Run(ctx context.Context, noDispatch bool) error {
 					return result.Message, nil
 				})
 				if ctx.Err() == nil && err != nil {
-					a.Status("slack", "Slack", "error", err.Error())
+					a.Status("slack", "Slack bot messaging", "error", err.Error())
 				}
 			}()
 		}

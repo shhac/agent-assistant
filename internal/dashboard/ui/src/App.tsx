@@ -1294,6 +1294,7 @@ function Settings({
         )}
         {config && (
           <ConfigurationFields
+            projects={state.projects}
             config={config}
             onChange={(next) => {
               setConfig(next);
@@ -1539,12 +1540,64 @@ function CoordinateProject({
     </div>
   );
 }
+/**
+ * The global setting is a default for workers created later; a project worker
+ * can carry its own model. Showing both prevents the settings page and a
+ * project page from looking as though they disagree.
+ */
+function WorkerModelOverrides({
+  config,
+  projects,
+}: {
+  config: Config;
+  projects: Project[];
+}) {
+  const fallback = (config.worker_model || {}) as Record<string, unknown>;
+  const overridden = (config.workers || []).filter(
+    (worker) => worker.managed === true && !!worker.model_profile,
+  );
+  if (!overridden.length) return null;
+  const describe = (model: Record<string, unknown>) =>
+    [model.engine, model.model, model.effort && `${model.effort} effort`]
+      .filter(Boolean)
+      .join(" · ");
+  return (
+    <div className="worker-overrides">
+      <h3>Project workers with their own model</h3>
+      <p className="field-hint">
+        These projects do not use the default above. The effective model is what
+        their next assignment will run.
+      </p>
+      <dl>
+        {overridden.map((worker) => (
+          <div key={worker.id}>
+            <dt>
+              {projects.find((p) => p.id === worker.project_id)?.title ||
+                worker.name ||
+                worker.id}
+            </dt>
+            <dd>
+              {describe(worker.model_profile as Record<string, unknown>) ||
+                "Not recorded"}
+            </dd>
+          </div>
+        ))}
+        <div>
+          <dt>Default for new workers</dt>
+          <dd>{describe(fallback) || "Not recorded"}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
 function ConfigurationFields({
   config,
   onChange,
+  projects,
 }: {
   config: Config;
   onChange: (value: Config) => void;
+  projects: Project[];
 }) {
   const [listDrafts, setListDrafts] = useState<Record<string, string>>({});
   const linear = (config.linear || {}) as Record<string, unknown>;
@@ -1608,8 +1661,8 @@ function ConfigurationFields({
   }
   return (
     <div className="configuration-fields">
-      <details>
-        <summary>Assistant and worker models</summary>
+      <details className="settings-group" open>
+        <summary>Models and worker defaults</summary>
         <p className="field-hint">
           Enter environment variable names for credentials. Never paste a token
           or API key. Connection changes may require restarting the daemon.
@@ -1625,7 +1678,12 @@ function ConfigurationFields({
           onChange={onChange}
           group="worker_model"
           title="Worker"
+          legend="Default model for new workers"
         />
+        <WorkerModelOverrides config={config} projects={projects} />
+      </details>
+      <details className="settings-group">
+        <summary>Advanced</summary>
         <details className="advanced-connection">
           <summary>Advanced: Slack bot and direct Linear API</summary>
           <p className="field-hint">
@@ -1679,8 +1737,8 @@ function ConfigurationFields({
           </div>
         </details>
       </details>
-      <details>
-        <summary>Capacity and supervision</summary>
+      <details className="settings-group">
+        <summary>Capacity and recovery</summary>
         <p className="field-hint">
           These limits apply across coordinated work. Model call counts are an
           operating limit, not a dollar budget.

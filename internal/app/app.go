@@ -85,7 +85,7 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 		return s, err
 	}
 	cfg := a.Config()
-	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "slack", Name: "Slack", Status: "not_configured", Detail: "Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Ask your assistant to prepare a worker for a project"}}
+	s.Integrations = []core.Integration{{ID: "model", Name: "Assistant model", Status: "not_configured", Detail: "Choose a model in Settings"}, {ID: "slack", Name: "Slack bot messaging", Status: "not_configured", Detail: "Sends and receives owner direct messages. Configure owner identity and Socket Mode credentials"}, {ID: "workers", Name: "Worker runtimes", Status: "not_configured", Detail: "Ask your assistant to prepare a worker for a project"}}
 	if cfg.Model.Model != "" {
 		s.Integrations[0].Status = "configured"
 		s.Integrations[0].Detail = strings.Join([]string{cfg.Model.Engine, cfg.Model.Model, cfg.Model.Effort}, " / ")
@@ -99,14 +99,14 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 		s.Integrations = append(s.Integrations, core.Integration{ID: "linear", Name: "Linear assignment import", Status: "configured", Detail: "Optional import from selected teams; local projects remain independent"})
 	}
 	for _, c := range cfg.Connections {
-		state, detail := "configured", "Read-only CLI accounts: "+strings.Join(c.Profiles, ", ")
+		state, detail := "configured", "Reading only, through CLI accounts: "+strings.Join(c.Profiles, ", ")
 		if c.Tool == "lin" && !c.ImportAssignments {
 			detail += "; optional resource, assignment import off"
 			ignoreLive["connection:"+c.ID] = true
 		}
 		if c.Tool == "agent-notion" {
 			if len(c.Profiles) == 0 {
-				state, detail = "configured", "Read-only CLI default account"
+				state, detail = "configured", "Reading only, through the CLI default account"
 			} else {
 				state, detail = "unavailable", "Choose the CLI default account for Notion"
 			}

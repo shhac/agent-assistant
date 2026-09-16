@@ -561,4 +561,77 @@ describe("decision alternatives", () => {
       reason: "Already configured",
     });
   });
+
+  it("names the worker model setting as a default and shows project overrides", async () => {
+    const config = {
+      assistant: { name: "Iris", personality: "" },
+      worker_model: { engine: "codex", model: "gpt-5.6-terra", effort: "high" },
+      workers: [
+        {
+          id: "managed-p1",
+          managed: true,
+          project_id: "project-1",
+          name: "Garden builder",
+          model_profile: {
+            engine: "claude",
+            model: "opus-5",
+            effort: "high",
+          },
+        },
+      ],
+    };
+    state.projects = [
+      {
+        id: "project-1",
+        title: "Garden planner",
+        description: "",
+        acceptance_criteria: [],
+        status: "active",
+      },
+    ];
+    respond = (path) => ({ body: path === "/api/config" ? config : state });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
+    // The global value is a default, not the model every worker uses.
+    expect(
+      await screen.findByText("Default model for new workers"),
+    ).toBeTruthy();
+    // Settings and a project page previously looked as though they disagreed.
+    const overrides = await screen.findByText(
+      "Project workers with their own model",
+    );
+    const block = overrides.closest("div") as HTMLElement;
+    expect(block.textContent).toContain("Garden planner");
+    expect(block.textContent).toContain("claude · opus-5 · high effort");
+    expect(block.textContent).toContain("codex · gpt-5.6-terra · high effort");
+    state.projects = [];
+  });
+
+  it("separates Slack reading from Slack bot messaging", async () => {
+    state.integrations = [
+      {
+        id: "slack",
+        name: "Slack bot messaging",
+        status: "not_configured",
+        detail:
+          "Sends and receives owner direct messages. Configure owner identity and Socket Mode credentials",
+      },
+      {
+        id: "connection:slack-read",
+        name: "Slack",
+        status: "configured",
+        detail: "Reading only, through CLI accounts: personal",
+      },
+    ];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
+    expect(await screen.findByText("Slack bot messaging")).toBeTruthy();
+    expect(
+      screen.getByText(/Reading only, through CLI accounts: personal/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Sends and receives owner direct messages/),
+    ).toBeTruthy();
+    state.integrations = [];
+  });
 });

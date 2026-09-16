@@ -3267,3 +3267,37 @@ textarea {
 .project-reference[open] > summary {
   margin-bottom: 10px;
 }
+.settings-group {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+.settings-group > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.worker-overrides {
+  margin-top: 18px;
+}
+.worker-overrides h3 {
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+.worker-overrides dl {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.worker-overrides dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.worker-overrides dt {
+  color: var(--muted);
+}
+.worker-overrides dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

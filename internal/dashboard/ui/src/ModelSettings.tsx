@@ -23,11 +23,14 @@ export function ModelSettings({
   onChange,
   group,
   title,
+  legend,
 }: {
   config: Config;
   onChange: (value: Config) => void;
   group: "model" | "worker_model";
   title: string;
+  /** Group heading, when the owner-facing name differs from the field prefix. */
+  legend?: string;
 }) {
   const model = (config[group] || {}) as Record<string, unknown>;
   const value = (key: string) => String(model[key] ?? "");
@@ -85,7 +88,7 @@ export function ModelSettings({
   };
   return (
     <fieldset className="config-field-group">
-      <legend>{title} model</legend>
+      <legend>{legend || `${title} model`}</legend>
       <p className="field-hint">
         {group === "model"
           ? "Used for conversation, coordination and acceptance reviews. The recommended selection is ready to use."
