@@ -83,26 +83,46 @@ export function humanStatus(value: string) {
   return (value || "pending").replaceAll("_", " ");
 }
 
+/**
+ * A time the daemon actually recorded. Go serializes an unset time as year
+ * one, so that reaches the client as a real-looking timestamp; treating it as
+ * a date prints "Jan 1, 12:00 AM" for "never happened".
+ */
+export function recordedTime(value?: string): Date | null {
+  if (!value || value.startsWith("0001-")) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? null : date;
+}
+
 export function dateLabel(value?: string) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.valueOf())
-    ? ""
-    : d.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+  return (
+    recordedTime(value)?.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }) || ""
+  );
+}
+
+/** The longer form, for places with room for a full date. */
+export function fullDateLabel(value?: string) {
+  return (
+    recordedTime(value)?.toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }) || ""
+  );
 }
 
 /** Elapsed time in the owner's terms; exact timestamps stay available alongside. */
-export function sinceLabel(value?: string, now: Date = new Date()) {
-  if (!value) return "";
-  const then = new Date(value);
-  if (Number.isNaN(then.valueOf())) return "";
-  const minutes = Math.round((now.valueOf() - then.valueOf()) / 60000);
-  if (minutes < 0) return "";
+export function sinceLabel(value?: string) {
+  const then = recordedTime(value);
+  if (!then) return "";
+  // Recorded times come from several clocks, including broker-supplied ones,
+  // so a stamp slightly ahead of this one is an expected input. Reporting it as
+  // unusable would make work that just reported look abandoned.
+  const minutes = Math.round((Date.now() - then.valueOf()) / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);

@@ -8,6 +8,7 @@ import {
   type State,
 } from "./api";
 import { stateDetail } from "./states";
+import { fullDateLabel, humanStatus, recordedTime } from "./ui";
 import { WorkerEditor } from "./WorkerEditor";
 import "./workers.css";
 
@@ -24,21 +25,8 @@ export interface ProjectWorker {
   detail: string;
 }
 const terminal = new Set(["completed", "cancelled"]);
-function meaningfulDate(value?: string) {
-  if (!value || value.startsWith("0001-")) return null;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date : null;
-}
 function timestamp(value?: string) {
-  return (
-    meaningfulDate(value)?.toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }) || "Not recorded"
-  );
-}
-function label(value: string) {
-  return value.replaceAll("_", " ");
+  return fullDateLabel(value) || "Not recorded";
 }
 
 export function ProjectWorkers({
@@ -170,7 +158,7 @@ export function ProjectWorkers({
                 </div>
                 <div>
                   <dt>Model status</dt>
-                  <dd>{label(worker.model_status || "unknown")}</dd>
+                  <dd>{humanStatus(worker.model_status || "unknown")}</dd>
                 </div>
                 <div>
                   <dt>Project folder</dt>
@@ -255,7 +243,7 @@ function CommissionedAssignment({
   const outcome = state.work_items.find(
     (work) => work.id === agent.work_item_id,
   );
-  const due = meaningfulDate(agent.next_check_in);
+  const due = recordedTime(agent.next_check_in);
   const overdue =
     !terminal.has(agent.status) && due && due.getTime() < Date.now();
   return (
@@ -268,7 +256,7 @@ function CommissionedAssignment({
         <span className="worker-state">{stateDetail(agent.status)}</span>
       </div>
       <p className="field-hint">
-        {label(agent.role)}
+        {humanStatus(agent.role)}
         {worker ? ` · ${worker.name}` : " · Worker settings unavailable"}
       </p>
       {outcome && <p className="field-hint">Outcome: {outcome.title}</p>}

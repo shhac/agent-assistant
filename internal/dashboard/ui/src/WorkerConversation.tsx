@@ -8,6 +8,7 @@ import {
 import { api, APIError, errorText, type Agent } from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { stateDetail } from "./states";
+import { fullDateLabel } from "./ui";
 import "./work.css";
 
 type Action = "pause" | "resume" | "stop";
@@ -294,15 +295,12 @@ function WorkerConversationPanel({
         this assignment. Only recorded exchanges appear; earlier work may
         predate conversation recording. Private model reasoning is not included.
       </p>
-      {agent.retry_at &&
-        !agent.retry_at.startsWith("0001-") &&
-        agent.status === "retry_wait" && (
-          <p role="status" className="field-hint">
-            Next provider retry after{" "}
-            {new Date(agent.retry_at).toLocaleString()}. Saved work is
-            preserved.
-          </p>
-        )}
+      {agent.status === "retry_wait" && fullDateLabel(agent.retry_at) && (
+        <p role="status" className="field-hint">
+          Next provider retry after {fullDateLabel(agent.retry_at)}. Saved work
+          is preserved.
+        </p>
+      )}
       {!!agent.context_compactions && (
         <p className="field-hint">
           {agent.context_compactions} context checkpoint

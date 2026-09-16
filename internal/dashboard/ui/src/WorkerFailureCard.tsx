@@ -32,7 +32,7 @@ export function WorkerFailureCard({
         </span>
         <div>
           <strong>{explanation.headline}</strong>
-          {stoppedAt && !stoppedAt.startsWith("0001-") && (
+          {dateLabel(stoppedAt) && (
             <p className="field-hint">
               Last recorded {since || "recently"} ·{" "}
               <time dateTime={stoppedAt}>{dateLabel(stoppedAt)}</time>
@@ -66,7 +66,7 @@ export function WorkerFailureCard({
           <dt>Recovery</dt>
           <dd>
             {explanation.recovery}
-            {agent.retry_at && !agent.retry_at.startsWith("0001-") && (
+            {dateLabel(agent.retry_at) && (
               <>
                 {" "}
                 Next attempt after{" "}

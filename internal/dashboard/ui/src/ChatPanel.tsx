@@ -10,44 +10,9 @@ import {
   type State,
 } from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+import { dateLabel, Icon } from "./ui";
 import { isHeldUp } from "./states";
 import "./chat.css";
-function Icon({ name, size = 18 }: { name: string; size?: number }) {
-  const icons: Record<string, string> = {
-    Arrow: "M5 12h14M13 6l6 6-6 6",
-    Close: "M6 6l12 12M18 6L6 18",
-    Send: "M12 19V5M6 11l6-6 6 6",
-    Expand: "M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5",
-    Shrink: "M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5",
-  };
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={icons[name]} />
-    </svg>
-  );
-}
-function dateLabel(value?: string) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.valueOf())
-    ? ""
-    : d.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
 type VisibleTurn = Omit<ChatTurn, "status"> & {
   status:
     ChatTurn["status"] | "waiting" | "sending" | "unconfirmed" | "rejected";
