@@ -1139,6 +1139,39 @@ nav {
   gap: 10px;
   font-size: 12px;
 }
+.history-row > div {
+  text-align: right;
+  min-width: 0;
+}
+.history-row.dismissed {
+  border-left: 3px solid var(--line);
+}
+.history-row.answered {
+  border-left: 3px solid var(--accent);
+}
+.history-row.dismissed > span:first-child {
+  color: var(--muted);
+}
+.history-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+.history-context {
+  margin-top: 8px;
+  font-size: 12px;
+  text-align: left;
+}
+.history-context > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.history-context > p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
 .muted {
   font-size: 12px;
   color: var(--muted);
@@ -1416,6 +1449,26 @@ label {
   width: 100%;
   margin-top: 23px;
   justify-content: space-between;
+}
+.login-help {
+  margin-top: 14px;
+}
+.login-help p {
+  margin: 0;
+}
+.login-help pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.login-help code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: pre;
 }
 .login-private {
   display: flex;
@@ -2350,10 +2403,29 @@ textarea {
   margin-left: auto;
   flex-shrink: 0;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  padding: 6px 10px;
 }
 .chat-expand:hover {
   background: var(--surface-raised);
   color: var(--text);
+}
+.chat-expand-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .chat-expand-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 .chat-context-strip {
   padding: 26px 44px 0;

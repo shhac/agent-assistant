@@ -34,6 +34,18 @@ import {
 
 import { WorkerSettings } from "./WorkerSettings";
 import { PendingOperations } from "./PendingOperations";
+import { DecisionHistory } from "./DecisionHistory";
+import { groupActivity } from "./activity";
+import {
+  dateLabel,
+  Empty,
+  ErrorNotice,
+  humanStatus,
+  Icon,
+  Mark,
+  PageHeading,
+  Status,
+} from "./ui";
 
 type Page = "Overview" | "Projects" | "Decisions" | "Memory" | "Settings";
 const pages: Page[] = [
@@ -43,116 +55,6 @@ const pages: Page[] = [
   "Memory",
   "Settings",
 ];
-const icons: Record<string, string> = {
-  Overview: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
-  Projects: "M3 7h7l2-3h9v16H3z",
-  Decisions: "M12 3l9 9-9 9-9-9zM12 8v5M12 16h.01",
-  Memory: "M6 3h12v18l-6-4-6 4z",
-  Settings: "M4 7h16M4 17h16M8 4v6M16 14v6",
-  Arrow: "M5 12h14M13 6l6 6-6 6",
-  Plus: "M12 5v14M5 12h14",
-  Close: "M6 6l12 12M18 6L6 18",
-  Send: "M12 19V5M6 11l6-6 6 6",
-  Check: "M5 12l4 4L19 6",
-  Pause: "M8 5v14M16 5v14",
-  Play: "M7 4l14 8-14 8z",
-  Message: "M4 4h16v13H9l-5 4z",
-  Lock: "M6 10h12v11H6zM8 10V6a4 4 0 018 0v4",
-  Chevron: "M9 5l7 7-7 7",
-  Expand:
-    "M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5M3 3l6 6M21 3l-6 6M3 21l6-6M21 21l-6-6",
-  Shrink: "M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5",
-  Bell: "M5 17h14l-2-3V9a5 5 0 00-10 0v5zM10 21h4",
-};
-function Icon({ name, size = 18 }: { name: string; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={icons[name] || icons.Projects} />
-    </svg>
-  );
-}
-function Mark({ small = false }: { small?: boolean }) {
-  return (
-    <span
-      className={`assistant-mark ${small ? "small" : ""}`}
-      aria-hidden="true"
-    >
-      <i />
-      <i />
-      <i />
-      <i />
-    </span>
-  );
-}
-function Status({
-  children,
-  tone = "",
-}: {
-  children: ReactNode;
-  tone?: string;
-}) {
-  return (
-    <span className={`status ${tone}`}>
-      <span className="status-dot" />
-      {children}
-    </span>
-  );
-}
-function ErrorNotice({ error }: { error: string }) {
-  return error ? (
-    <div className="error-notice" role="alert">
-      {error}
-    </div>
-  ) : null;
-}
-function humanStatus(value: string) {
-  return (value || "pending").replaceAll("_", " ");
-}
-function dateLabel(value?: string) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.valueOf())
-    ? ""
-    : d.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-function Empty({
-  icon,
-  title,
-  children,
-  action,
-}: {
-  icon: string;
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="empty-state">
-      <span className="empty-icon">
-        <Icon name={icon} size={24} />
-      </span>
-      <h3>{title}</h3>
-      <p>{children}</p>
-      {action}
-    </div>
-  );
-}
-
 export function App() {
   const [state, setState] = useState<State | null>(null);
   const [page, setPage] = useState<Page>("Overview");
@@ -495,34 +397,10 @@ export function App() {
                   recommendation here.
                 </Empty>
               ) : null}
-              {state.decisions.some((d) => !decisions.includes(d)) && (
-                <section className="section-block">
-                  <div className="section-heading">
-                    <h2>Decision history</h2>
-                  </div>
-                  {state.decisions
-                    .filter((d) => !decisions.includes(d))
-                    .map((d) => (
-                      <div className="history-row" key={d.id}>
-                        <span>
-                          <Icon name="Check" size={16} />
-                          {d.title}
-                        </span>
-                        <div>
-                          <Status>{humanStatus(d.status)}</Status>
-                          {(d.answer || d.resolution_reason) && (
-                            <p className="muted">
-                              {d.status === "dismissed"
-                                ? "Reason: "
-                                : "Answer: "}
-                              {d.resolution_reason || d.answer}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                </section>
-              )}
+              <DecisionHistory
+                decisions={state.decisions.filter((d) => !decisions.includes(d))}
+                projects={state.projects}
+              />
             </section>
           )}
           {page === "Memory" && <MemoryView state={state} refresh={refresh} />}
@@ -585,28 +463,6 @@ export function App() {
     </div>
   );
 }
-function PageHeading({
-  eyebrow,
-  title,
-  description,
-  action,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="page-heading">
-      <div>
-        <p className="eyebrow">{eyebrow}</p>
-        <h1>{title}</h1>
-        <p className="page-description">{description}</p>
-      </div>
-      {action}
-    </div>
-  );
-}
 function Overview({
   state,
   onNew,
@@ -620,6 +476,7 @@ function Overview({
   onProject: (id: string) => void;
   refresh: () => Promise<void>;
 }) {
+  const [fullActivity, setFullActivity] = useState(false);
   const decisions = pendingDecisions(state.decisions);
   const active = state.projects.filter(
     (p) => !["completed", "cancelled", "archived"].includes(p.status),
@@ -733,7 +590,17 @@ function Overview({
           <h2>Behind the scenes</h2>
           <span className="section-note">The work around the work</span>
         </div>
-        <ActivityList state={state} limit={5} />
+        <ActivityList state={state} limit={fullActivity ? undefined : 5} />
+        {state.activity.length > 5 && (
+          <button
+            type="button"
+            className="text-button"
+            aria-expanded={fullActivity}
+            onClick={() => setFullActivity((open) => !open)}
+          >
+            {fullActivity ? "Show recent activity" : "View activity"}
+          </button>
+        )}
       </section>
     </section>
   );
@@ -1092,8 +959,8 @@ function DecisionCard({
   );
 }
 function ActivityList({ state, limit }: { state: State; limit?: number }) {
-  const entries = limit ? state.activity.slice(0, limit) : state.activity;
-  if (!entries.length)
+  const groups = groupActivity(state.activity, limit);
+  if (!groups.length)
     return (
       <div className="quiet-activity">
         <span className="activity-line" />
@@ -1105,7 +972,7 @@ function ActivityList({ state, limit }: { state: State; limit?: number }) {
     );
   return (
     <ol className="activity-list">
-      {entries.map((entry) => (
+      {groups.map(({ entry, label, count }) => (
         <li key={entry.id}>
           <span className="activity-dot" />
           <div>
@@ -1118,8 +985,9 @@ function ActivityList({ state, limit }: { state: State; limit?: number }) {
                   )!}
                 />
               ) : (
-                humanStatus(entry.kind || "workspace")
+                label
               )}
+              {count > 1 && ` · ${count} updates`}
               {entry.created_at && (
                 <>
                   {" "}
@@ -1542,9 +1410,18 @@ function Login({
               required
             />
           </label>
-          <p className="field-hint">
-            Use the access code from your local daemon setup.
-          </p>
+          <div className="field-hint login-help">
+            <p>
+              Run this on the computer hosting your assistant to get a code:
+            </p>
+            <pre>
+              <code>agent-assistant dashboard open --print</code>
+            </pre>
+            <p>
+              The code expires after five minutes and works once. It is issued
+              on demand, not stored for you to look up.
+            </p>
+          </div>
           <ErrorNotice error={error} />
           <button
             type="submit"

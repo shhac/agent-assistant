@@ -433,6 +433,27 @@ describe("owner dashboard flows", () => {
       screen.queryByRole("navigation", { name: "Main navigation" }),
     ).toBeNull();
   });
+  it("explains how to obtain a sign-in code without revealing one", async () => {
+    respond = () => ({
+      status: 401,
+      body: { error: "Owner access required." },
+    });
+    render(<App />);
+    await screen.findByLabelText("Dashboard access code");
+    expect(
+      screen.getByText("agent-assistant dashboard open --print"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/computer hosting your assistant/),
+    ).toBeTruthy();
+    expect(screen.getByText(/expires after five minutes/)).toBeTruthy();
+    expect(screen.getByText(/works once/)).toBeTruthy();
+    const input = screen.getByLabelText(
+      "Dashboard access code",
+    ) as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("");
+  });
   it("removes a pairing token before exchanging it and reuses one request", async () => {
     window.history.replaceState(null, "", "/#token=one-use-fixture");
     const first = bootstrapSession();

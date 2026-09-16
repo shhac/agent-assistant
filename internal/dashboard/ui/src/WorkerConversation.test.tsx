@@ -362,3 +362,22 @@ it("shows recorded failure diagnostics without inventing missing details", async
   ).toBeTruthy();
   expect(screen.queryByText("error_max_structured_output_retries")).toBeNull();
 });
+it("renders worker-authored output literally so shell text is not reformatted", async () => {
+  const shell = "Ran rm -rf **/*.tmp and kept file_name_one intact.";
+  mock(() => ({
+    body: {
+      ...page,
+      messages: [
+        { ...page.messages[0] },
+        { ...page.messages[1], sequence: 2, id: "m2", content: shell },
+      ],
+    },
+  }));
+  open();
+  const literal = await screen.findByText(shell);
+  expect(literal.tagName).toBe("PRE");
+  expect(literal.querySelector("strong")).toBeNull();
+  expect(literal.querySelector("em")).toBeNull();
+  expect(literal.textContent).toBe(shell);
+  expect(screen.getByText("keyboard access").tagName).toBe("STRONG");
+});

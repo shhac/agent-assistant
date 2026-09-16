@@ -350,6 +350,9 @@ export function ChatPanel({
           }
         >
           <Icon name={expanded ? "Shrink" : "Expand"} />
+          <span className="chat-expand-label">
+            {expanded ? "Return to workspace" : "Expand conversation"}
+          </span>
         </button>
         <button
           className="icon-button mobile-close"

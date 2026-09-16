@@ -248,3 +248,14 @@
 .work-status.blocked {
   color: var(--orange);
 }
+/* Worker-authored text is recorded output, not authored formatting: shell
+   globs and underscores must read exactly as the worker wrote them. */
+.worker-message-literal {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

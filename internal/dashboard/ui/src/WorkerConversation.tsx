@@ -117,6 +117,9 @@ function WorkerConversationPanel({
   const pendingMessage = useRef<{ message_id: string; message: string } | null>(
     null,
   );
+  const list = useRef<HTMLOListElement>(null);
+  const pinned = useRef(true);
+  const newest = useRef(0);
   const path = `/api/agents/${encodeURIComponent(agent.id)}`;
   useEffect(() => {
     setStatus(agent.status);
@@ -169,6 +172,18 @@ function WorkerConversationPanel({
       window.clearInterval(timer);
     };
   }, [load]);
+  // The newest entry is the one an owner opens this panel to read. Older pages
+  // are prepended, so only a growing tail scrolls, and only while the owner has
+  // not scrolled back through the history themselves.
+  useEffect(() => {
+    const box = list.current;
+    if (!box || !messages.length) return;
+    const latest = messages[messages.length - 1].sequence;
+    if (latest <= newest.current) return;
+    const first = newest.current === 0;
+    newest.current = latest;
+    if (first || pinned.current) box.scrollTop = box.scrollHeight;
+  }, [messages]);
   async function earlier() {
     if (!oldest.current || loadingOlder) return;
     setLoadingOlder(true);
@@ -442,6 +457,12 @@ function WorkerConversationPanel({
           )}
           <ol
             className="worker-message-list"
+            ref={list}
+            onScroll={(event) => {
+              const box = event.currentTarget;
+              pinned.current =
+                box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            }}
             tabIndex={0}
             aria-label={`Recorded messages for ${agent.name}`}
           >
@@ -469,7 +490,11 @@ function WorkerConversationPanel({
                     {new Date(entry.created_at).toLocaleString()}
                   </time>
                 </div>
-                <ConversationMarkdown content={entry.content} />
+                {entry.direction === "worker_to_daemon" ? (
+                  <pre className="worker-message-literal">{entry.content}</pre>
+                ) : (
+                  <ConversationMarkdown content={entry.content} />
+                )}
               </li>
             ))}
           </ol>
