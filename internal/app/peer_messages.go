@@ -88,7 +88,7 @@ func (a *App) acknowledgePeerMessage(ctx context.Context, sourceID, key, message
 }
 
 func peerSessionActive(ag core.Agent) bool {
-	if ag.ExternalID == "" {
+	if ag.ExternalID == "" || (ag.Status == "blocked" && ag.ProviderFailureKind != "") {
 		return false
 	}
 	switch ag.Status {

@@ -162,6 +162,16 @@ func New(cfg Config) (*Broker, error) {
 				}
 				r.PendingStatus = ""
 				r.PendingSummary = ""
+			} else if r.PendingStatus == "retry_wait" {
+				r.Run.Status = "retry_wait"
+				r.Run.Summary = r.PendingSummary
+				r.PendingStatus, r.PendingSummary = "", ""
+			} else if r.PendingStatus == "blocked" {
+				// A model/auth/budget blocker or prepared decision is still a
+				// blocker after cleanup. Restart is not permission to retry it.
+				r.Run.Status = "blocked"
+				r.Run.Summary = r.PendingSummary
+				r.PendingStatus, r.PendingSummary = "", ""
 			} else if r.PendingMessage != nil && r.PendingStatus == "waiting" {
 				// Cleanup is confirmed. Publish the durable outbox before allowing any
 				// further model turn; a crash must not silently discard its request.

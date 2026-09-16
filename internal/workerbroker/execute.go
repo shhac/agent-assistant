@@ -101,43 +101,31 @@ func (b *Broker) execute(parent context.Context, id string) {
 		if current.Run.Status != "running" {
 			return
 		}
-		messages := []modelMessage{{Role: "system", Content: workerPrompt(current.Request)}}
-		messages = append(messages, current.Transcript...)
-		if len(current.Messages) > 0 {
-			for _, msg := range current.Messages {
-				messages = append(messages, modelMessage{Role: "user", Content: msg})
-			}
-			if err = b.update(id, func(run *storedRun) error {
-				run.Transcript = append(run.Transcript, messages[len(messages)-len(current.Messages):]...)
-				run.Messages = run.Messages[len(current.Messages):]
-				return nil
-			}); err != nil {
+		messages, contextErr := b.prepareContext(ctx, id)
+		if contextErr != nil {
+			if b.pauseRequested(id) {
 				return
 			}
-		}
-		raw, _ := json.Marshal(messages)
-		if len(raw) > 128*1024 {
-			b.terminal(id, "interrupted", "Worker context limit reached; inspect artifacts before continuing with a smaller scope", nil)
+			if errors.Is(contextErr, errWorkerModelAllowance) {
+				b.terminal(id, "blocked", contextErr.Error(), nil)
+			} else {
+				b.modelFailure(id, contextErr)
+			}
 			return
 		}
-		if err = b.update(id, func(run *storedRun) error {
-			if run.ModelCalls >= b.cfg.MaxTurns {
-				return errors.New("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing")
-			}
-			if run.Run.Status != "running" || run.PendingStatus == "paused" || run.PendingStatus == "cancelled" {
-				return errInterrupted
-			}
-			run.ModelCalls++
-			return nil
-		}); err != nil {
-			b.terminal(id, "blocked", err.Error(), nil)
-			return
-		}
-		reply, modelErr := b.complete(ctx, messages)
+		reply, modelErr := b.completeForRun(ctx, id, messages)
 		if modelErr != nil {
-			b.terminal(id, "interrupted", modelErr.Error(), nil)
+			if b.pauseRequested(id) {
+				return
+			}
+			if errors.Is(modelErr, errWorkerModelAllowance) {
+				b.terminal(id, "blocked", modelErr.Error(), nil)
+			} else {
+				b.modelFailure(id, modelErr)
+			}
 			return
 		}
+		b.clearProviderFailure(id)
 		if len(reply.ToolCalls) == 0 {
 			b.terminal(id, "interrupted", "Worker returned prose without an acceptance report; inspect its transcript before continuing", nil)
 			_ = b.update(id, func(run *storedRun) error { run.Transcript = append(run.Transcript, reply); return nil })

@@ -10,11 +10,10 @@ import (
 )
 
 func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMessage, error) {
-	message, _, err := engine.Complete(ctx, engine.Config{
-		WorkDirRoot: b.cfg.StateDir, Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome, ClaudeBin: b.cfg.ClaudeBin, ClaudeHome: b.cfg.ClaudeHome,
-		Endpoint: b.cfg.ModelEndpoint, Model: b.cfg.Model, APIKeyEnv: b.cfg.APIKeyEnv,
-		MaxOutputTokens: b.cfg.MaxOutputTokens, Timeout: 5 * time.Minute, HTTPClient: b.cfg.HTTPClient,
-	}, messages, workerTools())
+	return b.completeForRun(ctx, "", messages)
+}
+func (b *Broker) completeForRun(ctx context.Context, id string, messages []modelMessage) (modelMessage, error) {
+	message, _, err := engine.Complete(ctx, b.modelConfig(id), messages, workerTools())
 	if err != nil {
 		return modelMessage{}, err
 	}
@@ -30,6 +29,37 @@ func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMe
 	}
 	return message, nil
 }
+func (b *Broker) modelConfig(id string) engine.Config {
+	cfg := engine.Config{
+		WorkDirRoot: b.cfg.StateDir, Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome, ClaudeBin: b.cfg.ClaudeBin, ClaudeHome: b.cfg.ClaudeHome,
+		Endpoint: b.cfg.ModelEndpoint, Model: b.cfg.Model, APIKeyEnv: b.cfg.APIKeyEnv,
+		MaxOutputTokens: b.cfg.MaxOutputTokens, Timeout: 5 * time.Minute, HTTPClient: b.cfg.HTTPClient,
+		Retry: &engine.RetryPolicy{MaxRetries: 0},
+	}
+	if id != "" {
+		cfg.BeforeRequest = func(ctx context.Context) error { return b.reserveWorkerModelCall(ctx, id) }
+	}
+	return cfg
+}
+
+var errWorkerModelAllowance = errors.New("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing")
+
+func (b *Broker) reserveWorkerModelCall(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return b.update(id, func(run *storedRun) error {
+		if run.Run.Status != "running" || run.PendingStatus == "paused" || run.PendingStatus == "cancelled" {
+			return errInterrupted
+		}
+		if run.ModelCalls >= b.cfg.MaxTurns {
+			return errWorkerModelAllowance
+		}
+		run.ModelCalls++
+		return nil
+	})
+}
+
 func workerTools() []engine.Tool {
 	return []engine.Tool{
 		workerTool("read_file", "Read a relative text file inside the isolated workspace.", []string{"path"}, nil),

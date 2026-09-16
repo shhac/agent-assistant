@@ -57,18 +57,24 @@ func (f CommandFunc) Run(ctx context.Context, args []string, in []byte) ([]byte,
 }
 
 type storedRun struct {
-	PendingMessage *worker.PeerMessage `json:"pending_message,omitempty"`
-	PendingStatus  string              `json:"pending_status,omitempty"`
-	PendingSummary string              `json:"pending_summary,omitempty"`
-	Run            worker.Run          `json:"run"`
-	Request        worker.StartRequest `json:"request"`
-	Container      string              `json:"container"`
-	WorkDir        string              `json:"work_dir"`
-	Baseline       map[string][]byte   `json:"baseline"`
-	Messages       []string            `json:"messages"`
-	Transcript     []modelMessage      `json:"transcript"`
-	Commands       []commandRecord     `json:"commands"`
-	ModelCalls     int                 `json:"model_calls"`
+	// Transcript remains the complete durable archive. WorkingContext represents
+	// only its first ContextThrough messages; later transcript entries append to it.
+	WorkingContext     []modelMessage             `json:"working_context,omitempty"`
+	ContextThrough     int                        `json:"context_through,omitempty"`
+	ContextDigest      string                     `json:"context_digest,omitempty"`
+	ContextCheckpoints []engine.ContextCheckpoint `json:"context_checkpoints,omitempty"`
+	PendingMessage     *worker.PeerMessage        `json:"pending_message,omitempty"`
+	PendingStatus      string                     `json:"pending_status,omitempty"`
+	PendingSummary     string                     `json:"pending_summary,omitempty"`
+	Run                worker.Run                 `json:"run"`
+	Request            worker.StartRequest        `json:"request"`
+	Container          string                     `json:"container"`
+	WorkDir            string                     `json:"work_dir"`
+	Baseline           map[string][]byte          `json:"baseline"`
+	Messages           []string                   `json:"messages"`
+	Transcript         []modelMessage             `json:"transcript"`
+	Commands           []commandRecord            `json:"commands"`
+	ModelCalls         int                        `json:"model_calls"`
 }
 type commandRecord struct {
 	Command string `json:"command"`

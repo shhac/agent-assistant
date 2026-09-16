@@ -285,3 +285,42 @@ it("keeps worker controls available if only older-history retrieval fails", asyn
   );
   expect(screen.queryByText(/Controls are unavailable until/)).toBeNull();
 });
+it("shows provider cooldown separately from login failure and preserves worker controls", async () => {
+  mock(() => ({
+    body: { ...page, controls: { ...controls, message: false } },
+  }));
+  render(
+    <WorkerConversation
+      agent={{
+        ...agent,
+        status: "retry_wait",
+        retry_at: "2026-09-16T15:00:00Z",
+        provider_failures: 2,
+        context_compactions: 1,
+      }}
+      demo={false}
+      refresh={vi.fn()}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  );
+  await screen.findByText("Keyboard checks pass.");
+  expect(screen.getByText("Waiting for model provider")).toBeTruthy();
+  expect(screen.getByText(/Next provider retry after/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      /1 context checkpoint saved. The full worker transcript is retained/,
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Pause worker" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  expect(screen.getByRole("button", { name: "Resume worker" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});

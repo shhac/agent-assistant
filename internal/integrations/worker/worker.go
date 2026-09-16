@@ -84,6 +84,11 @@ type PeerMessage struct {
 }
 
 type Run struct {
+	ContextCompactions       int                `json:"context_compactions,omitempty"`
+	ContextBytes             int                `json:"context_bytes,omitempty"`
+	RetryAt                  time.Time          `json:"retry_at,omitempty"`
+	ProviderFailures         int                `json:"provider_failures,omitempty"`
+	ProviderFailureKind      string             `json:"provider_failure_kind,omitempty"`
 	ControlCapabilities      []string           `json:"control_capabilities,omitempty"`
 	PauseRequested           bool               `json:"pause_requested,omitempty"`
 	StopRequested            bool               `json:"stop_requested,omitempty"`
@@ -276,7 +281,7 @@ func (c *Client) call(ctx context.Context, method, path, key string, in any) (Ru
 		return Run{}, errors.New("worker returned no run ID")
 	}
 	switch result.Status {
-	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled", "paused":
+	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled", "paused", "retry_wait":
 	default:
 		if method != http.MethodGet {
 			return Run{}, ErrUncertain

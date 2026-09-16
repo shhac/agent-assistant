@@ -33,8 +33,11 @@ func (s *Service) PrepareOwnerControl(ctx context.Context, id, action, key strin
 			if v.Paused {
 				return errors.New("coordination is paused")
 			}
-			if a.Status != "paused" && a.Status != "interrupted" {
+			if a.Status != "paused" && a.Status != "interrupted" && !(a.Status == "blocked" && a.ProviderFailureKind != "") {
 				return errors.New("resume requires a confirmed paused or interrupted worker")
+			}
+			if !a.RetryAt.IsZero() && s.now().Before(a.RetryAt) {
+				return errors.New("provider retry is not due")
 			}
 			saved := a.OwnerControl
 			a.OwnerControl = ""

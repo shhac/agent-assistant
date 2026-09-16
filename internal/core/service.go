@@ -237,6 +237,7 @@ func (s *Service) MarkDispatched(ctx context.Context, id, externalID string) err
 			return ErrConflict
 		}
 		a.Status = "running"
+		a.ResumeKey = ""
 		a.ExternalID = externalID
 		a.LastUpdate = s.now().UTC()
 		a.NextCheckIn = a.LastUpdate.Add(time.Duration(s.configuration().Limits.CheckInMinutes) * time.Minute)
@@ -264,7 +265,7 @@ func (s *Service) MarkUncertain(ctx context.Context, id, reason string) error {
 	})
 }
 func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (Agent, error) {
-	if !contains([]string{"running", "waiting", "blocked", "interrupted", "completed", "cancelled", "paused", "pause_requested", "stop_requested"}, in.Status) {
+	if !contains([]string{"running", "waiting", "blocked", "interrupted", "completed", "cancelled", "paused", "pause_requested", "stop_requested", "retry_wait"}, in.Status) {
 		return Agent{}, errors.New("invalid worker update status")
 	}
 	if !required(in.Summary) {
@@ -288,7 +289,7 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 		}
 		// A report fetched before an owner control cannot release its hold or
 		// capacity. Only a confirmed checkpoint/interruption/termination does.
-		if contains([]string{"running", "waiting", "blocked", "pause_requested"}, in.Status) {
+		if contains([]string{"running", "waiting", "blocked", "pause_requested", "retry_wait"}, in.Status) {
 			if a.OwnerControl == "pause" {
 				in.Status = "pause_requested"
 			}
@@ -341,6 +342,8 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 			}
 		}
 		a.Status = in.Status
+		a.ContextCompactions, a.ContextBytes = in.ContextCompactions, in.ContextBytes
+		a.RetryAt, a.ProviderFailures, a.ProviderFailureKind = in.RetryAt, in.ProviderFailures, in.ProviderFailureKind
 		a.Summary = in.Summary
 		a.Evidence = append([]string{}, in.Evidence...)
 		if a.ExternalID == "" {
@@ -380,10 +383,14 @@ func (s *Service) PrepareResume(ctx context.Context, id string) (Agent, error) {
 		if v.Paused {
 			return errors.New("coordination is paused")
 		}
-		if a.Status != "interrupted" {
+		providerRetry := a.Status == "retry_wait"
+		if (providerRetry && a.RetryAt.IsZero()) || (!a.RetryAt.IsZero() && s.now().Before(a.RetryAt)) {
+			return errors.New("provider retry is not due")
+		}
+		if a.Status != "interrupted" && !providerRetry {
 			return errors.New("recovery requires confirmed interruption")
 		}
-		if a.Recoveries >= cfg.Limits.MaxRecoveries {
+		if !providerRetry && a.Recoveries >= cfg.Limits.MaxRecoveries {
 			return errors.New("recovery allowance exhausted; owner decision required")
 		}
 		for _, child := range v.Agents {
@@ -400,9 +407,13 @@ func (s *Service) PrepareResume(ctx context.Context, id string) (Agent, error) {
 		if executingCount(v) >= cfg.Limits.MaxAgents {
 			return errors.New("agent execution capacity reached")
 		}
-		a.Recoveries++
+		if providerRetry {
+			a.ResumeKey = fmt.Sprintf("%s:provider-retry:%d:%d", a.DispatchKey, a.ProviderFailures, a.RetryAt.UnixNano())
+		} else {
+			a.Recoveries++
+			a.ResumeKey = fmt.Sprintf("%s:resume:%d", a.DispatchKey, a.Recoveries)
+		}
 		a.Status = "resuming"
-		a.ResumeKey = fmt.Sprintf("%s:resume:%d", a.DispatchKey, a.Recoveries)
 		a.LastUpdate = s.now().UTC()
 		a.Summary = "Confirmed interruption; resume requested"
 		out = *a
@@ -650,7 +661,7 @@ func (s *Service) BeginInstruction(ctx context.Context, id string) error {
 		if terminal(a.Status) || a.ExternalID == "" {
 			return errors.New("instruction requires a live external session")
 		}
-		if a.Status == "interrupted" || a.Status == "resuming" || (a.Status == "reconciling" && a.ResumeKey != "") {
+		if a.Status == "retry_wait" || (a.Status == "blocked" && a.ProviderFailureKind != "") || a.Status == "interrupted" || a.Status == "resuming" || (a.Status == "reconciling" && a.ResumeKey != "") {
 			return errors.New("interrupted or uncertain recovery requires explicit reconciliation and resume")
 		}
 		if err := s.dispatchAuthority(v, a); err != nil {

@@ -14,7 +14,7 @@ import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
 const statuses: Record<WorkItem["status"], string> = {
   ready: "Ready to coordinate",
   queued: "Queued next",
-  waiting: "Waiting to start",
+  waiting: "Waiting",
   interrupted: "Interrupted",
   blocked: "Blocked",
   paused: "Paused",
@@ -231,6 +231,7 @@ function WorkCard({
   const attention = agents.filter((agent) =>
     [
       "interrupted",
+      "retry_wait",
       "blocked",
       "reconciling",
       "pause_requested",

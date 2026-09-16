@@ -54,6 +54,11 @@ export interface SteeringReceipt {
   acknowledged_at: string;
 }
 export interface Agent {
+  retry_at?: string;
+  provider_failures?: number;
+  provider_failure_kind?: string;
+  context_compactions?: number;
+  context_bytes?: number;
   recoveries?: number;
   work_item_id?: string;
   id: string;
@@ -110,6 +115,8 @@ export interface ChatTurn {
   assistant_message_id?: string;
   error?: string;
   loading_phrase?: string;
+  model_status?: string;
+  retry_at?: string;
   events: ChatToolEvent[];
 }
 export interface Memory {

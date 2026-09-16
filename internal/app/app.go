@@ -139,9 +139,9 @@ func (a *App) chatContext(ctx context.Context, currentMessageID string) (json.Ra
 		return nil, nil, err
 	}
 	history := []engine.Message{}
-	start := len(s.Messages) - 24
-	if start < 0 {
-		start = 0
+	start := chatCheckpointStart(s)
+	if s.ChatCheckpoint.ThroughID != "" && start == 0 {
+		return nil, nil, errors.New("conversation checkpoint source is missing; original dialogue preserved")
 	}
 	for _, m := range s.Messages[start:] {
 		if m.ID != currentMessageID && (m.Role == "user" || m.Role == "assistant") {
@@ -158,11 +158,12 @@ func (a *App) chatContext(ctx context.Context, currentMessageID string) (json.Ra
 		profiles = append(profiles, workerDetail(cfg, p, projectWorkerBusy(s, p.ProjectID), a.Demo))
 	}
 	raw, err := json.Marshal(struct {
-		State       core.Snapshot       `json:"state"`
-		Profiles    []WorkerDetail      `json:"worker_profiles"`
-		Authority   ExecutionAuthority  `json:"execution_authority"`
-		Connections []config.Connection `json:"connections"`
-	}{s, profiles, a.executionAuthority(s.Paused), cfg.Connections})
+		State               core.Snapshot       `json:"state"`
+		Profiles            []WorkerDetail      `json:"worker_profiles"`
+		Authority           ExecutionAuthority  `json:"execution_authority"`
+		Connections         []config.Connection `json:"connections"`
+		ConversationSummary core.ChatCheckpoint `json:"conversation_summary_untrusted"`
+	}{s, profiles, a.executionAuthority(s.Paused), cfg.Connections, s.ChatCheckpoint})
 	return raw, history, err
 }
 func args(raw json.RawMessage, v any) error {

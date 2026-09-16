@@ -26,6 +26,11 @@ type Project struct {
 // ParentID retains the stored/wire name for its authority and escalation link;
 // it is not subprocess ownership or a restriction on peer communication.
 type Agent struct {
+	ContextCompactions  int       `json:"context_compactions,omitempty"`
+	ContextBytes        int       `json:"context_bytes,omitempty"`
+	RetryAt             time.Time `json:"retry_at,omitempty"`
+	ProviderFailures    int       `json:"provider_failures,omitempty"`
+	ProviderFailureKind string    `json:"provider_failure_kind,omitempty"`
 	OwnerControl        string    `json:"owner_control,omitempty"`
 	ControlKey          string    `json:"control_key,omitempty"`
 	ControlCapabilities []string  `json:"control_capabilities,omitempty"`
@@ -99,6 +104,7 @@ type PendingOperation struct {
 }
 
 type Snapshot struct {
+	ChatCheckpoint       ChatCheckpoint           `json:"-"`
 	ConversationDropped  map[string]bool          `json:"-"`
 	AgentConversation    []AgentConversationEntry `json:"-"`
 	ConversationSequence int64                    `json:"-"`
@@ -143,11 +149,16 @@ type DelegateInput struct {
 	Capabilities             []string `json:"capabilities"`
 }
 type AgentUpdate struct {
-	UpdatedAt  time.Time `json:"updated_at,omitempty"`
-	Status     string    `json:"status"`
-	Summary    string    `json:"summary"`
-	Evidence   []string  `json:"evidence"`
-	ExternalID string    `json:"external_id,omitempty"`
+	ContextCompactions  int       `json:"context_compactions,omitempty"`
+	ContextBytes        int       `json:"context_bytes,omitempty"`
+	RetryAt             time.Time `json:"retry_at,omitempty"`
+	ProviderFailures    int       `json:"provider_failures,omitempty"`
+	ProviderFailureKind string    `json:"provider_failure_kind,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+	Status              string    `json:"status"`
+	Summary             string    `json:"summary"`
+	Evidence            []string  `json:"evidence"`
+	ExternalID          string    `json:"external_id,omitempty"`
 }
 type DecisionInput struct {
 	WorkItemID     string   `json:"work_item_id,omitempty"`

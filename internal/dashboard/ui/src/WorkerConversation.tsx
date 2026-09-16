@@ -36,6 +36,7 @@ export function workerStateLabel(status: string) {
         pause_requested: "Pause requested · waiting for current operation",
         stop_requested: "Stop requested · waiting for cleanup",
         paused: "Paused",
+        retry_wait: "Waiting for model provider",
         interrupted: "Interrupted",
         blocked: "Blocked",
         reconciling: "Checking interrupted work",
@@ -295,6 +296,22 @@ function WorkerConversationPanel({
         this assignment. Only recorded exchanges appear; earlier work may
         predate conversation recording. Private model reasoning is not included.
       </p>
+      {agent.retry_at &&
+        !agent.retry_at.startsWith("0001-") &&
+        agent.status === "retry_wait" && (
+          <p role="status" className="field-hint">
+            Next provider retry after{" "}
+            {new Date(agent.retry_at).toLocaleString()}. Saved work is
+            preserved.
+          </p>
+        )}
+      {!!agent.context_compactions && (
+        <p className="field-hint">
+          {agent.context_compactions} context checkpoint
+          {agent.context_compactions === 1 ? "" : "s"} saved. The full worker
+          transcript is retained.
+        </p>
+      )}
       <div className="worker-controls" aria-label="Worker controls">
         <button
           type="button"

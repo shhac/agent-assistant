@@ -11,6 +11,8 @@ import (
 // ChatTurn is a durable owner message. Queued content is kept out of the model
 // conversation until its turn starts; the client ID makes acceptance retryable.
 type ChatTurn struct {
+	ModelStatus        string          `json:"model_status,omitempty"`
+	RetryAt            time.Time       `json:"retry_at,omitempty"`
 	ID                 string          `json:"id"`
 	Message            string          `json:"message"`
 	Status             string          `json:"status"`
@@ -167,6 +169,8 @@ func (s *Service) FinishChat(ctx context.Context, id, status, reply, reason stri
 			t.FinishedAt = &now
 			t.Error = reason
 			t.LoadingPhrase = ""
+			t.ModelStatus = ""
+			t.RetryAt = time.Time{}
 			for j := range t.Events {
 				if t.Events[j].Status == "running" {
 					t.Events[j].Status = "interrupted"
@@ -196,6 +200,8 @@ func (s *Service) RecoverChatTurns(ctx context.Context) error {
 			t.Status = "interrupted"
 			t.FinishedAt = &now
 			t.LoadingPhrase = ""
+			t.ModelStatus = ""
+			t.RetryAt = time.Time{}
 			t.Error = "The assistant stopped before this turn finished. Recorded actions were preserved; the message was not replayed."
 			for j := range t.Events {
 				if t.Events[j].Status == "running" {

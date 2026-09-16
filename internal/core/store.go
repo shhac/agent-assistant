@@ -21,6 +21,7 @@ type Store struct {
 	temporaryState bool
 }
 type diskState struct {
+	ChatCheckpoint       ChatCheckpoint           `json:"chat_checkpoint,omitempty"`
 	ConversationDropped  map[string]bool          `json:"conversation_dropped,omitempty"`
 	AgentConversation    []AgentConversationEntry `json:"agent_conversation,omitempty"`
 	ConversationSequence int64                    `json:"conversation_sequence,omitempty"`
@@ -121,6 +122,7 @@ func readState(ctx context.Context, conn *sql.Conn) (Snapshot, error) {
 	if err = json.Unmarshal([]byte(data), &d); err != nil {
 		return Snapshot{}, fmt.Errorf("decode durable state: %w", err)
 	}
+	d.Snapshot.ChatCheckpoint = d.ChatCheckpoint
 	d.Snapshot.ChatTurns = d.ChatTurns
 	d.Snapshot.AgentConversation = d.AgentConversation
 	d.Snapshot.ConversationDropped = d.ConversationDropped
@@ -165,7 +167,7 @@ func (s *Store) update(ctx context.Context, fn func(*Snapshot) error) error {
 		return err
 	}
 	refreshWorkItems(&state)
-	data, err := json.Marshal(diskState{ConversationDropped: state.ConversationDropped, AgentConversation: state.AgentConversation, ConversationSequence: state.ConversationSequence, ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
+	data, err := json.Marshal(diskState{ChatCheckpoint: state.ChatCheckpoint, ConversationDropped: state.ConversationDropped, AgentConversation: state.AgentConversation, ConversationSequence: state.ConversationSequence, ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,12 @@ Go CLI and daemon for personal-assistant coordination. Dashboard is dark-mode-fi
   coordination actions. Native harness
   sessions are a different execution contract and must not silently replace
   constrained completion. Depend on published library versions, not local replaces.
+- Completion retries cover only explicit transient provider rejections, never whole
+  turns or tools. Workers persist provider cooldown and re-enter through daemon
+  admission; unknown/authentication/context failures remain blocked across restart.
+  Native CLI session compaction is distinct from application-owned working context.
+  Archive original context before summarizing; retain immutable instructions and
+  unresolved operations exactly. Checkpoint byte counts are not token-window usage.
 - Use lib-agent-cli/lib-agent-output conventions and the family Tailscale helpers when appropriate. Embedded dashboard bundle is built and committed. No separate frontend server needed at runtime.
 - Keep names, account IDs, project IDs, prompts, endpoints, and credentials configurable. Synthetic fixtures only. Secrets never appear in logs, config exports, or the UI.
 

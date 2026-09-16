@@ -216,6 +216,27 @@ The current limits bound concurrent execution, delegation depth, recovery attemp
 
 Completion requires recorded evidence and no unfinished assignments or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
 
+## Long conversations and provider interruptions
+
+New assignments start with fresh worker transcripts; resume continues the same
+assignment. The assistant saves continuity summaries of older dialogue, and long
+worker/tool conversations compact older resolved exchanges into durable checkpoints.
+Full source transcripts remain in private state. Owner instructions and unresolved
+operations stay exact; if those alone exceed the working budget, the run stops with
+an explicit context blocker. The working budget is measured in serialized bytes,
+not a model context-window percentage.
+
+Confirmed provider overload, rate-limit and service-unavailable responses get bounded
+backoff. Chat shows retries; workers show **Waiting for model provider** and the next
+retry time. Worker cooldown survives restart, respects pause and admission limits,
+and stops after six consecutive provider failures or its cumulative call cap.
+Authentication problems, partial responses and uncertain transport failures do not
+trigger blind retries. Completed tool actions are preserved. Recovery uses the same
+configured model and login.
+
+See the [context and recovery decision](design-docs/decisions/2026-09-context-and-provider-recovery.md)
+for exact bounds and the distinction from native CLI session compaction.
+
 ## Development
 
 ```sh

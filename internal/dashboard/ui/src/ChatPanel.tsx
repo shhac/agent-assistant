@@ -508,10 +508,15 @@ export function ChatPanel({
                       {turn.status === "running" && (
                         <Waiting
                           label={
+                            turn.model_status ||
                             turn.loading_phrase ||
                             `${name} is working through it…`
                           }
-                          detail="An answer or a clear decision is on its way."
+                          detail={
+                            turn.retry_at && !turn.retry_at.startsWith("0001-")
+                              ? `Next attempt after ${new Date(turn.retry_at).toLocaleTimeString()}. Recorded actions will not be replayed.`
+                              : "An answer or a clear decision is on its way."
+                          }
                         />
                       )}
                     </div>

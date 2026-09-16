@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/shhac/agent-assistant/internal/core"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
@@ -40,11 +41,17 @@ func (a *App) AgentControls(ctx context.Context, id string) (AgentControls, erro
 		}
 		return ag.ExternalID == ""
 	}
-	out.Pause = has("pause") && (ag.Status == "running" || ag.Status == "waiting" || ag.Status == "blocked" || ag.Status == "queued") && ag.OwnerControl != "pause" && ag.OwnerControl != "stop"
-	out.Resume = ag.OwnerControl != "stop" && has("resume") && (ag.Status == "paused" || ag.Status == "interrupted") && !s.Paused
-	out.Stop = has("stop") && (ag.Status == "running" || ag.Status == "waiting" || ag.Status == "blocked" || ag.Status == "queued" || ag.Status == "paused" || ag.Status == "pause_requested" || ag.Status == "interrupted") && ag.OwnerControl != "stop"
+	out.Pause = has("pause") && (ag.Status == "running" || ag.Status == "waiting" || ag.Status == "blocked" || ag.Status == "queued" || ag.Status == "retry_wait") && ag.OwnerControl != "pause" && ag.OwnerControl != "stop"
+	out.Resume = ag.OwnerControl != "stop" && has("resume") && (ag.Status == "paused" || ag.Status == "interrupted" || (ag.Status == "blocked" && ag.ProviderFailureKind != "")) && !s.Paused && (ag.RetryAt.IsZero() || !time.Now().Before(ag.RetryAt))
+	out.Stop = has("stop") && (ag.Status == "running" || ag.Status == "waiting" || ag.Status == "blocked" || ag.Status == "queued" || ag.Status == "paused" || ag.Status == "pause_requested" || ag.Status == "interrupted" || ag.Status == "retry_wait") && ag.OwnerControl != "stop"
 	if ag.ExternalID != "" && len(ag.ControlCapabilities) == 0 {
 		out.Reason = "This broker has not advertised worker controls"
+	}
+	if ag.Status == "retry_wait" {
+		out.Reason = "Waiting for the model provider. New direction is saved with the outcome and included in the next admitted retry; sending it does not start execution."
+	}
+	if ag.Status == "blocked" && ag.ProviderFailureKind != "" {
+		out.Reason = "The model request stopped. Inspect the saved work and correct the problem, then Resume. New direction is saved for that continuation."
 	}
 	if ag.Status == "pause_requested" {
 		out.Reason = "Pause requested; finishing the current model or tool operation, then confirming cleanup"

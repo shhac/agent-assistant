@@ -195,12 +195,16 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 		respond(w, 409, map[string]string{"error": "terminal worker cannot resume"})
 		return
 	}
-	if action == "messages" && (run.Run.Status == "paused" || run.PendingStatus == "paused" || run.Run.Status == "interrupted" || (run.Run.Status == "blocked" && run.Run.Decision == nil)) {
+	if action == "messages" && (run.Run.Status == "retry_wait" || run.Run.Status == "paused" || run.PendingStatus == "paused" || run.Run.Status == "interrupted" || (run.Run.Status == "blocked" && run.Run.Decision == nil)) {
 		respond(w, 409, map[string]string{"error": "interrupted workers require explicit resume"})
 		return
 	}
-	if action == "resume" && run.Run.Status != "interrupted" && run.Run.Status != "blocked" && run.Run.Status != "paused" {
+	if action == "resume" && run.Run.Status != "interrupted" && run.Run.Status != "blocked" && run.Run.Status != "paused" && run.Run.Status != "retry_wait" {
 		respond(w, 409, map[string]string{"error": "resume requires paused, interrupted or blocked worker"})
+		return
+	}
+	if action == "resume" && !run.Run.RetryAt.IsZero() && now().Before(run.Run.RetryAt) {
+		respond(w, 409, map[string]string{"error": "provider retry is not due"})
 		return
 	}
 	before, _ := json.Marshal(run)
@@ -236,7 +240,7 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 			run.PendingSummary = ""
 		}
 		run.Messages = append(run.Messages, message)
-		if run.Run.Status == "paused" || run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {
+		if run.Run.Status == "retry_wait" || run.Run.Status == "paused" || run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {
 			run.Run.Status = "queued"
 			run.Run.Decision = nil
 			if run.Run.Message != nil && key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID {

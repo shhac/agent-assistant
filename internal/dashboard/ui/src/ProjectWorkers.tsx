@@ -283,6 +283,8 @@ function Assignment({
       <p>{agent.summary || "No progress report yet."}</p>
       <p className="field-hint">
         {agent.recoveries ?? 0} recovery attempts recorded
+        {!!agent.provider_failures &&
+          ` · ${agent.provider_failures} consecutive provider failures`}
       </p>
       <WorkerConversation
         agent={agent}

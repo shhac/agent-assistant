@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,13 @@ type Config struct {
 	CodexHome   string
 	// BeforeRequest reserves durable capacity before each potentially billable call.
 	BeforeRequest func(context.Context) error
+	// OnContext archives the prior transcript and checkpoint before any lossy
+	// working-context replacement. Without an archive hook Chat does not compact.
+	OnContext func(context.Context, ContextCheckpoint, []Message) error
+	// Retry bounds only explicit provider rejections; nil uses safe defaults.
+	Retry *RetryPolicy
+	// OnRetry records safe retry lifecycle metadata without provider error text.
+	OnRetry func(context.Context, RetryEvent) error
 	// OnTool durably records safe lifecycle metadata before and after execution.
 	OnTool          func(context.Context, ToolEvent) error
 	Endpoint        string
@@ -83,9 +91,12 @@ func (f ExecutorFunc) Execute(ctx context.Context, n string, a json.RawMessage) 
 }
 
 type Engine struct {
-	cfg      Config
-	executor ToolExecutor
-	client   *http.Client
+	cfg         Config
+	executor    ToolExecutor
+	client      *http.Client
+	retryNow    func() time.Time
+	retrySleep  func(context.Context, time.Duration) error
+	retryRandom func() float64
 }
 
 var ErrNotConfigured = errors.New("model is not configured: set endpoint, model and a credential environment reference")
@@ -128,6 +139,11 @@ func New(cfg Config, executor ToolExecutor) (*Engine, error) {
 	if cfg.MaxTurns < 1 || cfg.MaxTurns > 32 || cfg.MaxOutputTokens < 1 || cfg.MaxContextBytes < 1024 || cfg.Timeout <= 0 {
 		return nil, errors.New("invalid model turn, token, context or timeout limit")
 	}
+	policy, err := normalizedRetryPolicy(cfg.Retry)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Retry = &policy
 	if executor == nil {
 		return nil, errors.New("coordination tool executor is required")
 	}
@@ -138,7 +154,7 @@ func New(cfg Config, executor ToolExecutor) (*Engine, error) {
 	// Never forward an API key through an endpoint's redirect, including a same-host redirect.
 	copyClient := *client
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Engine{cfg: cfg, executor: executor, client: &copyClient}, nil
+	return &Engine{cfg: cfg, executor: executor, client: &copyClient, retryNow: time.Now, retrySleep: sleepForRetry, retryRandom: rand.Float64}, nil
 }
 
 func (e *Engine) Chat(ctx context.Context, req Request) (Result, error) {
@@ -162,23 +178,42 @@ func (e *Engine) Chat(ctx context.Context, req Request) (Result, error) {
 	}
 	messages = append(messages, Message{Role: "user", Content: req.Message})
 	seen := map[string]bool{}
+	usageObserved := false
+	toolSchema, _ := json.Marshal(Tools())
+	messageBudget := e.cfg.MaxContextBytes - len(toolSchema) - 2048
 	for turn := 0; turn < e.cfg.MaxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		encoded, _ := json.Marshal(messages)
-		if len(encoded) > e.cfg.MaxContextBytes {
-			return result, errors.New("assistant context limit reached; shorten the conversation or retrieve a smaller state snapshot")
+		if messageBudget < 1024 {
+			return result, ErrContextPressure
+		}
+		if e.cfg.OnContext != nil {
+			checkpoint, _, compactErr := CompactContext(ctx, messages, ContextOptions{MaxBytes: messageBudget, MaxSummaryBytes: min(8192, messageBudget/4)}, func(ctx context.Context, input []Message) (Message, Usage, error) {
+				summarizer := *e
+				summarizer.cfg.MaxOutputTokens = min(e.cfg.MaxOutputTokens, 2048)
+				reply, used, summaryErr := summarizer.completeWithTools(ctx, input, nil)
+				mergeContextUsage(&result.Usage, used, !usageObserved)
+				usageObserved = true
+				return reply, used, summaryErr
+			})
+			if compactErr != nil {
+				return result, compactErr
+			}
+			if checkpoint.Compacted {
+				if err := e.cfg.OnContext(ctx, checkpoint, append([]Message(nil), messages...)); err != nil {
+					return result, err
+				}
+				messages = checkpoint.Messages
+			}
+		}
+		if contextBytes(messages) > messageBudget {
+			return result, ErrContextPressure
 		}
 		m, usage, err := e.complete(ctx, messages)
-		result.Usage.InputTokens += usage.InputTokens
-		result.Usage.OutputTokens += usage.OutputTokens
-		result.Usage.TotalTokens += usage.TotalTokens
-		if turn == 0 {
-			result.Usage.Known = usage.Known
-		} else {
-			result.Usage.Known = result.Usage.Known && usage.Known
-		}
+		mergeContextUsage(&result.Usage, usage, !usageObserved)
+		usageObserved = true
+
 		if err != nil {
 			return result, err
 		}
@@ -253,9 +288,11 @@ func Complete(ctx context.Context, cfg Config, messages []Message, tools []Tool)
 func (e *Engine) complete(ctx context.Context, messages []Message) (Message, Usage, error) {
 	return e.completeWithTools(ctx, messages, Tools())
 }
-func (e *Engine) completeWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, Usage, error) {
+func (e *Engine) completeAttemptWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, Usage, error) {
 	if e.cfg.Engine == "codex" || e.cfg.Engine == "claude" {
-		return completion.Complete(ctx, harnessConfig(e.cfg), messages, tools)
+		cfg := e.cfg
+		cfg.BeforeRequest = guardedAdmission(cfg.BeforeRequest)
+		return completion.Complete(ctx, harnessConfig(cfg), messages, tools)
 	}
 	return e.httpComplete(ctx, messages, tools)
 }
@@ -289,7 +326,7 @@ func (e *Engine) httpComplete(ctx context.Context, messages []Message, tools []T
 	}
 	if e.cfg.BeforeRequest != nil {
 		if err := e.cfg.BeforeRequest(ctx); err != nil {
-			return empty, usage, err
+			return empty, usage, &requestAdmissionError{err}
 		}
 	}
 	resp, err := e.client.Do(req)
@@ -301,7 +338,7 @@ func (e *Engine) httpComplete(ctx context.Context, messages []Message, tools []T
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return empty, usage, fmt.Errorf("model returned HTTP %d; inspect endpoint, model and credentials (request was not retried)", resp.StatusCode)
+		return empty, usage, httpRequestError(resp, e.retryNow())
 	}
 	var payload struct {
 		Choices []struct {

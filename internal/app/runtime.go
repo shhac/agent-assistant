@@ -288,7 +288,7 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 	// Only a confirmed interrupted result may resume. A saved resuming intent
 	// whose response was lost is never repeated, even if the broker still says
 	// interrupted; its operation receipt requires inspection.
-	if run.Status == "interrupted" && !noDispatch && agent.OwnerControl != "pause" && agent.OwnerControl != "stop" && agent.Status != "resuming" && !(agent.Status == "reconciling" && agent.ResumeKey != "") {
+	if (run.Status == "interrupted" || (run.Status == "retry_wait" && !run.RetryAt.IsZero() && !time.Now().Before(run.RetryAt))) && !noDispatch && agent.OwnerControl != "pause" && agent.OwnerControl != "stop" && agent.Status != "resuming" && !(agent.Status == "reconciling" && agent.ResumeKey != "") {
 		if err := a.workerUsageAllowed(ctx, agent.ProfileID); err != nil {
 			if errors.Is(err, errWorkerUsageHeld) {
 				return nil
@@ -324,11 +324,25 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 	if run.UpdatedAt.IsZero() || run.UpdatedAt.After(time.Now().Add(time.Minute)) {
 		return errors.New("broker report needs a valid updated_at timestamp")
 	}
-	if run.Status == "interrupted" && agent.ResumeKey != "" && (agent.Status == "resuming" || agent.Status == "reconciling") {
-		return a.Core.MarkUncertain(ctx, agent.ID, "Resume acknowledgement is unresolved; the broker still reports interruption. Inspect this operation before another resume.")
+	pendingResume := agent.ResumeKey != "" && (agent.Status == "resuming" || agent.Status == "reconciling")
+	unchangedProviderWait := run.Status == "retry_wait" && run.ProviderFailures == agent.ProviderFailures && run.RetryAt.Equal(agent.RetryAt)
+	if pendingResume && (run.Status == "interrupted" || unchangedProviderWait) {
+		return a.Core.MarkUncertain(ctx, agent.ID, "Resume acknowledgement is unresolved; the broker still reports the preceding interruption or provider wait. Inspect this operation before another resume.")
 	}
 	if agent.ExternalID != "" && run.ID != agent.ExternalID {
 		return errors.New("worker update identity does not match")
+	}
+	if pendingResume && run.Status == "retry_wait" && !unchangedProviderWait {
+		// A new provider rejection proves the previous resume progressed. Clear
+		// its intent before admitting a later, independently scheduled retry.
+		if !agent.BrokerUpdatedAt.IsZero() && run.UpdatedAt.Before(agent.BrokerUpdatedAt) {
+			return errors.New("worker report is older than the recorded report")
+		}
+		if err := a.Core.MarkDispatched(ctx, agent.ID, run.ID); err != nil {
+			return err
+		}
+		agent.ResumeKey = ""
+		agent.Status = "running"
 	}
 	if len(run.SteeringAcknowledgements) > 0 {
 		if err := a.Core.AcknowledgeSteering(ctx, agent.ID, run.SteeringAcknowledgements); err != nil {
@@ -370,7 +384,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 	stale := time.Since(run.UpdatedAt) > time.Duration(a.Config().Limits.CheckInMinutes)*time.Minute
 	if stale && (status == "running" || status == "waiting") {
 		if !run.UpdatedAt.Equal(agent.BrokerUpdatedAt) {
-			if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
+			if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
 				return err
 			}
 		}
@@ -378,7 +392,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 			return err
 		}
 	} else if !run.UpdatedAt.Equal(agent.BrokerUpdatedAt) || status != agent.Status || run.Summary != agent.Summary || !reflect.DeepEqual(run.Evidence, agent.Evidence) {
-		if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
+		if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
 			return err
 		}
 	}
@@ -396,7 +410,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 	if err := a.Core.RecordAgentConversation(ctx, agent.ID, fmt.Sprintf("report:%x", digest), "report", "worker_to_daemon", report); err != nil {
 		return err
 	}
-	if !allowActions || agent.OwnerControl == "pause" || agent.OwnerControl == "stop" || status == "paused" || status == "pause_requested" || status == "stop_requested" {
+	if status == "retry_wait" || !allowActions || agent.OwnerControl == "pause" || agent.OwnerControl == "stop" || status == "paused" || status == "pause_requested" || status == "stop_requested" {
 		return nil
 	}
 	if err := a.checkProgress(ctx, agent, run); err != nil {

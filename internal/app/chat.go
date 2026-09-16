@@ -197,11 +197,6 @@ func (a *App) processNextChat(ctx context.Context, standalone bool) (bool, error
 
 func (a *App) runChatTurn(ctx context.Context, turn core.ChatTurn) (engine.Result, error) {
 	cfg := a.Config()
-	raw, history, err := a.chatContext(ctx, turn.UserMessageID)
-	if err != nil {
-		return engine.Result{}, err
-	}
-	go a.startChatLoading(ctx, turn.ID, turn.Message, history)
 	eventIDs := map[string]string{}
 	ec := engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, ClaudeBin: cfg.Model.ClaudeBin, ClaudeHome: cfg.Model.ClaudeHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens,
 		BeforeRequest: func(ctx context.Context) error {
@@ -216,6 +211,23 @@ func (a *App) runChatTurn(ctx context.Context, turn core.ChatTurn) (engine.Resul
 			// The model's call ID is never persisted or shown, nor are args/results.
 			return a.Core.RecordChatTool(ctx, turn.ID, id, event.Tool, event.Status)
 		}}
+	ec.OnRetry = func(ctx context.Context, event engine.RetryEvent) error {
+		return a.chatRetryStatus(ctx, turn.ID, event)
+	}
+	ec.OnContext = func(ctx context.Context, checkpoint engine.ContextCheckpoint, transcript []engine.Message) error {
+		if err := a.archiveContext(ctx, checkpoint, transcript); err != nil {
+			return err
+		}
+		return a.Core.SetChatModelStatus(ctx, turn.ID, "Earlier context summarized; continuing with saved progress.", time.Time{})
+	}
+	if err := a.compactChatHistory(ctx, turn.UserMessageID, ec); err != nil {
+		return engine.Result{}, err
+	}
+	raw, history, err := a.chatContext(ctx, turn.UserMessageID)
+	if err != nil {
+		return engine.Result{}, err
+	}
+	go a.startChatLoading(ctx, turn.ID, turn.Message, history)
 	req := engine.Request{Message: turn.Message, History: history, Context: raw}
 	if a.chatInvoker != nil {
 		return a.chatInvoker(ctx, ec, req, a)
