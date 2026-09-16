@@ -1,21 +1,12 @@
-import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
+import { WorkerConversation } from "./WorkerConversation";
 import { WorkerFailureCard } from "./WorkerFailureCard";
 import { sinceLabel, Status } from "./ui";
+import { needsAttention as attentionState, stateDetail } from "./states";
+import { explainFailure } from "./failure";
 import type { Agent } from "./api";
 
-/** Worker states that hold the outcome up and deserve to be open by default. */
-export const attentionStates = [
-  "interrupted",
-  "retry_wait",
-  "blocked",
-  "reconciling",
-  "pause_requested",
-  "paused",
-  "stop_requested",
-];
-
 export function needsAttention(agent: Agent): boolean {
-  return attentionStates.includes(agent.status);
+  return attentionState(agent.status);
 }
 
 /**
@@ -37,6 +28,9 @@ export function Assignment({
   onInvestigate?: (prompt: string) => void;
 }) {
   const attention = needsAttention(agent);
+  // The failure card is the only judge of whether it has an account to give;
+  // anything it cannot explain still shows its recorded summary.
+  const explained = explainFailure(agent) !== null;
   const progress = sinceLabel(agent.last_progress_at || agent.last_update);
   return (
     <article
@@ -46,7 +40,7 @@ export function Assignment({
       <div className="assignment-heading">
         <strong>{agent.name}</strong>
         <Status tone={attention ? "amber" : agent.status === "completed" ? "green" : ""}>
-          {workerStateLabel(agent.status)}
+          {stateDetail(agent.status)}
         </Status>
       </div>
       <p className="assignment-meta">
@@ -54,7 +48,7 @@ export function Assignment({
         {agent.recoveries ? ` · ${agent.recoveries} recovery attempts recorded` : ""}
       </p>
 
-      {attention ? (
+      {explained ? (
         <WorkerFailureCard agent={agent} onInvestigate={onInvestigate} />
       ) : (
         agent.summary && (

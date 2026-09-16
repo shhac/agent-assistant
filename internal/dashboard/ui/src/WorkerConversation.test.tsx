@@ -308,7 +308,7 @@ it("shows provider cooldown separately from login failure and preserves worker c
     }),
   );
   await screen.findByText("Keyboard checks pass.");
-  expect(screen.getByText("Waiting for model provider")).toBeTruthy();
+  expect(screen.getByText("Waiting for the model provider")).toBeTruthy();
   expect(screen.getByText(/Next provider retry after/)).toBeTruthy();
   expect(
     screen.getByText(

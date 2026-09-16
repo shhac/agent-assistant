@@ -7,7 +7,7 @@ import {
   type Project,
   type State,
 } from "./api";
-import { workerStateLabel } from "./WorkerConversation";
+import { stateDetail } from "./states";
 import { WorkerEditor } from "./WorkerEditor";
 import "./workers.css";
 
@@ -265,7 +265,7 @@ function CommissionedAssignment({
     >
       <div className="project-worker-heading">
         <h4>{agent.name || agent.role}</h4>
-        <span className="worker-state">{workerStateLabel(agent.status)}</span>
+        <span className="worker-state">{stateDetail(agent.status)}</span>
       </div>
       <p className="field-hint">
         {label(agent.role)}

@@ -53,10 +53,6 @@ func attentionRank(state string) int {
 	return 0
 }
 
-// NeedsOwner reports whether a derived state is waiting on the owner rather
-// than on the assistant, a worker or a scheduled retry.
-func (a ProjectAttention) NeedsOwner() bool { return a.NextAction == "owner" }
-
 func attentionNextAction(state string) string {
 	switch state {
 	case "blocked", "interrupted", "review", "paused", "pause_requested", "stop_requested":
@@ -99,7 +95,7 @@ func DeriveAttention(v Snapshot) []ProjectAttention {
 		if p.Status == "completed" || p.Status == "cancelled" || p.Status == "archived" {
 			continue
 		}
-		byProject[p.ID] = &ProjectAttention{ProjectID: p.ID, Execution: "", NextAction: "none"}
+		byProject[p.ID] = &ProjectAttention{ProjectID: p.ID}
 	}
 
 	best := map[string]int{}

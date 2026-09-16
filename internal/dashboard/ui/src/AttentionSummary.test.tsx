@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AttentionSummary, executionLabel } from "./AttentionSummary";
+import { AttentionSummary } from "./AttentionSummary";
+import { stateLabel } from "./states";
 import type { Project, ProjectAttention } from "./api";
 
 const projects: Project[] = [
@@ -131,7 +132,7 @@ describe("attention summary", () => {
         reason: "Execution finished; acceptance review is required",
       },
     ]);
-    expect(screen.getByText("Ready for your review")).toBeTruthy();
+    expect(screen.getByText("Ready for acceptance")).toBeTruthy();
   });
 
   it("never prints a raw state identifier", () => {
@@ -146,8 +147,8 @@ describe("attention summary", () => {
     ]);
     expect(document.body.textContent).not.toContain("reconciling");
     expect(screen.getByText("Checking worker state")).toBeTruthy();
-    expect(executionLabel("pause_requested")).toBe("Pausing");
-    expect(executionLabel("retry_wait")).not.toContain("_");
+    expect(stateLabel("pause_requested")).toBe("Pausing");
+    expect(stateLabel("retry_wait")).not.toContain("_");
   });
 
   it("does not demand the owner for a control they already requested", () => {
@@ -155,5 +156,31 @@ describe("attention summary", () => {
     expect(
       screen.queryByRole("region", { name: "Work needing attention" }),
     ).toBeNull();
+  });
+
+  // A scheduled retry is the worker's turn. Counting it alongside decisions as
+  // something that "needs you" overstates the first number the owner reads.
+  it("counts only the owner's own turn as needing them", () => {
+    show(
+      [
+        {
+          ...blocked,
+          execution: "retry_wait",
+          next_action: "worker",
+          recovery: "scheduled",
+          reason: "Model provider temporarily unavailable",
+        },
+      ],
+      1,
+    );
+    expect(screen.queryByText("1 decision and 1 outcome need you")).toBeNull();
+    expect(
+      screen.getByText("1 decision needs your judgment · 1 not moving"),
+    ).toBeTruthy();
+  });
+
+  it("still counts work that is genuinely the owner's turn", () => {
+    show([blocked], 1);
+    expect(screen.getByText("1 decision and 1 outcome need you")).toBeTruthy();
   });
 });

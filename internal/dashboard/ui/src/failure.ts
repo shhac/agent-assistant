@@ -1,4 +1,5 @@
 import type { Agent } from "./api";
+import { actorLabel, isHeldUp, type Actor } from "./states";
 
 /**
  * An owner-readable account of a stopped worker. Every field here reports what
@@ -15,8 +16,8 @@ export interface FailureExplanation {
   unknown: string;
   /** Whether recovery is scheduled, held, or waiting on the owner. */
   recovery: string;
-  /** Who acts next. */
-  owner: "you" | "assistant" | "worker";
+  /** Who acts next, in the daemon's vocabulary. */
+  owner: Actor;
   /** The suggested next step, phrased as a choice rather than an action taken. */
   nextStep: string;
 }
@@ -53,10 +54,7 @@ export function failureKindPhrase(kind?: string): string {
 
 export function explainFailure(agent: Agent): FailureExplanation | null {
   const modelFailure = !!agent.provider_failure_kind;
-  const stopped = ["blocked", "interrupted", "retry_wait", "reconciling"].includes(
-    agent.status,
-  );
-  if (!stopped) return null;
+  if (!isHeldUp(agent.status)) return null;
 
   if (agent.status === "retry_wait") {
     return {
@@ -93,7 +91,7 @@ export function explainFailure(agent: Agent): FailureExplanation | null {
         "This was not a model provider failure, so no provider diagnosis exists. The recorded summary states the limit or interruption.",
       unknown: "",
       recovery: "No automatic recovery is scheduled.",
-      owner: "you",
+      owner: "owner",
       nextStep:
         "Read the summary and preserved evidence, then decide whether to resume or change the assignment.",
     };
@@ -111,16 +109,12 @@ export function explainFailure(agent: Agent): FailureExplanation | null {
         : "The underlying cause is not established. Do not assume a login, model or compaction problem.",
     recovery:
       "Automatic retry is not scheduled. Progress is preserved and the session was not duplicated.",
-    owner: "you",
+    owner: "owner",
     nextStep:
       "Inspect the preserved work, or ask your assistant to investigate before resuming.",
   };
 }
 
 export function ownerLabel(owner: FailureExplanation["owner"]): string {
-  return owner === "you"
-    ? "You"
-    : owner === "assistant"
-      ? "Your assistant"
-      : "The worker";
+  return actorLabel(owner);
 }

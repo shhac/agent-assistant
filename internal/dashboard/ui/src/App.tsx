@@ -35,11 +35,8 @@ import {
 import { WorkerSettings } from "./WorkerSettings";
 import { PendingOperations } from "./PendingOperations";
 import { DecisionHistory } from "./DecisionHistory";
-import {
-  AttentionSummary,
-  executionLabel,
-  isHeldUp,
-} from "./AttentionSummary";
+import { AttentionSummary } from "./AttentionSummary";
+import { isHeldUp, stateLabel } from "./states";
 import { groupActivity } from "./activity";
 import {
   dateLabel,
@@ -675,7 +672,7 @@ function ProjectRow({
       </span>
       <span className="project-states">
         {heldUp && (
-          <Status tone="amber">{executionLabel(health.execution)}</Status>
+          <Status tone="amber">{stateLabel(health.execution)}</Status>
         )}
         <Status
           tone={
@@ -735,7 +732,7 @@ function Projects({
                 );
                 return health && isHeldUp(health.execution) ? (
                   <Status tone="amber">
-                    {executionLabel(health.execution)}
+                    {stateLabel(health.execution)}
                   </Status>
                 ) : null;
               })()}

@@ -12,20 +12,8 @@ import "./work.css";
 import { Assignment, needsAttention } from "./Assignment";
 import { EvidenceView } from "./EvidenceView";
 import { isQueued, orderQueue, startCondition } from "./queue";
+import { stateLabel } from "./states";
 
-const statuses: Record<WorkItem["status"], string> = {
-  ready: "Ready to coordinate",
-  queued: "Queued next",
-  waiting: "Waiting",
-  interrupted: "Interrupted",
-  blocked: "Blocked",
-  paused: "Paused",
-  cancelled: "Stopped",
-  active: "In progress",
-  review: "Ready for acceptance",
-  accepted: "Accepted",
-  legacy_completed: "Previously completed",
-};
 function when(value: string) {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : "";
@@ -157,7 +145,7 @@ function QueuedRow({
         <div className="queue-heading">
           <strong>{item.title}</strong>
           <span className={`work-status ${item.status}`}>
-            {statuses[item.status] || item.status.replaceAll("_", " ")}
+            {stateLabel(item.status)}
           </span>
         </div>
         <p className="queue-condition">{startCondition(item, predecessor)}</p>
@@ -467,7 +455,7 @@ function WorkCard({
       <div className="work-heading">
         <h3>{item.title}</h3>
         <span className={`work-status ${item.status}`}>
-          {statuses[item.status] || item.status.replaceAll("_", " ")}
+          {stateLabel(item.status)}
         </span>
       </div>
       <p className="work-objective">{item.objective}</p>

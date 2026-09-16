@@ -38,7 +38,7 @@ func TestAttentionReportsBlockedWorkWithNoOpenDecisions(t *testing.T) {
 	if got.OpenDecisions != 0 {
 		t.Fatalf("open decisions = %d, want 0", got.OpenDecisions)
 	}
-	if !got.NeedsOwner() {
+	if got.NextAction != "owner" {
 		t.Fatalf("next action = %q, want owner", got.NextAction)
 	}
 	if got.Recovery != "held" {
@@ -112,7 +112,7 @@ func TestAttentionCountsOwnerQueuesIndependentlyOfExecution(t *testing.T) {
 	if got.PendingOperations != 1 {
 		t.Fatalf("pending operations = %d, want 1", got.PendingOperations)
 	}
-	if !got.NeedsOwner() {
+	if got.NextAction != "owner" {
 		t.Fatalf("an open question is the owner's turn, got %q", got.NextAction)
 	}
 }
@@ -215,12 +215,43 @@ func TestDemoWorkspaceCoversTheStatesTheDashboardReports(t *testing.T) {
 	if stopped.OpenDecisions != 0 {
 		t.Fatalf("the blocked demo project should have no open decision, got %d", stopped.OpenDecisions)
 	}
-	if !stopped.NeedsOwner() {
+	if stopped.NextAction != "owner" {
 		t.Fatalf("blocked demo work is not attributed to the owner: %+v", stopped)
 	}
 	for _, a := range v.Agents {
 		if a.ID == "demo-blocked-worker" && a.ModelFailureEvidence == "" {
 			t.Fatal("the blocked demo worker records no failure evidence to display")
+		}
+	}
+}
+
+// The dashboard decides what appears in "work needing attention" by asking
+// whether a recovery posture was reported. That only stays equivalent to the
+// held-up states if every one of them reports a posture and nothing else does.
+func TestRecoveryPostureMarksExactlyTheHeldUpStates(t *testing.T) {
+	heldUp := map[string]bool{"blocked": true, "interrupted": true, "reconciling": true, "retry_wait": true}
+	for _, state := range []string{
+		"blocked", "interrupted", "reconciling", "retry_wait",
+		"paused", "pause_requested", "stop_requested",
+		"running", "active", "waiting", "queued", "ready", "review", "dispatching", "resuming",
+	} {
+		reported := attentionRecovery(state) != ""
+		if reported != heldUp[state] {
+			t.Fatalf("state %q reports recovery %v, want %v", state, reported, heldUp[state])
+		}
+	}
+}
+
+// A control the owner already requested is their turn to resume, but it is not
+// work that has stopped unexpectedly. Recording the distinction keeps the
+// daemon and the dashboard from drifting on it silently.
+func TestOwnerRequestedControlsAreTheOwnersTurnWithoutBeingHeldUp(t *testing.T) {
+	for _, state := range []string{"paused", "pause_requested", "stop_requested"} {
+		if got := attentionNextAction(state); got != "owner" {
+			t.Fatalf("next action for %q = %q, want owner", state, got)
+		}
+		if attentionRecovery(state) != "" {
+			t.Fatalf("%q reports a recovery posture; the dashboard would list it as not moving", state)
 		}
 	}
 }

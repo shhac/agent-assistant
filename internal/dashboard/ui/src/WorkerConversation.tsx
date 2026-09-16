@@ -7,6 +7,7 @@ import {
 } from "react";
 import { api, APIError, errorText, type Agent } from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+import { stateDetail } from "./states";
 import "./work.css";
 
 type Action = "pause" | "resume" | "stop";
@@ -29,24 +30,6 @@ type Conversation = {
   history_limited?: boolean;
   controls: Controls;
 };
-export function workerStateLabel(status: string) {
-  return (
-    (
-      {
-        pause_requested: "Pause requested · waiting for current operation",
-        stop_requested: "Stop requested · waiting for cleanup",
-        paused: "Paused",
-        retry_wait: "Waiting for model provider",
-        interrupted: "Interrupted",
-        blocked: "Blocked",
-        reconciling: "Checking interrupted work",
-        resuming: "Resuming",
-        completed: "Reported complete",
-        cancelled: "Stopped",
-      } as Record<string, string>
-    )[status] || status.replaceAll("_", " ")
-  );
-}
 export function WorkerConversation({
   agent,
   refresh,
@@ -304,7 +287,7 @@ function WorkerConversationPanel({
     >
       <div className="work-heading">
         <h4>{agent.name}</h4>
-        <span role="status">{workerStateLabel(status)}</span>
+        <span role="status">{stateDetail(status)}</span>
       </div>
       <p className="field-hint">
         Assistant instructions, worker reports, questions and control events for

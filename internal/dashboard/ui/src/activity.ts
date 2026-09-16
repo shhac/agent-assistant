@@ -1,4 +1,5 @@
 import type { Activity } from "./api";
+import { stateLabel } from "./states";
 
 /**
  * Readable descriptions for recorded activity kinds. The daemon also records a
@@ -67,7 +68,8 @@ export function activityLabel(kind?: string): string {
   if (known) return known;
   const separator = kind.indexOf(".");
   const rest = separator < 0 ? "" : kind.slice(separator + 1);
-  if (kind.slice(0, separator) === "agent" && rest) return "Worker " + rest.replaceAll("_", " ");
+  if (kind.slice(0, separator) === "agent" && rest)
+    return "Worker " + stateLabel(rest);
   return kind.replaceAll("_", " ").replaceAll(".", " ");
 }
 

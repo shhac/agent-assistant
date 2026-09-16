@@ -23,12 +23,12 @@ export function WorkerFailureCard({
   const since = sinceLabel(stoppedAt);
   return (
     <section
-      className={`failure-card ${explanation.owner === "you" ? "needs-owner" : ""}`}
+      className={`failure-card ${explanation.owner === "owner" ? "needs-owner" : ""}`}
       aria-label={`What stopped ${agent.name}`}
     >
       <div className="failure-headline">
         <span className="failure-symbol">
-          <Icon name={explanation.owner === "you" ? "Alert" : "Clock"} size={18} />
+          <Icon name={explanation.owner === "owner" ? "Alert" : "Clock"} size={18} />
         </span>
         <div>
           <strong>{explanation.headline}</strong>

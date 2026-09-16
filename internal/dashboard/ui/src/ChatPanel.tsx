@@ -10,6 +10,7 @@ import {
   type State,
 } from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
+import { isHeldUp } from "./states";
 import "./chat.css";
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const icons: Record<string, string> = {
@@ -229,11 +230,7 @@ export function ChatPanel({
   const turnsByMessage = new Map(
     turns.map((t) => [t.user_message_id || t.id, t]),
   );
-  const heldUp = state.attention.filter((a) =>
-    ["blocked", "interrupted", "reconciling", "retry_wait"].includes(
-      a.execution,
-    ),
-  );
+  const heldUp = state.attention.filter((a) => isHeldUp(a.execution));
   const running = turns.find((t) => t.status === "running");
   const queueCount = turns.filter((t) => t.status === "queued").length;
   const eventSignature = turns

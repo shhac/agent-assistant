@@ -1,47 +1,12 @@
 import { Icon, sinceLabel, Status } from "./ui";
+import { actorLabel, isHeldUp, stateLabel } from "./states";
 import type { Project, ProjectAttention } from "./api";
-
-const executionLabels: Record<string, string> = {
-  blocked: "Blocked",
-  interrupted: "Interrupted",
-  reconciling: "Checking worker state",
-  review: "Ready for your review",
-  paused: "Paused",
-  pause_requested: "Pausing",
-  stop_requested: "Stopping",
-  retry_wait: "Waiting for the model provider",
-  waiting: "Waiting",
-  queued: "Queued",
-  ready: "Ready",
-  dispatching: "Starting up",
-  resuming: "Resuming",
-  running: "Running",
-  active: "Running",
-};
-
-const nextActionLabels: Record<string, string> = {
-  owner: "You",
-  assistant: "Your assistant",
-  worker: "The worker",
-  none: "Nobody",
-};
 
 const recoveryLabels: Record<string, string> = {
   scheduled: "Retry scheduled",
   checking: "Checking before any retry",
   held: "Held until you decide",
 };
-
-export function executionLabel(execution: string): string {
-  return executionLabels[execution] || execution.replaceAll("_", " ");
-}
-
-/** Execution states that hold the work up rather than merely describing it. */
-export function isHeldUp(execution: string): boolean {
-  return ["blocked", "interrupted", "reconciling", "retry_wait"].includes(
-    execution,
-  );
-}
 
 export function attentionTone(item: ProjectAttention): string {
   if (item.next_action === "owner" && isHeldUp(item.execution)) return "amber";
@@ -73,7 +38,6 @@ export function AttentionSummary({
     (a) => isHeldUp(a.execution) || a.execution === "review",
   );
   const needsOwner = heldUp.filter((a) => a.next_action === "owner");
-  const calm = !decisionCount && !heldUp.length;
 
   return (
     <>
@@ -90,7 +54,7 @@ export function AttentionSummary({
         </span>
         <div>
           <h2>{headline(decisionCount, needsOwner.length, heldUp.length)}</h2>
-          <p>{body(decisionCount, heldUp.length, calm, hasProjects)}</p>
+          <p>{body(decisionCount, heldUp.length, hasProjects)}</p>
         </div>
         {decisionCount > 0 && (
           <button className="text-button" onClick={onReview}>
@@ -125,14 +89,14 @@ export function AttentionSummary({
                       <strong>{project?.title || "Project"}</strong>
                       <span className="attention-detail">
                         {item.agent_name ? `${item.agent_name} · ` : ""}
-                        {item.reason || executionLabel(item.execution)}
+                        {item.reason || stateLabel(item.execution)}
                       </span>
                       <span className="attention-meta">
                         {progress
                           ? `Last progress ${progress}`
                           : "No progress recorded yet"}
                         {" · "}
-                        {nextActionLabels[item.next_action] || "Your assistant"}{" "}
+                        {actorLabel(item.next_action)}{" "}
                         {item.next_action === "owner" ? "act next" : "acts next"}
                         {item.recovery
                           ? ` · ${recoveryLabels[item.recovery] || item.recovery}`
@@ -141,7 +105,7 @@ export function AttentionSummary({
                     </span>
                     <span className="attention-row-state">
                       <Status tone={attentionTone(item)}>
-                        {executionLabel(item.execution)}
+                        {stateLabel(item.execution)}
                       </Status>
                       <Icon name="Chevron" size={15} />
                     </span>
@@ -157,8 +121,13 @@ export function AttentionSummary({
 }
 
 function headline(decisions: number, needsOwner: number, heldUp: number) {
+  // Only work that is actually the owner's turn may be counted as needing
+  // them; an outcome waiting on a scheduled retry is the worker's turn, and
+  // saying otherwise overstates the queue the owner reads first.
+  if (decisions && needsOwner)
+    return `${decisions} ${decisions === 1 ? "decision" : "decisions"} and ${needsOwner} ${needsOwner === 1 ? "outcome" : "outcomes"} need you`;
   if (decisions && heldUp)
-    return `${decisions} ${decisions === 1 ? "decision" : "decisions"} and ${heldUp} ${heldUp === 1 ? "outcome" : "outcomes"} need you`;
+    return `${decisions} ${decisions === 1 ? "decision needs" : "decisions need"} your judgment · ${heldUp} not moving`;
   if (decisions)
     return `${decisions} ${decisions === 1 ? "decision needs" : "decisions need"} your judgment`;
   if (needsOwner)
@@ -168,17 +137,11 @@ function headline(decisions: number, needsOwner: number, heldUp: number) {
   return "No decisions waiting on you";
 }
 
-function body(
-  decisions: number,
-  heldUp: number,
-  calm: boolean,
-  hasProjects: boolean,
-) {
+function body(decisions: number, heldUp: number, hasProjects: boolean) {
   if (heldUp)
     return "Work has stopped or is waiting. Open it to see the blocker and who acts next.";
   if (decisions)
     return "Your assistant has gathered the context. You make the call.";
-  if (!calm) return "Your assistant will bring you anything that needs a decision.";
   return hasProjects
     ? "No work is reported blocked, and nothing needs your judgment."
     : "Start with one meaningful outcome. The coordination happens from there.";
