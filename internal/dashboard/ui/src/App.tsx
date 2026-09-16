@@ -508,7 +508,17 @@ export function App() {
                           <Icon name="Check" size={16} />
                           {d.title}
                         </span>
-                        <Status>{humanStatus(d.status)}</Status>
+                        <div>
+                          <Status>{humanStatus(d.status)}</Status>
+                          {(d.answer || d.resolution_reason) && (
+                            <p className="muted">
+                              {d.status === "dismissed"
+                                ? "Reason: "
+                                : "Answer: "}
+                              {d.resolution_reason || d.answer}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     ))}
                 </section>
@@ -939,14 +949,28 @@ function DecisionCard({
 }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  async function choose(choice: string) {
-    setBusy(choice);
+  const [mode, setMode] = useState<"answer" | "dismiss" | "">("");
+  const [draft, setDraft] = useState("");
+  async function choose(
+    choice: string,
+    action: "choice" | "answer" | "dismiss" = "choice",
+  ) {
+    setBusy(action === "choice" ? choice : action);
     setError("");
     try {
-      await api(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
-        method: "POST",
-        body: JSON.stringify({ choice }),
-      });
+      await api(
+        `/api/decisions/${encodeURIComponent(decision.id)}/${action === "dismiss" ? "dismiss" : "resolve"}`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            action === "dismiss"
+              ? { reason: choice }
+              : action === "answer"
+                ? { answer: choice }
+                : { choice },
+          ),
+        },
+      );
       await refresh();
     } catch (e) {
       setError(errorText(e));
@@ -990,6 +1014,79 @@ function DecisionCard({
           </p>
         )}
       </div>
+      <div className="decision-actions">
+        <button
+          className="button secondary"
+          disabled={!!busy}
+          onClick={() => {
+            setMode("answer");
+            setDraft("");
+            setError("");
+          }}
+        >
+          Give a different answer
+        </button>
+        <button
+          className="button secondary"
+          disabled={!!busy}
+          onClick={() => {
+            setMode("dismiss");
+            setDraft("");
+            setError("");
+          }}
+        >
+          No longer needed
+        </button>
+      </div>
+      {mode && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (draft.trim() && !busy) void choose(draft.trim(), mode);
+          }}
+        >
+          <label>
+            {mode === "dismiss"
+              ? "Why is this no longer needed?"
+              : "Your answer"}
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              maxLength={mode === "dismiss" ? 4096 : 16384}
+              disabled={!!busy}
+              required
+              rows={3}
+            />
+          </label>
+          {mode === "dismiss" && (
+            <p className="muted">
+              Closes this question and records your reason. It does not approve
+              work or resume a waiting worker.
+            </p>
+          )}
+          <div className="decision-actions">
+            <button
+              className="button warm"
+              disabled={!!busy || !draft.trim()}
+              type="submit"
+            >
+              {busy
+                ? "Recording…"
+                : mode === "dismiss"
+                  ? "Dismiss decision"
+                  : "Record answer"}
+            </button>
+            <button
+              className="button secondary"
+              disabled={!!busy}
+              type="button"
+              onClick={() => setMode("")}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
       <ErrorNotice error={error} />
     </article>
   );

@@ -50,6 +50,21 @@ func TestDashboardProjectDecisionMemoryFlow(t *testing.T) {
 	if w := call("POST", "/api/decisions/"+d.ID+"/resolve", `{"choice":"Excel"}`); w.Code != 409 {
 		t.Fatal("repeated decision overwrote answer")
 	}
+
+	custom, _ := s.CreateDecision(context.Background(), core.DecisionInput{Title: "Custom?", Context: "Options incomplete", Recommendation: "One", Choices: []string{"One", "Two"}})
+	if w := call("POST", "/api/decisions/"+custom.ID+"/resolve", `{"choice":"One","answer":"Other"}`); w.Code != 400 {
+		t.Fatal("ambiguous answer accepted", w.Code)
+	}
+	if w := call("POST", "/api/decisions/"+custom.ID+"/resolve", `{"answer":"Use the existing option"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"disposition":"custom"`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	stale, _ := s.CreateDecision(context.Background(), core.DecisionInput{Title: "Stale?", Context: "Already resolved elsewhere", Recommendation: "One", Choices: []string{"One", "Two"}})
+	if w := call("POST", "/api/decisions/"+stale.ID+"/dismiss", `{"reason":""}`); w.Code != 400 {
+		t.Fatal("blank reason accepted")
+	}
+	if w := call("POST", "/api/decisions/"+stale.ID+"/dismiss", `{"reason":"Already configured"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"dismissed"`) || strings.Contains(w.Body.String(), `"answer"`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
 	memory := call("POST", "/api/memories", `{"content":"Prefer concise updates"}`)
 	if memory.Code != 201 {
 		t.Fatal(memory.Body.String())

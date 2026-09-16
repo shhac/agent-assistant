@@ -324,3 +324,41 @@ it("shows provider cooldown separately from login failure and preserves worker c
     true,
   );
 });
+it("shows recorded failure diagnostics without inventing missing details", async () => {
+  mock(() => ({ body: page }));
+  const { rerender } = render(
+    <WorkerConversation
+      agent={{
+        ...agent,
+        status: "blocked",
+        provider_failure_kind: "structured_output_limit",
+        model_failure_engine: "claude",
+        model_failure_phase: "response",
+        model_failure_code: "error_max_structured_output_retries",
+        model_exit_code: 1,
+      }}
+      demo={false}
+      refresh={vi.fn()}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  );
+  await screen.findByText("Keyboard checks pass.");
+  expect(screen.getByText("Model failure details")).toBeTruthy();
+  expect(screen.getByText("error_max_structured_output_retries")).toBeTruthy();
+  expect(screen.getByText("CLI exit code: 1")).toBeTruthy();
+  rerender(
+    <WorkerConversation
+      agent={{ ...agent, status: "blocked", provider_failure_kind: "unknown" }}
+      demo={false}
+      refresh={vi.fn()}
+    />,
+  );
+  expect(
+    screen.getByText("No detailed diagnostic was recorded for this attempt."),
+  ).toBeTruthy();
+  expect(screen.queryByText("error_max_structured_output_retries")).toBeNull();
+});

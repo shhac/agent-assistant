@@ -174,7 +174,11 @@ func (a *App) SteerAgent(ctx context.Context, id, key, message string) (core.Ste
 // Delivery receipts describe broker acceptance, never model agreement or completed work.
 func (a *App) recordMessageDelivery(ctx context.Context, id, key string, deliveryErr error) {
 	kind, content := "delivery", "The broker accepted the preceding message. Reading and implementation are not confirmed."
-	if deliveryErr != nil {
+	var rejected *worker.RejectionError
+	if errors.As(deliveryErr, &rejected) {
+		kind = "delivery_rejected"
+		content = "The broker refused the preceding message before delivery. Inspect the preserved worker and use an available lifecycle control; no delivery is pending."
+	} else if deliveryErr != nil {
 		kind = "delivery_uncertain"
 		content = "The preceding message delivery was not confirmed. The daemon will reconcile this operation before repeating it."
 	}

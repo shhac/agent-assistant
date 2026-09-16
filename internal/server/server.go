@@ -138,11 +138,34 @@ func New(a *app.App, auth *Auth) http.Handler {
 	mux.HandleFunc("POST /api/decisions/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Choice string `json:"choice"`
+			Answer string `json:"answer"`
 		}
 		if decode(w, r, &in) != nil {
 			return
 		}
-		v, err := a.Core.ResolveDecision(r.Context(), r.PathValue("id"), in.Choice)
+		if (strings.TrimSpace(in.Choice) == "") == (strings.TrimSpace(in.Answer) == "") {
+			problem(w, errors.New("provide one selected choice or custom answer"))
+			return
+		}
+		answer := in.Choice
+		if strings.TrimSpace(in.Answer) != "" {
+			answer = in.Answer
+		}
+		v, err := a.Core.ResolveDecision(r.Context(), r.PathValue("id"), answer)
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		respond(w, 200, v)
+	})
+	mux.HandleFunc("POST /api/decisions/{id}/dismiss", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Reason string `json:"reason"`
+		}
+		if decode(w, r, &in) != nil {
+			return
+		}
+		v, err := a.Core.DismissDecision(r.Context(), r.PathValue("id"), in.Reason)
 		if err != nil {
 			problem(w, err)
 			return

@@ -384,7 +384,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 	stale := time.Since(run.UpdatedAt) > time.Duration(a.Config().Limits.CheckInMinutes)*time.Minute
 	if stale && (status == "running" || status == "waiting") {
 		if !run.UpdatedAt.Equal(agent.BrokerUpdatedAt) {
-			if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
+			if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ModelFailureEngine: run.ModelFailureEngine, ModelFailurePhase: run.ModelFailurePhase, ModelFailureCode: run.ModelFailureCode, ModelExitCode: run.ModelExitCode, ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
 				return err
 			}
 		}
@@ -392,7 +392,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 			return err
 		}
 	} else if !run.UpdatedAt.Equal(agent.BrokerUpdatedAt) || status != agent.Status || run.Summary != agent.Summary || !reflect.DeepEqual(run.Evidence, agent.Evidence) {
-		if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
+		if _, err := a.Core.UpdateAgent(ctx, agent.ID, core.AgentUpdate{ModelFailureEngine: run.ModelFailureEngine, ModelFailurePhase: run.ModelFailurePhase, ModelFailureCode: run.ModelFailureCode, ModelExitCode: run.ModelExitCode, ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt}); err != nil {
 			return err
 		}
 	}
@@ -669,6 +669,11 @@ func (a *App) sendAdmittedInstruction(ctx context.Context, ag core.Agent, key, m
 	}
 	run, err := c.Send(ctx, ag.ExternalID, key, message)
 	a.recordMessageDelivery(ctx, ag.ID, key, err)
+	var rejected *worker.RejectionError
+	if errors.As(err, &rejected) {
+		a.refreshRefusedInstruction(ctx, ag, c)
+		return run, &noEffect{err}
+	}
 	if err != nil {
 		_ = a.Core.MarkUncertain(ctx, ag.ID, "Instruction delivery is uncertain; inspect the operation before repeating")
 	}

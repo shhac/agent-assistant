@@ -344,6 +344,7 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 		a.Status = in.Status
 		a.ContextCompactions, a.ContextBytes = in.ContextCompactions, in.ContextBytes
 		a.RetryAt, a.ProviderFailures, a.ProviderFailureKind = in.RetryAt, in.ProviderFailures, in.ProviderFailureKind
+		a.ModelFailureEngine, a.ModelFailurePhase, a.ModelFailureCode, a.ModelExitCode = in.ModelFailureEngine, in.ModelFailurePhase, in.ModelFailureCode, in.ModelExitCode
 		a.Summary = in.Summary
 		a.Evidence = append([]string{}, in.Evidence...)
 		if a.ExternalID == "" {
@@ -455,32 +456,6 @@ func (s *Service) CreateDecision(ctx context.Context, in DecisionInput) (Decisio
 		v.Decisions = append(v.Decisions, out)
 		record(v, out.CreatedAt, in.ProjectID, "decision.opened", in.Title)
 		return nil
-	})
-	return out, err
-}
-func (s *Service) ResolveDecision(ctx context.Context, id, answer string) (Decision, error) {
-	if !required(answer) {
-		return Decision{}, errors.New("answer is required")
-	}
-	var out Decision
-	err := s.store.update(ctx, func(v *Snapshot) error {
-		for i := range v.Decisions {
-			d := &v.Decisions[i]
-			if d.ID != id {
-				continue
-			}
-			if d.Status != "open" {
-				return fmt.Errorf("decision already resolved: %w", ErrConflict)
-			}
-			now := s.now().UTC()
-			d.Status = "resolved"
-			d.Answer = answer
-			d.ResolvedAt = &now
-			out = *d
-			record(v, now, d.ProjectID, "decision.resolved", d.Title+": "+answer)
-			return nil
-		}
-		return ErrNotFound
 	})
 	return out, err
 }
@@ -661,7 +636,7 @@ func (s *Service) BeginInstruction(ctx context.Context, id string) error {
 		if terminal(a.Status) || a.ExternalID == "" {
 			return errors.New("instruction requires a live external session")
 		}
-		if a.Status == "retry_wait" || (a.Status == "blocked" && a.ProviderFailureKind != "") || a.Status == "interrupted" || a.Status == "resuming" || (a.Status == "reconciling" && a.ResumeKey != "") {
+		if a.Status == "retry_wait" || (a.Status == "blocked" && a.ProviderFailureKind != "") || a.Status == "interrupted" || a.Status == "resuming" || a.Status == "reconciling" {
 			return errors.New("interrupted or uncertain recovery requires explicit reconciliation and resume")
 		}
 		if err := s.dispatchAuthority(v, a); err != nil {

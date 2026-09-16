@@ -278,5 +278,5 @@ var chatToolLabels = map[string]string{
 	"queue_work_item": "Queue the next outcome", "unqueue_work_item": "Withdraw queued work", "create_work_item": "Define an outcome", "steer_work_item": "Record direction for the outcome", "accept_work_item": "Accept reviewed work",
 	"prepare_worker": "Prepare a worker", "list_connections": "Check available connections", "query_connection": "Read connected information",
 	"read_state": "Check project context", "create_project": "Add a project", "update_project": "Update the project brief", "delegate": "Coordinate an agent",
-	"ask_decision": "Prepare a decision", "remember_preference": "Remember a preference", "message_agent": "Message an agent", "complete_project": "Confirm project completion", "report_status": "Record a progress update",
+	"ask_decision": "Prepare a decision", "remember_preference": "Remember a preference", "message_agent": "Message an agent", "inspect_agent": "Inspect a worker", "control_agent": "Control a worker", "complete_project": "Confirm project completion", "report_status": "Record a progress update",
 }

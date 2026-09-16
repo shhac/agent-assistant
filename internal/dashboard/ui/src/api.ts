@@ -57,6 +57,10 @@ export interface Agent {
   retry_at?: string;
   provider_failures?: number;
   provider_failure_kind?: string;
+  model_failure_engine?: string;
+  model_failure_phase?: string;
+  model_failure_code?: string;
+  model_exit_code?: number;
   context_compactions?: number;
   context_bytes?: number;
   recoveries?: number;
@@ -78,6 +82,10 @@ export interface Agent {
   evidence?: string[];
 }
 export interface Decision {
+  answer?: string;
+  disposition?: "choice" | "custom" | "dismissed";
+  resolution_reason?: string;
+  resolved_at?: string;
   work_item_id?: string;
   id: string;
   agent_id?: string;
@@ -237,7 +245,10 @@ export function normalizeState(raw: Partial<State>): State {
 }
 export function pendingDecisions(decisions: Decision[]) {
   return decisions.filter(
-    (d) => !["resolved", "answered", "cancelled", "closed"].includes(d.status),
+    (d) =>
+      !["resolved", "answered", "cancelled", "closed", "dismissed"].includes(
+        d.status,
+      ),
   );
 }
 export function errorText(error: unknown) {

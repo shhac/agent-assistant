@@ -112,6 +112,11 @@ The assistant's default name is defined once in configuration. UI labels, model 
 
 Local access uses a single-use, five-minute pairing code exchanged for an HttpOnly session cookie. `--open` passes that code in a URL fragment, which the browser clears immediately. For another browser, use `dashboard open --print`. Private API reads and writes both require authentication. Treat the host account as trusted: another process running as that account can read local credentials.
 
+On Decisions, use **Give a different answer** to record your own resolution, or
+**No longer needed** to dismiss an obsolete question with a reason. Both remain in
+history. Dismissing a decision does not send an answer, grant approval or resume a
+worker that was waiting on it.
+
 ### Conversation queue and activity
 
 Send another message while the assistant is working to queue it. Accepted messages are stored by the daemon and run in order, even if the browser closes. Queued messages can be cancelled before they start. The conversation displays each turn’s tool activity as it begins and finishes, using friendly labels without raw arguments or results. A daemon interruption marks the active turn as interrupted instead of replaying its actions; messages that had not started remain queued.
@@ -187,6 +192,13 @@ Each assignment has **Conversation and controls**: recorded assistant instructio
 Acceptance records the exact revision of the contract, attempts, evidence and item decisions reviewed. Changed evidence rejects a stale acceptance request. The assistant can review and accept through its constrained tools; the dashboard offers the same check beside the criteria and evidence. Unresolved decisions, unfinished attempts, missing completion evidence and unacknowledged steering prevent acceptance. Acceptance is a review record, not a merge or deployment.
 
 Existing assignments migrate into a compatibility work item. Historical project completions remain historical; migration does not invent review evidence. Explicit project completion remains available separately from accepting an outcome.
+
+Worker recovery is available in conversation: ask the assistant to inspect an
+assignment and pause, resume or stop it. These controls use the same daemon checks
+as the dashboard, preserve the existing assignment on resume, and are unavailable
+to autonomous background reasoning. A confirmed message refusal is distinct from
+an unknown delivery outcome. Worker conversation details retain safe failure codes,
+CLI phase and exit status when reported; older attempts may have no such detail.
 
 ## Worker subscription limits
 

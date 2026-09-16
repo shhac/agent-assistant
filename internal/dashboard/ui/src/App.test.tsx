@@ -444,3 +444,100 @@ describe("owner dashboard flows", () => {
     expect(window.localStorage.length).toBe(0);
   });
 });
+
+describe("decision alternatives", () => {
+  const decision = {
+    id: "decision-stale",
+    title: "Old setup question",
+    context: "The old setup blocker may be stale.",
+    recommendation: "Set up",
+    choices: ["Set up", "Wait"],
+    status: "open",
+  };
+  it("records a custom answer and preserves the draft after failure", async () => {
+    state.decisions = [decision];
+    let failed = true;
+    respond = (path) => {
+      if (path.endsWith("/resolve")) {
+        if (failed)
+          return { status: 400, body: { error: "Please clarify the answer." } };
+        state = {
+          ...state,
+          decisions: [
+            {
+              ...decision,
+              status: "resolved",
+              disposition: "custom",
+              answer: "Use the existing setup",
+            },
+          ],
+        };
+        return { body: state.decisions[0] };
+      }
+      return { body: state };
+    };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Decisions/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Give a different answer" }),
+    );
+    const draft = screen.getByLabelText("Your answer");
+    fireEvent.change(draft, { target: { value: "Use the existing setup" } });
+    fireEvent.click(screen.getByRole("button", { name: "Record answer" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Please clarify the answer.",
+    );
+    expect(draft).toHaveProperty("value", "Use the existing setup");
+    failed = false;
+    fireEvent.click(screen.getByRole("button", { name: "Record answer" }));
+    expect(
+      await screen.findByText("Answer: Use the existing setup"),
+    ).toBeTruthy();
+    const writes = calls.filter((c) => c.options?.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(writes[0].options!.body as string)).toEqual({
+      answer: "Use the existing setup",
+    });
+  });
+  it("requires a reason for dismissal and does not request worker controls", async () => {
+    state.decisions = [decision];
+    respond = (path) => {
+      if (path.endsWith("/dismiss")) {
+        state = {
+          ...state,
+          decisions: [
+            {
+              ...decision,
+              status: "dismissed",
+              disposition: "dismissed",
+              resolution_reason: "Already configured",
+            },
+          ],
+        };
+        return { body: state.decisions[0] };
+      }
+      return { body: state };
+    };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Decisions/ }));
+    fireEvent.click(screen.getByRole("button", { name: "No longer needed" }));
+    expect(
+      screen.getByRole("button", { name: "Dismiss decision" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      screen.getByText(/does not approve work or resume a waiting worker/),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Why is this no longer needed?"), {
+      target: { value: "Already configured" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss decision" }));
+    expect(await screen.findByText("Reason: Already configured")).toBeTruthy();
+    const writes = calls.filter((c) => c.options?.method === "POST");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].path).toBe("/api/decisions/decision-stale/dismiss");
+    expect(JSON.parse(writes[0].options!.body as string)).toEqual({
+      reason: "Already configured",
+    });
+  });
+});

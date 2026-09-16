@@ -31,6 +31,10 @@ type Agent struct {
 	RetryAt             time.Time `json:"retry_at,omitempty"`
 	ProviderFailures    int       `json:"provider_failures,omitempty"`
 	ProviderFailureKind string    `json:"provider_failure_kind,omitempty"`
+	ModelFailureEngine  string    `json:"model_failure_engine,omitempty"`
+	ModelFailurePhase   string    `json:"model_failure_phase,omitempty"`
+	ModelFailureCode    string    `json:"model_failure_code,omitempty"`
+	ModelExitCode       *int      `json:"model_exit_code,omitempty"`
 	OwnerControl        string    `json:"owner_control,omitempty"`
 	ControlKey          string    `json:"control_key,omitempty"`
 	ControlCapabilities []string  `json:"control_capabilities,omitempty"`
@@ -59,18 +63,20 @@ type Agent struct {
 	Evidence            []string  `json:"evidence"`
 }
 type Decision struct {
-	WorkItemID     string     `json:"work_item_id,omitempty"`
-	ID             string     `json:"id"`
-	ProjectID      string     `json:"project_id,omitempty"`
-	AgentID        string     `json:"agent_id,omitempty"`
-	Title          string     `json:"title"`
-	Context        string     `json:"context"`
-	Recommendation string     `json:"recommendation"`
-	Choices        []string   `json:"choices"`
-	Status         string     `json:"status"`
-	Answer         string     `json:"answer,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	Disposition      string     `json:"disposition,omitempty"`
+	ResolutionReason string     `json:"resolution_reason,omitempty"`
+	WorkItemID       string     `json:"work_item_id,omitempty"`
+	ID               string     `json:"id"`
+	ProjectID        string     `json:"project_id,omitempty"`
+	AgentID          string     `json:"agent_id,omitempty"`
+	Title            string     `json:"title"`
+	Context          string     `json:"context"`
+	Recommendation   string     `json:"recommendation"`
+	Choices          []string   `json:"choices"`
+	Status           string     `json:"status"`
+	Answer           string     `json:"answer,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ResolvedAt       *time.Time `json:"resolved_at,omitempty"`
 }
 type Message struct {
 	ID        string    `json:"id"`
@@ -154,6 +160,10 @@ type AgentUpdate struct {
 	RetryAt             time.Time `json:"retry_at,omitempty"`
 	ProviderFailures    int       `json:"provider_failures,omitempty"`
 	ProviderFailureKind string    `json:"provider_failure_kind,omitempty"`
+	ModelFailureEngine  string    `json:"model_failure_engine,omitempty"`
+	ModelFailurePhase   string    `json:"model_failure_phase,omitempty"`
+	ModelFailureCode    string    `json:"model_failure_code,omitempty"`
+	ModelExitCode       *int      `json:"model_exit_code,omitempty"`
 	UpdatedAt           time.Time `json:"updated_at,omitempty"`
 	Status              string    `json:"status"`
 	Summary             string    `json:"summary"`

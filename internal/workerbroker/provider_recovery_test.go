@@ -326,3 +326,20 @@ func TestRestartPreservesPendingModelBlockerAfterCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestModelFailureDiagnosticsPersistAndClearOnSuccess(t *testing.T) {
+	b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+	defer b.Close()
+	id := providerRun(t, b)
+	exit := 1
+	b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorStructuredOutputLimit, Engine: "claude", Phase: completion.PhaseResponse, Code: "error_max_structured_output_retries", ExitCode: &exit})
+	r, _ := b.snapshot(id)
+	if r.Run.ProviderFailureKind != "structured_output_limit" || r.Run.ModelFailureCode != "error_max_structured_output_retries" || r.Run.ModelFailurePhase != "response" || r.Run.ModelFailureEngine != "claude" || r.Run.ModelExitCode == nil || *r.Run.ModelExitCode != 1 {
+		t.Fatalf("missing diagnostics: %+v", r.Run)
+	}
+	b.clearProviderFailure(id)
+	r, _ = b.snapshot(id)
+	if r.Run.ProviderFailureKind != "" || r.Run.ModelFailureCode != "" || r.Run.ModelExitCode != nil {
+		t.Fatal("stale diagnosis survived successful recovery")
+	}
+}

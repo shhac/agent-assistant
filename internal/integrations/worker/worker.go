@@ -89,6 +89,10 @@ type Run struct {
 	RetryAt                  time.Time          `json:"retry_at,omitempty"`
 	ProviderFailures         int                `json:"provider_failures,omitempty"`
 	ProviderFailureKind      string             `json:"provider_failure_kind,omitempty"`
+	ModelFailureEngine       string             `json:"model_failure_engine,omitempty"`
+	ModelFailurePhase        string             `json:"model_failure_phase,omitempty"`
+	ModelFailureCode         string             `json:"model_failure_code,omitempty"`
+	ModelExitCode            *int               `json:"model_exit_code,omitempty"`
 	ControlCapabilities      []string           `json:"control_capabilities,omitempty"`
 	PauseRequested           bool               `json:"pause_requested,omitempty"`
 	StopRequested            bool               `json:"stop_requested,omitempty"`
@@ -263,6 +267,12 @@ func (c *Client) call(ctx context.Context, method, path, key string, in any) (Ru
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if method != http.MethodGet && (resp.StatusCode >= 500 || resp.StatusCode == 408) {
+			return result, ErrUncertain
+		}
+		if method != http.MethodGet {
+			if confirmedRejection(resp) {
+				return result, &RejectionError{StatusCode: resp.StatusCode}
+			}
 			return result, ErrUncertain
 		}
 		return result, fmt.Errorf("worker returned HTTP %d", resp.StatusCode)

@@ -188,23 +188,23 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action != "cancel" && run.PendingStatus == "cancelled" {
-		respond(w, 409, map[string]string{"error": "cancellation is pending; wait for confirmed cleanup"})
+		respond(w, 409, map[string]string{"code": "operation_rejected", "error": "cancellation is pending; wait for confirmed cleanup"})
 		return
 	}
 	if action != "cancel" && (run.Run.Status == "completed" || run.Run.Status == "cancelled") {
-		respond(w, 409, map[string]string{"error": "terminal worker cannot resume"})
+		respond(w, 409, map[string]string{"code": "operation_rejected", "error": "terminal worker cannot resume"})
 		return
 	}
 	if action == "messages" && (run.Run.Status == "retry_wait" || run.Run.Status == "paused" || run.PendingStatus == "paused" || run.Run.Status == "interrupted" || (run.Run.Status == "blocked" && run.Run.Decision == nil)) {
-		respond(w, 409, map[string]string{"error": "interrupted workers require explicit resume"})
+		respond(w, 409, map[string]string{"code": "operation_rejected", "error": "interrupted workers require explicit resume"})
 		return
 	}
 	if action == "resume" && run.Run.Status != "interrupted" && run.Run.Status != "blocked" && run.Run.Status != "paused" && run.Run.Status != "retry_wait" {
-		respond(w, 409, map[string]string{"error": "resume requires paused, interrupted or blocked worker"})
+		respond(w, 409, map[string]string{"code": "operation_rejected", "error": "resume requires paused, interrupted or blocked worker"})
 		return
 	}
 	if action == "resume" && !run.Run.RetryAt.IsZero() && now().Before(run.Run.RetryAt) {
-		respond(w, 409, map[string]string{"error": "provider retry is not due"})
+		respond(w, 409, map[string]string{"code": "operation_rejected", "error": "provider retry is not due"})
 		return
 	}
 	before, _ := json.Marshal(run)

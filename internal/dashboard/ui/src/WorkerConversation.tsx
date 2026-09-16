@@ -312,6 +312,29 @@ function WorkerConversationPanel({
           transcript is retained.
         </p>
       )}
+      {agent.provider_failure_kind && (
+        <details className="field-hint">
+          <summary>Model failure details</summary>
+          <p>
+            {agent.provider_failure_kind.replaceAll("_", " ")}
+            {agent.model_failure_engine
+              ? ` · ${agent.model_failure_engine}`
+              : ""}
+            {agent.model_failure_phase ? ` · ${agent.model_failure_phase}` : ""}
+          </p>
+          {agent.model_failure_code && (
+            <p>
+              Diagnostic: <code>{agent.model_failure_code}</code>
+            </p>
+          )}
+          {agent.model_exit_code !== undefined && (
+            <p>CLI exit code: {agent.model_exit_code}</p>
+          )}
+          {!agent.model_failure_code && (
+            <p>No detailed diagnostic was recorded for this attempt.</p>
+          )}
+        </details>
+      )}
       <div className="worker-controls" aria-label="Worker controls">
         <button
           type="button"
@@ -426,19 +449,21 @@ function WorkerConversationPanel({
               <li key={entry.sequence}>
                 <div className="worker-message-meta">
                   <strong>
-                    {entry.kind === "delivery_uncertain"
-                      ? "Delivery unconfirmed"
-                      : entry.kind === "delivery"
-                        ? "Runtime delivery receipt"
-                        : entry.kind === "tool"
-                          ? "Tool activity"
-                          : entry.direction === "daemon_to_worker"
-                            ? "Assistant → worker"
-                            : entry.direction === "worker_to_daemon"
-                              ? "Worker → assistant"
-                              : entry.direction === "owner_to_worker"
-                                ? "You → outcome agents"
-                                : entry.kind.replaceAll("_", " ")}
+                    {entry.kind === "delivery_rejected"
+                      ? "Message refused"
+                      : entry.kind === "delivery_uncertain"
+                        ? "Delivery unconfirmed"
+                        : entry.kind === "delivery"
+                          ? "Runtime delivery receipt"
+                          : entry.kind === "tool"
+                            ? "Tool activity"
+                            : entry.direction === "daemon_to_worker"
+                              ? "Assistant → worker"
+                              : entry.direction === "worker_to_daemon"
+                                ? "Worker → assistant"
+                                : entry.direction === "owner_to_worker"
+                                  ? "You → outcome agents"
+                                  : entry.kind.replaceAll("_", " ")}
                   </strong>
                   <time dateTime={entry.created_at}>
                     {new Date(entry.created_at).toLocaleString()}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/engine"
+	"github.com/shhac/agent-assistant/internal/integrations/worker"
 	"github.com/shhac/lib-agent-harness/completion"
 )
 
@@ -21,7 +22,7 @@ func (b *Broker) modelFailure(id string, err error) {
 		kind := completion.ErrorUnknown
 		if failure != nil {
 			switch failure.Kind {
-			case completion.ErrorAuthentication, completion.ErrorContextLimit:
+			case completion.ErrorAuthentication, completion.ErrorContextLimit, completion.ErrorModelUnavailable, completion.ErrorStructuredOutputLimit, completion.ErrorPermissionDenied, completion.ErrorTimeout:
 				kind = failure.Kind
 			}
 		}
@@ -33,6 +34,10 @@ func (b *Broker) modelFailure(id string, err error) {
 				return nil
 			}
 			r.Run.ProviderFailureKind = string(kind)
+			setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
+			if errors.Is(err, engine.ErrContextPressure) {
+				r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "preflight", "working_context_budget"
+			}
 			r.Run.RetryAt = time.Time{}
 			r.PendingStatus = "blocked"
 			r.PendingSummary = (&completion.RequestError{Kind: kind}).Error() + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
@@ -48,6 +53,7 @@ func (b *Broker) modelFailure(id string, err error) {
 		}
 		r.Run.ProviderFailures++
 		r.Run.ProviderFailureKind = string(failure.Kind)
+		setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
 		if r.Run.ProviderFailures >= maxProviderFailures || r.ModelCalls >= b.cfg.MaxTurns {
 			r.Run.RetryAt = time.Time{}
 			r.PendingStatus = "blocked"
@@ -86,7 +92,26 @@ func (b *Broker) clearProviderFailure(id string) {
 	_ = b.update(id, func(r *storedRun) error {
 		r.Run.ProviderFailures = 0
 		r.Run.ProviderFailureKind = ""
+		r.Run.ModelFailureEngine, r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "", "", ""
+		r.Run.ModelExitCode = nil
 		r.Run.RetryAt = time.Time{}
 		return nil
 	})
+}
+
+func setModelFailureDetails(run *worker.Run, configuredEngine string, failure *completion.RequestError) {
+	run.ModelFailureEngine = configuredEngine
+	run.ModelFailurePhase, run.ModelFailureCode = "", ""
+	run.ModelExitCode = nil
+	if failure == nil {
+		return
+	}
+	if failure.Engine != "" {
+		run.ModelFailureEngine = failure.Engine
+	}
+	run.ModelFailurePhase, run.ModelFailureCode = string(failure.Phase), failure.Code
+	if failure.ExitCode != nil {
+		code := *failure.ExitCode
+		run.ModelExitCode = &code
+	}
 }

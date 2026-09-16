@@ -29,10 +29,10 @@ func (s projectExecutor) Execute(ctx context.Context, name string, raw json.RawM
 	if name == "read_state" {
 		return s.context(ctx)
 	}
-	if name == "message_agent" {
+	if name == "message_agent" || name == "inspect_agent" {
 		var in struct {
 			AgentID string `json:"agent_id"`
-			Message string `json:"message"`
+			Message string `json:"message,omitempty"`
 		}
 		if err := args(raw, &in); err != nil {
 			return nil, err
@@ -43,6 +43,9 @@ func (s projectExecutor) Execute(ctx context.Context, name string, raw json.RawM
 		}
 		for _, a := range snapshot.Agents {
 			if a.ID == in.AgentID && a.ProjectID == s.projectID && (s.workItemID == "" || a.WorkItemID == s.workItemID) {
+				if name == "inspect_agent" {
+					return s.app.InspectAgent(ctx, a.ID)
+				}
 				return s.app.SendAgent(ctx, a, in.Message)
 			}
 		}
@@ -239,8 +242,19 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 	}
 	result, err := client.Send(ctx, agent.ExternalID, key, message)
 	a.recordMessageDelivery(ctx, agent.ID, key, err)
+	var rejected *worker.RejectionError
+	if errors.As(err, &rejected) {
+		// This operation is finished, with a refusal rather than a delivery.
+		if finishErr := a.Core.CompleteEvent(ctx, key); finishErr != nil {
+			return result, errors.Join(err, finishErr)
+		}
+		a.refreshRefusedInstruction(ctx, agent, client)
+		return result, err
+	}
 	if err == nil {
 		err = a.Core.CompleteEvent(ctx, key)
+	} else {
+		_ = a.Core.MarkUncertain(ctx, agent.ID, "Instruction delivery is uncertain; inspect the operation before repeating")
 	}
 	return result, err
 }

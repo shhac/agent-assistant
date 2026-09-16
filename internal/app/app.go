@@ -220,6 +220,14 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		return a.UpdateWorker(ctx, in.ProjectID, in.WorkerProfile, WorkerUpdate{Name: in.Name, Engine: in.Engine, Model: in.Model, Effort: in.Effort})
 	case "list_connections", "query_connection":
 		return a.runConnectionTool(ctx, name, raw)
+	case "control_agent":
+		return nil, errors.New("worker controls require the current owner conversation")
+	case "inspect_agent":
+		var in engine.InspectAgentArgs
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		return a.InspectAgent(ctx, in.AgentID)
 	case "message_agent":
 		var in struct {
 			AgentID string `json:"agent_id"`
