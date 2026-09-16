@@ -255,3 +255,27 @@ func TestOwnerRequestedControlsAreTheOwnersTurnWithoutBeingHeldUp(t *testing.T) 
 		}
 	}
 }
+
+// The rule deciding whether an assignment takes over a project's row was only
+// observable through a whole snapshot; it is the part most likely to be got
+// wrong when the scans change.
+func TestAssignmentClaimsRowOnlyWhenItSaysMore(t *testing.T) {
+	cases := []struct {
+		name                   string
+		rank, best             int
+		claimed, wantToTakeRow bool
+	}{
+		{"stronger than the outcome", 100, 50, false, true},
+		{"stronger than another assignment", 100, 50, true, true},
+		{"weaker than the outcome", 10, 100, false, false},
+		{"equal to the outcome, so it names the worker", 100, 100, false, true},
+		{"equal to an assignment that already claimed it", 100, 100, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := assignmentClaims(c.rank, c.best, c.claimed); got != c.wantToTakeRow {
+				t.Fatalf("assignmentClaims(%d, %d, %v) = %v, want %v", c.rank, c.best, c.claimed, got, c.wantToTakeRow)
+			}
+		})
+	}
+}

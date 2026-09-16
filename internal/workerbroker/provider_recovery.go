@@ -13,42 +13,70 @@ import (
 
 const maxProviderFailures = 6
 
-// Only a definitive provider rejection may enter this automatic recovery path.
-// The failed completion never executed tools. Earlier acknowledged operations
-// remain in Transcript and must not be replayed. The daemon admits every retry.
+// classifiedFailure is what a failed completion establishes: how the provider
+// classified it, which evidence was available, and whether the daemon's own
+// preflight measurement is what stopped it.
+type classifiedFailure struct {
+	failure         *completion.RequestError
+	kind            completion.ErrorKind
+	evidence        string
+	contextPressure bool
+}
+
+func classifyModelFailure(err error) classifiedFailure {
+	var failure *completion.RequestError
+	errors.As(err, &failure)
+	kind := completion.ErrorUnknown
+	if failure != nil {
+		switch failure.Kind {
+		case completion.ErrorAuthentication, completion.ErrorContextLimit, completion.ErrorModelUnavailable, completion.ErrorStructuredOutputLimit, completion.ErrorPermissionDenied, completion.ErrorTimeout:
+			kind = failure.Kind
+		}
+	}
+	out := classifiedFailure{failure: failure, kind: kind, evidence: failureEvidence(failure, kind)}
+	if errors.Is(err, engine.ErrContextPressure) {
+		out.kind, out.evidence, out.contextPressure = completion.ErrorContextLimit, evidenceLocalPreflight, true
+	}
+	return out
+}
+
+// Only a definitive provider rejection may enter automatic recovery. The failed
+// completion never executed tools. Earlier acknowledged operations remain in
+// Transcript and must not be replayed. The daemon admits every retry.
 func (b *Broker) modelFailure(id string, err error) {
 	var failure *completion.RequestError
-	if !errors.As(err, &failure) || !failure.Retryable() {
-		kind := completion.ErrorUnknown
-		if failure != nil {
-			switch failure.Kind {
-			case completion.ErrorAuthentication, completion.ErrorContextLimit, completion.ErrorModelUnavailable, completion.ErrorStructuredOutputLimit, completion.ErrorPermissionDenied, completion.ErrorTimeout:
-				kind = failure.Kind
-			}
-		}
-		evidence := failureEvidence(failure, kind)
-		if errors.Is(err, engine.ErrContextPressure) {
-			kind, evidence = completion.ErrorContextLimit, evidenceLocalPreflight
-		}
-		_ = b.update(id, func(r *storedRun) error {
-			if r.Run.Status == "cancelled" || r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
-				return nil
-			}
-			r.Run.ProviderFailureKind = string(kind)
-			setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
-			r.Run.ModelFailureEvidence = evidence
-			if errors.Is(err, engine.ErrContextPressure) {
-				r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "preflight", "working_context_budget"
-			}
-			r.Run.RetryAt = time.Time{}
-			r.PendingStatus = "blocked"
-			r.PendingSummary = (&completion.RequestError{Kind: kind}).Error() + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
-			r.Run.Summary = "Finalizing isolated execution and collecting evidence"
-			r.Run.UpdatedAt = now()
-			return nil
-		})
+	if errors.As(err, &failure) && failure.Retryable() {
+		b.scheduleProviderRetry(id, failure)
 		return
 	}
+	b.blockOnModelFailure(id, classifyModelFailure(err))
+}
+
+// blockOnModelFailure stops the run and preserves its work. No retry is
+// scheduled: the owner decides what happens next.
+func (b *Broker) blockOnModelFailure(id string, cls classifiedFailure) {
+	_ = b.update(id, func(r *storedRun) error {
+		if r.Run.Status == "cancelled" || r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
+			return nil
+		}
+		r.Run.ProviderFailureKind = string(cls.kind)
+		setModelFailureDetails(&r.Run, b.cfg.Engine, cls.failure)
+		r.Run.ModelFailureEvidence = cls.evidence
+		if cls.contextPressure {
+			r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "preflight", "working_context_budget"
+		}
+		r.Run.RetryAt = time.Time{}
+		r.PendingStatus = "blocked"
+		r.PendingSummary = (&completion.RequestError{Kind: cls.kind}).Error() + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
+		r.Run.Summary = "Finalizing isolated execution and collecting evidence"
+		r.Run.UpdatedAt = now()
+		return nil
+	})
+}
+
+// scheduleProviderRetry backs off and lets the daemon re-admit the run. Once
+// the allowance is spent the run blocks instead, with its progress preserved.
+func (b *Broker) scheduleProviderRetry(id string, failure *completion.RequestError) {
 	_ = b.update(id, func(r *storedRun) error {
 		if r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
 			return nil
@@ -70,6 +98,7 @@ func (b *Broker) modelFailure(id string, err error) {
 		return nil
 	})
 }
+
 func providerDelay(failures int, retryAfter time.Duration) time.Duration {
 	step := failures - 1
 	if step < 0 {
