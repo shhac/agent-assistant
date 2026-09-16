@@ -521,3 +521,11 @@
   padding-left: 18px;
   line-height: 1.6;
 }
+.queue-review {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.queue-review .field-hint {
+  margin: 4px 0 0;
+}

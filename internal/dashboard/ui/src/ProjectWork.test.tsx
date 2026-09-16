@@ -422,3 +422,40 @@ it("withdraws automatic queue permission while preserving the named draft", asyn
   expect(fetch.mock.calls[0][0]).toBe("/api/work-items/next/queue");
   expect(fetch.mock.calls[0][1]?.method).toBe("DELETE");
 });
+
+it("flags possibly superseded queued work for review without accepting or starting it", async () => {
+  const state = fixture();
+  state.agents = [];
+  state.work_items.push({
+    ...outcome,
+    id: "next",
+    title: "Lifecycle controls",
+    status: "queued",
+    commission_requested: true,
+    after_work_item_id: outcome.id,
+  });
+  const fetch = mockFetch(() => ({}));
+  const investigate = vi.fn();
+  render(
+    <ProjectWork
+      project={project}
+      state={state}
+      refresh={vi.fn()}
+      onInvestigate={investigate}
+    />,
+  );
+  const row = within(screen.getByLabelText("Queued outcomes")).getByRole(
+    "listitem",
+    { name: "Lifecycle controls" },
+  );
+  fireEvent.click(within(row).getByText("Brief and queue management"));
+  fireEvent.click(
+    within(row).getByRole("button", { name: "Ask for an evidence review" }),
+  );
+  expect(investigate).toHaveBeenCalledTimes(1);
+  const prompt = String(investigate.mock.calls[0][0]);
+  expect(prompt).toContain("Lifecycle controls");
+  expect(prompt).toContain("Do not accept it or start it");
+  // Asking a question is not accepting the outcome or commissioning it.
+  expect(fetch).not.toHaveBeenCalled();
+});

@@ -111,6 +111,7 @@ export function ProjectWork({
                 key={item.id}
                 item={item}
                 position={index + 1}
+                onInvestigate={onInvestigate}
                 predecessor={
                   state.work_items.find(
                     (work) => work.id === item.after_work_item_id,
@@ -138,12 +139,14 @@ function QueuedRow({
   predecessor,
   state,
   refresh,
+  onInvestigate,
 }: {
   item: WorkItem;
   position: number;
   predecessor?: string;
   state: State;
   refresh: () => Promise<void>;
+  onInvestigate?: (prompt: string) => void;
 }) {
   return (
     <li className="queue-row" aria-label={item.title}>
@@ -177,6 +180,26 @@ function QueuedRow({
             refresh={refresh}
             controlsOnly
           />
+          {onInvestigate && (
+            <div className="queue-review">
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  onInvestigate(
+                    `The queued outcome "${item.title}" may already be satisfied by work done elsewhere. Please review the evidence and tell me whether it still needs doing. Do not accept it or start it on the strength of this question.`,
+                  )
+                }
+              >
+                Ask for an evidence review
+              </button>
+              <p className="field-hint">
+                Use this when the outcome may already be handled. It asks your
+                assistant to check the evidence; it does not accept the outcome
+                or start the work.
+              </p>
+            </div>
+          )}
         </details>
       </div>
     </li>
