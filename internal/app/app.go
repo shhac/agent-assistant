@@ -120,11 +120,15 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	}
 	for _, profile := range cfg.Workers {
 		if status, ok := a.statuses["worker-usage:"+profile.ID]; ok {
+			status.ProjectID = profile.ProjectID
 			s.Integrations = append(s.Integrations, status)
 		}
 	}
 	for i, st := range s.Integrations {
 		if live, ok := a.statuses[st.ID]; ok && !ignoreLive[st.ID] {
+			// A live status reports state, not relationships; keep the link
+			// the configuration established.
+			live.ProjectID = st.ProjectID
 			s.Integrations[i] = live
 		}
 	}

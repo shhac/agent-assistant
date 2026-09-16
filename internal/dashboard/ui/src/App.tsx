@@ -28,6 +28,7 @@ import {
   pendingDecisions,
   type Config,
   type Decision,
+  type ModelProfile,
   type Project,
   type State,
 } from "./api";
@@ -610,10 +611,8 @@ function WorkerUsageHold({
   project: Project;
   integrations: State["integrations"];
 }) {
-  // Managed worker profiles are identified by their project; see the daemon's
-  // worker preparation, which names them "managed-<project id>".
   const usage = integrations.find(
-    (i) => i.id === `worker-usage:managed-${project.id}`,
+    (i) => i.project_id === project.id && i.id.startsWith("worker-usage:"),
   );
   if (!usage || !["paused", "unavailable"].includes(usage.status)) return null;
   return (
@@ -1699,12 +1698,12 @@ function WorkerModelOverrides({
   config: Config;
   projects: Project[];
 }) {
-  const fallback = (config.worker_model || {}) as Record<string, unknown>;
+  const fallback = (config.worker_model || {}) as ModelProfile;
   const overridden = (config.workers || []).filter(
     (worker) => worker.managed === true && !!worker.model_profile,
   );
   if (!overridden.length) return null;
-  const describe = (model: Record<string, unknown>) =>
+  const describe = (model: ModelProfile) =>
     [model.engine, model.model, model.effort && `${model.effort} effort`]
       .filter(Boolean)
       .join(" · ");
@@ -1724,7 +1723,7 @@ function WorkerModelOverrides({
                 worker.id}
             </dt>
             <dd>
-              {describe(worker.model_profile as Record<string, unknown>) ||
+              {describe(worker.model_profile || {}) ||
                 "Not recorded"}
             </dd>
           </div>

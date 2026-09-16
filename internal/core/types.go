@@ -109,10 +109,15 @@ type Activity struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Integration struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	ID string `json:"id"`
+	// ProjectID links a connection to the project it serves, where one does.
+	// The dashboard shows a capacity hold beside the work it holds up, and
+	// that relationship is the daemon's to state rather than the browser's to
+	// reassemble from an identifier convention.
+	ProjectID string `json:"project_id,omitempty"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Detail    string `json:"detail,omitempty"`
 }
 type PendingOperation struct {
 	ID        string `json:"id"`

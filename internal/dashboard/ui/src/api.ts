@@ -147,6 +147,7 @@ export interface Activity {
 }
 export interface Integration {
   id: string;
+  project_id?: string;
   name: string;
   status: string;
   detail?: string;
@@ -170,8 +171,15 @@ export interface PendingOperation {
   summary: string;
   project_id?: string;
 }
+export interface ModelProfile {
+  engine?: string;
+  model?: string;
+  effort?: string;
+}
 export interface WorkerProfile {
   id: string;
+  managed?: boolean;
+  model_profile?: ModelProfile;
   name?: string;
   endpoint?: string;
   api_key_env?: string;

@@ -292,12 +292,14 @@ describe("project context and next outcome", () => {
       integrations: [
         {
           id: "worker-usage:managed-project-hold",
+          project_id: "project-hold",
           name: "Usage for Worker for Release checklist",
           status: "paused",
           detail: "Claude usage is at 94% consumed; new worker work is paused",
         },
         {
           id: "worker-usage:managed-other-project",
+          project_id: "other-project",
           name: "Usage for another worker",
           status: "paused",
           detail: "Unrelated hold",
