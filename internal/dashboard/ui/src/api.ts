@@ -16,6 +16,11 @@ export interface Agent {
   role: string;
   status: string;
   project_id: string;
+  profile_id?: string;
+  task?: string;
+  acceptance_criteria?: string;
+  broker_updated_at?: string;
+  last_progress_at?: string;
   last_update?: string;
   next_check_in?: string;
   summary?: string;
@@ -23,6 +28,7 @@ export interface Agent {
 }
 export interface Decision {
   id: string;
+  agent_id?: string;
   project_id?: string;
   title: string;
   context: string;

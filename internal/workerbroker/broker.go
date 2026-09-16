@@ -28,6 +28,7 @@ type Broker struct {
 	active         map[string]context.CancelFunc
 	runCtx         context.Context
 	started        bool
+	quiesced       bool
 	persistenceErr error
 }
 

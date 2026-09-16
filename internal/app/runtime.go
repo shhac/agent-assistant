@@ -415,7 +415,7 @@ func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.D
 		if err := a.workerUsageAllowed(ctx, parent.ProfileID); err != nil {
 			return &noEffect{err}
 		}
-		child, err := a.Core.Delegate(ctx, core.DelegateInput{ProjectID: parent.ProjectID, ParentID: parent.ID, ProfileID: d.WorkerProfile, Role: d.Role, Task: d.Task, AcceptanceCriteria: d.AcceptanceCriteria, Capabilities: d.Capabilities})
+		child, err := a.commissionWorker(ctx, core.DelegateInput{ProjectID: parent.ProjectID, ParentID: parent.ID, ProfileID: d.WorkerProfile, Role: d.Role, Task: d.Task, AcceptanceCriteria: d.AcceptanceCriteria, Capabilities: d.Capabilities})
 		if err != nil {
 			return &noEffect{err}
 		}

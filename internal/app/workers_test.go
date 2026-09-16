@@ -53,8 +53,8 @@ func TestAssistantPreparesAndRecoversWorkerWithoutManualCredentials(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		profile := result.(config.Worker)
-		if !profile.Managed || profile.ProjectID != p.ID || profile.Workspace != folder || profile.Name != "Worker for Personal project" || profile.Endpoint != "" || profile.APIKeyEnv != "" {
+		profile := result.(WorkerDetail)
+		if !profile.Managed || profile.ProjectID != p.ID || profile.Workspace != folder || profile.Name != "Worker for Personal project" || profile.Model == nil || profile.Model.Model != a.Config().WorkerModel.Model {
 			t.Fatalf("unexpected managed profile %+v", profile)
 		}
 	}

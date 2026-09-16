@@ -54,6 +54,31 @@ func modelHandler(a *app.App, discover modelDiscovery) http.Handler {
 		if profile == "worker" {
 			selected, defaults = cfg.WorkerModel, config.Default().WorkerModel
 		}
+		if workerID := r.URL.Query().Get("worker_profile"); workerID != "" {
+			if profile != "worker" {
+				http.Error(w, "worker_profile requires the worker model profile", http.StatusBadRequest)
+				return
+			}
+			found := false
+			for _, worker := range cfg.Workers {
+				if worker.ID != workerID {
+					continue
+				}
+				if !worker.Managed {
+					http.Error(w, "external worker models are managed by their runtime", http.StatusBadRequest)
+					return
+				}
+				found = true
+				if worker.ModelProfile != nil {
+					selected = *worker.ModelProfile
+				}
+				break
+			}
+			if !found {
+				http.Error(w, "worker profile not found", http.StatusNotFound)
+				return
+			}
+		}
 		result := modelCatalog{Profile: profile, Engine: selected.Engine, Models: []engine.ModelOption{}, Current: modelSelection{selected.Model, selected.Effort}, Default: modelSelection{defaults.Model, defaults.Effort}}
 		if a.Demo {
 			result.Detail = "Model discovery is unavailable in the demo."
@@ -82,8 +107,8 @@ func modelHandler(a *app.App, discover modelDiscovery) http.Handler {
 				entry.detail = "Could not discover models. Check the selected CLI login and installation, then retry. Your saved selection is unchanged."
 				entry.expires = time.Now().Add(5 * time.Second)
 			}
-			// At most two live profile entries; configuration edits cannot grow this indefinitely.
-			if len(cache) >= 2 {
+			// Bound the cache across per-worker profiles and configuration edits.
+			if len(cache) >= 32 {
 				clear(cache)
 			}
 			cache[selected] = entry

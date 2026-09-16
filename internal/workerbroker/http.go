@@ -98,6 +98,10 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.quiesced {
+		respond(w, 503, map[string]string{"error": "worker settings are changing; retry after reconnecting"})
+		return
+	}
 	digest := digest(r, raw)
 	if previous, ok := b.state.Receipts[key]; ok {
 		if previous.Digest != digest {
@@ -165,6 +169,10 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.quiesced {
+		respond(w, 503, map[string]string{"error": "worker settings are changing; retry after reconnecting"})
+		return
+	}
 	run := b.state.Runs[r.PathValue("id")]
 	if run == nil {
 		respond(w, 404, map[string]string{"error": "run not found"})

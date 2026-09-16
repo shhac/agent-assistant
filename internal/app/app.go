@@ -19,6 +19,7 @@ import (
 )
 
 type App struct {
+	workerDiscover   func(context.Context, engine.Config) ([]engine.ModelOption, error)
 	workerUsage      workerUsageMeter
 	loadingComplete  func(context.Context, engine.Config, []engine.Message, []engine.Tool) (engine.Message, engine.Usage, error)
 	loadingDiscover  func(context.Context, engine.Config) ([]engine.ModelOption, error)
@@ -47,11 +48,16 @@ func New(s *core.Service, cfg config.Config, path string, demo bool) *App {
 }
 func (a *App) Config() config.Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) UpdateConfig(cfg config.Config) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.updateConfigLocked(cfg)
+}
+
+// updateConfigLocked requires a.mu to preserve atomic read-modify-write updates.
+func (a *App) updateConfigLocked(cfg config.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	oldNetwork, _ := json.Marshal(a.cfg.Dashboard)
 	newNetwork, _ := json.Marshal(cfg.Dashboard)
 	oldSlack, _ := json.Marshal(a.cfg.Slack)
@@ -146,21 +152,17 @@ func (a *App) chatContext(ctx context.Context, currentMessageID string) (json.Ra
 	if len(s.Activity) > 40 {
 		s.Activity = s.Activity[len(s.Activity)-40:]
 	}
-	type profile struct {
-		ProjectID    string   `json:"project_id,omitempty"`
-		ID           string   `json:"id"`
-		Name         string   `json:"name"`
-		Capabilities []string `json:"capabilities"`
-	}
-	profiles := []profile{}
-	for _, p := range a.Config().Workers {
-		profiles = append(profiles, profile{p.ProjectID, p.ID, p.Name, p.Capabilities})
+	profiles := []WorkerDetail{}
+	cfg := a.Config()
+	for _, p := range cfg.Workers {
+		profiles = append(profiles, workerDetail(cfg, p, projectWorkerBusy(s, p.ProjectID), a.Demo))
 	}
 	raw, err := json.Marshal(struct {
 		State       core.Snapshot       `json:"state"`
-		Profiles    []profile           `json:"worker_profiles"`
+		Profiles    []WorkerDetail      `json:"worker_profiles"`
+		Authority   ExecutionAuthority  `json:"execution_authority"`
 		Connections []config.Connection `json:"connections"`
-	}{s, profiles, a.Config().Connections})
+	}{s, profiles, a.executionAuthority(s.Paused), cfg.Connections})
 	return raw, history, err
 }
 func args(raw json.RawMessage, v any) error {
@@ -184,7 +186,37 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		if err := args(raw, &in); err != nil {
 			return nil, err
 		}
-		return a.PrepareWorker(ctx, in.ProjectID, in.Workspace)
+		profile, err := a.PrepareWorker(ctx, in.ProjectID, in.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := a.Core.Snapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return workerDetail(a.Config(), profile, projectWorkerBusy(snapshot, profile.ProjectID), a.Demo), nil
+	case "list_worker_models":
+		var in struct {
+			WorkerProfile string `json:"worker_profile"`
+			Engine        string `json:"engine"`
+		}
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		return a.listWorkerModels(ctx, in.WorkerProfile, in.Engine)
+	case "configure_worker":
+		var in struct {
+			ProjectID     string `json:"project_id"`
+			WorkerProfile string `json:"worker_profile"`
+			Name          string `json:"name"`
+			Engine        string `json:"engine"`
+			Model         string `json:"model"`
+			Effort        string `json:"effort"`
+		}
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		return a.UpdateWorker(ctx, in.ProjectID, in.WorkerProfile, WorkerUpdate{Name: in.Name, Engine: in.Engine, Model: in.Model, Effort: in.Effort})
 	case "list_connections", "query_connection":
 		return a.runConnectionTool(ctx, name, raw)
 	case "message_agent":
@@ -232,7 +264,7 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		if err := args(raw, &in); err != nil {
 			return nil, err
 		}
-		return a.Core.Delegate(ctx, core.DelegateInput{ProjectID: in.ProjectID, ParentID: in.ParentID, ProfileID: in.WorkerProfile, Role: in.Role, Task: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
+		return a.commissionWorker(ctx, core.DelegateInput{ProjectID: in.ProjectID, ParentID: in.ParentID, ProfileID: in.WorkerProfile, Role: in.Role, Task: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
 	case "ask_decision":
 		var in engine.DecisionArgs
 		if err := args(raw, &in); err != nil {

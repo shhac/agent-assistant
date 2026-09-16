@@ -112,11 +112,14 @@ func (s projectExecutor) context(ctx context.Context) (json.RawMessage, error) {
 	}
 	v.Activity = activity
 	v.Messages = []core.Message{}
-	profiles := []map[string]any{}
-	for _, p := range s.app.Config().Workers {
-		profiles = append(profiles, map[string]any{"id": p.ID, "name": p.Name, "capabilities": p.Capabilities, "project_id": p.ProjectID})
+	profiles := []WorkerDetail{}
+	cfg := s.app.Config()
+	for _, p := range cfg.Workers {
+		if p.ProjectID == "" || p.ProjectID == s.projectID {
+			profiles = append(profiles, workerDetail(cfg, p, projectWorkerBusy(v, p.ProjectID), s.app.Demo))
+		}
 	}
-	return json.Marshal(map[string]any{"state": v, "worker_profiles": profiles})
+	return json.Marshal(map[string]any{"state": v, "worker_profiles": profiles, "execution_authority": s.app.executionAuthority(v.Paused)})
 }
 func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt string) (engine.Result, error) {
 	select {

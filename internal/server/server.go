@@ -19,6 +19,7 @@ func New(a *app.App, auth *Auth) http.Handler {
 	registerFilesystem(mux, a)
 	registerModels(mux, a)
 	registerWorkerSetup(mux, a)
+	workerDetailRoutes(mux, a)
 	registerChatQueue(mux, a)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		s, err := a.Snapshot(r.Context())

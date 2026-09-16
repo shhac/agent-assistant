@@ -3,10 +3,22 @@ import { api, errorText, type Config, type Project } from "./api";
 import { Waiting } from "./Identity";
 import "./workers.css";
 
-export function WorkerPreparation(props: { project: Project; demo: boolean }) {
+export function WorkerPreparation(props: {
+  project: Project;
+  demo: boolean;
+  onPrepared?: () => void;
+}) {
   return <Preparation key={props.project.id} {...props} />;
 }
-function Preparation({ project, demo }: { project: Project; demo: boolean }) {
+function Preparation({
+  project,
+  demo,
+  onPrepared,
+}: {
+  project: Project;
+  demo: boolean;
+  onPrepared?: () => void;
+}) {
   const directories = project.directories || [];
   const [workspace, setWorkspace] = useState(
     directories.length === 1 ? directories[0] : "",
@@ -56,7 +68,10 @@ function Preparation({ project, demo }: { project: Project; demo: boolean }) {
         method: "POST",
         body: JSON.stringify({ workspace: selected }),
       });
-      if (mounted.current) setPrepared(true);
+      if (mounted.current) {
+        setPrepared(true);
+        onPrepared?.();
+      }
     } catch (err) {
       if (mounted.current) setError(errorText(err));
     } finally {

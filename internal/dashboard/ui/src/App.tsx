@@ -1,5 +1,6 @@
 import { ProjectLink } from "./ProjectLink";
 import { WorkerPreparation } from "./WorkerPreparation";
+import { ProjectWorkers } from "./ProjectWorkers";
 import { ChatPanel } from "./ChatPanel";
 import { NewProject, ProjectDirectories } from "./ProjectForms";
 import { Avatar, ThemePicker, validTheme } from "./Identity";
@@ -787,9 +788,9 @@ function Projects({
   onNew: () => void;
   refresh: () => Promise<void>;
 }) {
+  const [workersRevision, setWorkersRevision] = useState(0);
   const project = state.projects.find((p) => p.id === selected);
   if (project) {
-    const agents = state.agents.filter((a) => a.project_id === project.id);
     const projectState = {
       ...state,
       activity: state.activity.filter((a) => a.project_id === project.id),
@@ -838,6 +839,10 @@ function Projects({
           key={`worker-${project.id}`}
           project={project}
           demo={state.demo}
+          onPrepared={() => {
+            setWorkersRevision((n) => n + 1);
+            void refresh();
+          }}
         />
         <section className="detail-section">
           <p className="eyebrow">WHAT DONE LOOKS LIKE</p>
@@ -854,49 +859,13 @@ function Projects({
             <p className="muted">No acceptance criteria recorded.</p>
           )}
         </section>
-        <section className="section-block">
-          <div className="section-heading">
-            <h2>Agents and ownership</h2>
-          </div>
-          {agents.length ? (
-            <div className="agent-list">
-              {agents.map((a) => (
-                <article key={a.id} className="agent-row">
-                  <span className="agent-avatar">
-                    {a.name?.slice(0, 1) || "A"}
-                  </span>
-                  <div>
-                    <strong>{a.name || a.role}</strong>
-                    <small>
-                      {a.role} · {a.summary || "No progress summary yet"}
-                    </small>
-                    {a.last_update && (
-                      <small>Last update {dateLabel(a.last_update)}</small>
-                    )}
-                    {a.next_check_in && (
-                      <small>
-                        Expected check-in {dateLabel(a.next_check_in)}
-                      </small>
-                    )}
-                    {!!a.evidence?.length && (
-                      <ul className="agent-evidence">
-                        {a.evidence.map((item, index) => (
-                          <li key={index}>{item}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  <Status>{humanStatus(a.status)}</Status>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <Empty icon="Projects" title="No agents assigned yet">
-              Ask your assistant to coordinate this project. It will use the
-              available runtimes and permissions.
-            </Empty>
-          )}
-        </section>
+        <ProjectWorkers
+          key={project.id}
+          project={project}
+          state={state}
+          refresh={refresh}
+          revision={workersRevision}
+        />
         <section className="section-block">
           <div className="section-heading">
             <h2>Evidence and activity</h2>

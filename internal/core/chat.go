@@ -268,6 +268,7 @@ func (s *Service) RecordChatTool(ctx context.Context, turnID, eventID, tool, sta
 }
 
 var chatToolLabels = map[string]string{
+	"list_worker_models": "Check available worker models", "configure_worker": "Configure the project worker",
 	"prepare_worker": "Prepare a worker", "list_connections": "Check available connections", "query_connection": "Read connected information",
 	"read_state": "Check project context", "create_project": "Add a project", "update_project": "Update the project brief", "delegate": "Coordinate an agent",
 	"ask_decision": "Prepare a decision", "remember_preference": "Remember a preference", "message_agent": "Message an agent", "complete_project": "Confirm project completion", "report_status": "Record a progress update",

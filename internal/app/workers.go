@@ -76,6 +76,7 @@ func (a *App) PrepareWorker(ctx context.Context, projectID, workspace string) (c
 	for _, w := range cfg.Workers {
 		if w.ID == profile.ID {
 			profile.ModelProfile = w.ModelProfile
+			profile.Name = w.Name
 		}
 		if w.ID == profile.ID && (!w.Managed || w.Workspace != workspace) {
 			return config.Worker{}, errors.New("this project already has a worker bound to a different workspace")

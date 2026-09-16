@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Config } from "./api";
 
-type ModelOption = {
+export type ModelOption = {
   id: string;
   name: string;
   description?: string;
@@ -9,7 +9,7 @@ type ModelOption = {
   efforts: { id: string; description?: string }[];
   is_default: boolean;
 };
-type Catalog = {
+export type Catalog = {
   available: boolean;
   detail: string;
   engine: string;
