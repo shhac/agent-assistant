@@ -164,36 +164,66 @@ export function NewProject({
               required
             />
           </label>
-          <label htmlFor="project-description">
-            Desired outcome
-            {mode === "existing" && (
-              <span className="optional-field">Optional for tracking</span>
-            )}
-            <textarea
-              id="project-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What should change, and why does it matter?"
-              rows={2}
-              maxLength={20000}
-              required={mode === "new"}
-            />
-          </label>
-          <label htmlFor="project-criteria">
-            What does done look like?
-            {mode === "existing" && (
-              <span className="optional-field">Optional for tracking</span>
-            )}
-            <textarea
-              id="project-criteria"
-              value={criteria}
-              onChange={(e) => setCriteria(e.target.value)}
-              placeholder="One acceptance criterion per line"
-              rows={2}
-              maxLength={20000}
-              required={mode === "new"}
-            />
-          </label>
+          {mode === "existing" ? (
+            <details className="project-brief">
+              <summary>Add a brief (optional)</summary>
+              <p className="field-hint">
+                Your assistant can help establish the outcome and acceptance
+                criteria later. Tracking a folder does not need them.
+              </p>
+            <label htmlFor="project-description">
+              Desired outcome
+              <textarea
+                id="project-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What should change, and why does it matter?"
+                rows={2}
+                maxLength={20000}
+                required={false}
+              />
+            </label>
+            <label htmlFor="project-criteria">
+              What does done look like?
+              <textarea
+                id="project-criteria"
+                value={criteria}
+                onChange={(e) => setCriteria(e.target.value)}
+                placeholder="One acceptance criterion per line"
+                rows={2}
+                maxLength={20000}
+                required={false}
+              />
+            </label>
+            </details>
+          ) : (
+            <>
+            <label htmlFor="project-description">
+              Desired outcome
+              <textarea
+                id="project-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What should change, and why does it matter?"
+                rows={2}
+                maxLength={20000}
+                required={true}
+              />
+            </label>
+            <label htmlFor="project-criteria">
+              What does done look like?
+              <textarea
+                id="project-criteria"
+                value={criteria}
+                onChange={(e) => setCriteria(e.target.value)}
+                placeholder="One acceptance criterion per line"
+                rows={2}
+                maxLength={20000}
+                required={true}
+              />
+            </label>
+            </>
+          )}
           {error && (
             <div className="error-notice" role="alert">
               {error}

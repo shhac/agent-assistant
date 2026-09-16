@@ -299,3 +299,45 @@ it("supports arrow-key folder expansion without selecting an entry", async () =>
     true,
   );
 });
+it("keeps a folder and a name the whole requirement for tracking existing work", async () => {
+  respond = () => listing("/home/existing-repo");
+  render(<NewProject onClose={vi.fn()} onCreated={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Choose folders" }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Select this folder: /home/existing-repo",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Use selection" }));
+  // The outcome and acceptance fields are optional here and stay out of the
+  // way until the owner asks for them.
+  const brief = screen.getByText("Add a brief (optional)");
+  expect((brief.parentElement as HTMLDetailsElement).open).toBe(false);
+  expect(
+    (screen.getByLabelText("Desired outcome") as HTMLTextAreaElement).required,
+  ).toBe(false);
+  expect(screen.getByRole("button", { name: "Add project" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+});
+it("says plainly that clicking opens a folder and the button selects it", async () => {
+  respond = () => listing("/home", [entry("/home/work")]);
+  render(
+    <FileSystemPicker
+      kind="directory"
+      multiple
+      onCancel={vi.fn()}
+      onSelect={vi.fn()}
+    />,
+  );
+  await screen.findByRole("treeitem", { name: "work" });
+  expect(
+    screen.getByText(/Clicking a folder in the list/).textContent,
+  ).toContain("opens");
+  const select = screen.getByRole("button", {
+    name: "Select this folder: /home",
+  });
+  expect(select.className).toContain("button");
+  expect(select.className).not.toContain("text-button");
+});

@@ -3318,3 +3318,22 @@ textarea {
 .memory-correction .field-hint {
   margin: 6px 0;
 }
+.project-brief {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px 14px;
+}
+.project-brief > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+.filesystem-current-row {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.filesystem-current-row .field-hint {
+  margin: 0;
+}

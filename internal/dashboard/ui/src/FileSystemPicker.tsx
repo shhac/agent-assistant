@@ -186,13 +186,19 @@ export function FileSystemPicker({
           />
         )}
         {page && kind !== "file" && (
-          <button
-            type="button"
-            className="text-button filesystem-current"
-            onClick={chooseCurrent}
-          >
-            Select this folder: <span>{page.path}</span>
-          </button>
+          <div className="filesystem-current-row">
+            <p className="field-hint">
+              Clicking a folder in the list <strong>opens</strong> it. To choose
+              the folder you are looking at, use the button.
+            </p>
+            <button
+              type="button"
+              className="button secondary filesystem-current"
+              onClick={chooseCurrent}
+            >
+              Select this folder: <span>{page.path}</span>
+            </button>
+          </div>
         )}
         <div className="filesystem-selection" aria-live="polite">
           <strong>
@@ -225,8 +231,8 @@ export function FileSystemPicker({
       <div className="dialog-footer">
         <p>
           {multiple
-            ? "Tap entries to toggle selection; Shift selects a range. Arrow keys navigate; Enter opens a folder."
-            : "Select an entry. Arrow keys navigate; Enter opens a folder."}
+            ? "Click an entry to select it and open it; Shift selects a range. Arrow keys navigate, Enter opens, and the button above selects the folder you are in."
+            : "Click an entry to select it. Arrow keys navigate, Enter opens, and the button above selects the folder you are in."}
         </p>
         <button type="button" className="button secondary" onClick={onCancel}>
           Cancel
