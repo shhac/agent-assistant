@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
   APIError,
-  criteriaLines,
   errorText,
   type Project,
   type State,
@@ -13,6 +12,7 @@ import { Assignment, needsAttention } from "./Assignment";
 import { EvidenceView } from "./EvidenceView";
 import { isQueued, orderQueue, startCondition } from "./queue";
 import { stateLabel } from "./states";
+import { CriteriaList } from "./ui";
 
 function when(value: string) {
   const date = new Date(value);
@@ -153,15 +153,7 @@ function QueuedRow({
           <summary>Brief and queue management</summary>
           <p className="work-objective">{item.objective}</p>
           <h4>Acceptance criteria</h4>
-          {criteriaLines(item.acceptance_criteria).length ? (
-            <ul>
-              {criteriaLines(item.acceptance_criteria).map((line, i) => (
-                <li key={i}>{line}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">No criteria recorded.</p>
-          )}
+          <CriteriaList criteria={item.acceptance_criteria} />
           <QueueControls item={item} demo={state.demo} refresh={refresh} />
           {onInvestigate && (
             <div className="queue-review">
@@ -502,15 +494,7 @@ function WorkCard({
       <div className="work-review-grid">
         <div>
           <h4>Acceptance criteria</h4>
-          {criteriaLines(item.acceptance_criteria).length ? (
-            <ul>
-              {criteriaLines(item.acceptance_criteria).map((line, i) => (
-                <li key={i}>{line}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">No criteria recorded.</p>
-          )}
+          <CriteriaList criteria={item.acceptance_criteria} />
         </div>
         <div>
           <h4>
@@ -606,9 +590,7 @@ function WorkCard({
       )}
       {!!settled.length && (
         <details className="work-attempts">
-          <summary>
-            Other assignments · {settled.length}
-          </summary>
+          <summary>Other assignments · {settled.length}</summary>
           {settled.map((agent) => (
             <Assignment
               key={agent.id}

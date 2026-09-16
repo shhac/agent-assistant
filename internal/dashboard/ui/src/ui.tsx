@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { criteriaLines } from "./api";
 
 const icons: Record<string, string> = {
   Overview: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
@@ -174,5 +175,33 @@ export function PageHeading({
       </div>
       {action}
     </div>
+  );
+}
+
+/**
+ * Acceptance criteria as recorded, or a plain statement that none were. The
+ * marker is optional so the project brief can keep its dotted presentation
+ * without a second copy of the list.
+ */
+export function CriteriaList({
+  criteria,
+  empty = "No criteria recorded.",
+  marker = false,
+}: {
+  criteria: Parameters<typeof criteriaLines>[0];
+  empty?: string;
+  marker?: boolean;
+}) {
+  const lines = criteriaLines(criteria);
+  if (!lines.length) return <p className="muted">{empty}</p>;
+  return (
+    <ul className={marker ? "criteria-list" : undefined}>
+      {lines.map((line, i) => (
+        <li key={i}>
+          {marker && <span className="criteria-dot" />}
+          {line}
+        </li>
+      ))}
+    </ul>
   );
 }

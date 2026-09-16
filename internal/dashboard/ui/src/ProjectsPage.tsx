@@ -6,6 +6,7 @@ import { ProjectWork } from "./ProjectWork";
 import { ActivityList, ProjectRow, WorkerUsageHold } from "./OverviewPage";
 import { isHeldUp, stateLabel } from "./states";
 import {
+  CriteriaList,
   Empty,
   ErrorNotice,
   humanStatus,
@@ -13,7 +14,7 @@ import {
   PageHeading,
   Status,
 } from "./ui";
-import { api, criteriaLines, errorText, type Project, type State } from "./api";
+import { api, errorText, type Project, type State } from "./api";
 
 export function Projects({
   state,
@@ -80,18 +81,11 @@ export function Projects({
           <summary>Brief, folders and worker setup</summary>
           <section className="detail-section">
             <p className="eyebrow">PROJECT GUIDANCE</p>
-            {criteriaLines(project.acceptance_criteria).length ? (
-              <ul className="criteria-list">
-                {criteriaLines(project.acceptance_criteria).map((line, i) => (
-                  <li key={i}>
-                    <span className="criteria-dot" />
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted">No acceptance criteria recorded.</p>
-            )}
+            <CriteriaList
+              criteria={project.acceptance_criteria}
+              empty="No acceptance criteria recorded."
+              marker
+            />
           </section>
           <ProjectDirectories
             key={project.id}
