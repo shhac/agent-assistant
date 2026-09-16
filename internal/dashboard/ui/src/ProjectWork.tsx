@@ -162,12 +162,7 @@ function QueuedRow({
           ) : (
             <p className="muted">No criteria recorded.</p>
           )}
-          <WorkCard
-            item={item}
-            state={state}
-            refresh={refresh}
-            controlsOnly
-          />
+          <QueueControls item={item} demo={state.demo} refresh={refresh} />
           {onInvestigate && (
             <div className="queue-review">
               <button
@@ -325,19 +320,75 @@ function NewOutcome({
   );
 }
 
+/**
+ * Withdrawing automatic commissioning. Kept apart from the work card so a
+ * queued row does not have to mount the whole acceptance flow to show one
+ * button.
+ */
+function QueueControls({
+  item,
+  demo,
+  refresh,
+}: {
+  item: WorkItem;
+  demo: boolean;
+  refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function withdraw() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/work-items/${encodeURIComponent(item.id)}/queue`, {
+        method: "DELETE",
+      });
+      await refresh();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!item.commission_requested)
+    return (
+      <p className="field-hint">
+        This outcome is not authorized to start automatically.
+      </p>
+    );
+  return (
+    <div className="work-queue-controls">
+      <button
+        type="button"
+        className="button secondary"
+        disabled={demo || busy}
+        onClick={() => void withdraw()}
+      >
+        {busy ? "Updating queue…" : "Remove from queue"}
+      </button>
+      <p className="field-hint">
+        Keep the outcome as a draft and withdraw permission to start
+        automatically.
+      </p>
+      {error && (
+        <p className="error-notice" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 function WorkCard({
   item,
   state,
   refresh,
   onInvestigate,
-  controlsOnly = false,
 }: {
   item: WorkItem;
   state: State;
   refresh: () => Promise<void>;
   onInvestigate?: (prompt: string) => void;
-  /** Renders only queue management, for an outcome shown as a queue row. */
-  controlsOnly?: boolean;
 }) {
   const agents = state.agents.filter((agent) => agent.work_item_id === item.id);
   const predecessor = state.work_items.find(
@@ -397,21 +448,6 @@ function WorkCard({
       setBusy(false);
     }
   }
-  async function withdraw() {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/api/work-items/${encodeURIComponent(item.id)}/queue`, {
-        method: "DELETE",
-      });
-      await refresh();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  }
   async function reload() {
     setBusy(true);
     setError("");
@@ -423,33 +459,6 @@ function WorkCard({
       setBusy(false);
     }
   }
-  const queueControls = item.commission_requested && !agents.length && (
-    <div className="work-queue-controls">
-      <button
-        type="button"
-        className="button secondary"
-        disabled={state.demo || busy}
-        onClick={() => void withdraw()}
-      >
-        {busy ? "Updating queue…" : "Remove from queue"}
-      </button>
-      <p className="field-hint">
-        Keep the outcome as a draft and withdraw permission to start
-        automatically.
-      </p>
-      {error && (
-        <p className="error-notice" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-  if (controlsOnly)
-    return queueControls || (
-      <p className="field-hint">
-        This outcome is not authorized to start automatically.
-      </p>
-    );
   return (
     <article className="work-card" aria-label={item.title}>
       <div className="work-heading">
@@ -468,7 +477,9 @@ function WorkCard({
             : ""}
         </p>
       )}
-      {queueControls}
+      {!agents.length && (
+        <QueueControls item={item} demo={state.demo} refresh={refresh} />
+      )}
       {item.status_reason && (
         <p className="work-state-reason" role="status">
           {item.status_reason}
