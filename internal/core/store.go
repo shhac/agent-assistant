@@ -21,10 +21,13 @@ type Store struct {
 	temporaryState bool
 }
 type diskState struct {
-	ChatTurns  []ChatTurn      `json:"chat_turns,omitempty"`
-	Events     map[string]bool `json:"events"`
-	Snapshot   Snapshot        `json:"snapshot"`
-	ModelCalls map[string]int  `json:"model_calls"`
+	ConversationDropped  map[string]bool          `json:"conversation_dropped,omitempty"`
+	AgentConversation    []AgentConversationEntry `json:"agent_conversation,omitempty"`
+	ConversationSequence int64                    `json:"conversation_sequence,omitempty"`
+	ChatTurns            []ChatTurn               `json:"chat_turns,omitempty"`
+	Events               map[string]bool          `json:"events"`
+	Snapshot             Snapshot                 `json:"snapshot"`
+	ModelCalls           map[string]int           `json:"model_calls"`
 }
 
 func Open(path string) (*Store, error) {
@@ -119,6 +122,9 @@ func readState(ctx context.Context, conn *sql.Conn) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("decode durable state: %w", err)
 	}
 	d.Snapshot.ChatTurns = d.ChatTurns
+	d.Snapshot.AgentConversation = d.AgentConversation
+	d.Snapshot.ConversationDropped = d.ConversationDropped
+	d.Snapshot.ConversationSequence = d.ConversationSequence
 	d.Snapshot.Events = d.Events
 	if d.Snapshot.Events == nil {
 		d.Snapshot.Events = map[string]bool{}
@@ -159,7 +165,7 @@ func (s *Store) update(ctx context.Context, fn func(*Snapshot) error) error {
 		return err
 	}
 	refreshWorkItems(&state)
-	data, err := json.Marshal(diskState{ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
+	data, err := json.Marshal(diskState{ConversationDropped: state.ConversationDropped, AgentConversation: state.AgentConversation, ConversationSequence: state.ConversationSequence, ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
 	if err != nil {
 		return err
 	}

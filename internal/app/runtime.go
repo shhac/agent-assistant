@@ -195,6 +195,9 @@ func (a *App) tick(ctx context.Context, noDispatch bool) error {
 		if err = a.reviewFinished(ctx); err != nil {
 			failures = append(failures, err)
 		}
+		if err = a.commissionQueuedWork(ctx); err != nil {
+			failures = append(failures, err)
+		}
 	}
 	if len(failures) > 0 {
 		return errors.Join(failures...)
@@ -205,7 +208,10 @@ func (a *App) tick(ctx context.Context, noDispatch bool) error {
 	return nil
 }
 func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch bool) error {
-	if agent.Status == "queued" && noDispatch {
+	if agent.ExternalID == "" && agent.Status == "paused" {
+		return nil
+	}
+	if agent.Status == "queued" && (noDispatch || agent.OwnerControl == "pause" || agent.OwnerControl == "stop") {
 		return nil
 	}
 	if agent.Status == "queued" {
@@ -238,6 +244,9 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 		task, rosterErr := a.withPeerRoster(ctx, agent, agent.Task)
 		if rosterErr != nil {
 			return rosterErr
+		}
+		if err = a.Core.RecordAgentConversation(ctx, agent.ID, "assignment:"+agent.DispatchKey, "assignment", "daemon_to_worker", agent.Task+"\nAcceptance criteria: "+agent.AcceptanceCriteria); err != nil {
+			return err
 		}
 		run, startErr := c.Start(ctx, worker.StartRequest{DispatchKey: agent.DispatchKey, AgentID: agent.ID, ProjectID: agent.ProjectID, ParentID: agent.ParentID, Role: role, Task: task, AcceptanceCriteria: agent.AcceptanceCriteria, Capabilities: agent.Capabilities, CheckInDeadline: agent.NextCheckIn})
 		if startErr != nil {
@@ -279,7 +288,7 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 	// Only a confirmed interrupted result may resume. A saved resuming intent
 	// whose response was lost is never repeated, even if the broker still says
 	// interrupted; its operation receipt requires inspection.
-	if run.Status == "interrupted" && !noDispatch && agent.Status != "resuming" && !(agent.Status == "reconciling" && agent.ResumeKey != "") {
+	if run.Status == "interrupted" && !noDispatch && agent.OwnerControl != "pause" && agent.OwnerControl != "stop" && agent.Status != "resuming" && !(agent.Status == "reconciling" && agent.ResumeKey != "") {
 		if err := a.workerUsageAllowed(ctx, agent.ProfileID); err != nil {
 			if errors.Is(err, errWorkerUsageHeld) {
 				return nil
@@ -326,9 +335,31 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 			return err
 		}
 	}
+	if agent.ControlKey != "" && ((agent.OwnerControl == "pause" && (run.Status == "paused" || run.Status == "completed" || run.Status == "cancelled")) || (agent.OwnerControl == "stop" && (run.Status == "cancelled" || run.Status == "completed")) || (agent.OwnerControl == "resume" && (run.Status == "running" || run.Status == "queued" || run.Status == "waiting"))) {
+		if err := a.Core.CompleteEvent(ctx, agent.ControlKey); err != nil {
+			return err
+		}
+	}
+	if !reflect.DeepEqual(agent.ControlCapabilities, run.ControlCapabilities) {
+		if err := a.Core.SetAgentControlCapabilities(ctx, agent.ID, run.ControlCapabilities); err != nil {
+			return err
+		}
+	}
+	if agent.OwnerControl == "resume" && (run.Status == "running" || run.Status == "queued" || run.Status == "waiting") {
+		if err := a.Core.ConfirmOwnerResume(ctx, agent.ID); err != nil {
+			return err
+		}
+		agent.OwnerControl = ""
+	}
 	status := run.Status
 	if status == "queued" {
 		status = "running"
+	}
+	if run.PauseRequested || (agent.OwnerControl == "pause" && (status == "running" || status == "queued")) {
+		status = "pause_requested"
+	}
+	if run.StopRequested || (agent.OwnerControl == "stop" && (status == "running" || status == "queued")) {
+		status = "stop_requested"
 	}
 	if status == "failed" {
 		status = "blocked"
@@ -351,7 +382,21 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 			return err
 		}
 	}
-	if !allowActions {
+	report := run.Summary
+	if run.Message != nil {
+		report += "\nPeer message: " + run.Message.Message
+	}
+	if run.Instruction != nil {
+		report += "\nCoordination instruction: " + run.Instruction.Message
+	}
+	if run.Decision != nil {
+		report += "\nQuestion: " + run.Decision.Question + "\nRecommendation: " + run.Decision.Recommendation
+	}
+	digest := sha256.Sum256([]byte(status + "\n" + report))
+	if err := a.Core.RecordAgentConversation(ctx, agent.ID, fmt.Sprintf("report:%x", digest), "report", "worker_to_daemon", report); err != nil {
+		return err
+	}
+	if !allowActions || agent.OwnerControl == "pause" || agent.OwnerControl == "stop" || status == "paused" || status == "pause_requested" || status == "stop_requested" {
 		return nil
 	}
 	if err := a.checkProgress(ctx, agent, run); err != nil {
@@ -601,11 +646,15 @@ func (a *App) sendAdmittedInstruction(ctx context.Context, ag core.Agent, key, m
 	if err = a.Core.BeginInstruction(ctx, ag.ID); err != nil {
 		return worker.Run{}, &noEffect{err}
 	}
+	if err = a.Core.RecordAgentConversation(ctx, ag.ID, key, "message", "daemon_to_worker", "Message requested; broker delivery not yet confirmed.\n"+message); err != nil {
+		return worker.Run{}, &noEffect{err}
+	}
 	message, err = a.withPeerRoster(ctx, ag, message)
 	if err != nil {
 		return worker.Run{}, &noEffect{err}
 	}
 	run, err := c.Send(ctx, ag.ExternalID, key, message)
+	a.recordMessageDelivery(ctx, ag.ID, key, err)
 	if err != nil {
 		_ = a.Core.MarkUncertain(ctx, ag.ID, "Instruction delivery is uncertain; inspect the operation before repeating")
 	}

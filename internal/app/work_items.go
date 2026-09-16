@@ -20,6 +20,24 @@ func (a *App) workItemTool(ctx context.Context, name string, raw json.RawMessage
 			return nil, err
 		}
 		return a.Core.CreateWorkItem(ctx, core.WorkItemInput{ProjectID: in.ProjectID, Title: in.Title, Objective: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
+	case "queue_work_item":
+		var in engine.QueueWorkItemArgs
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		return a.Core.QueueWorkItem(ctx, core.WorkItemInput{ProjectID: in.ProjectID, AfterWorkItemID: in.AfterWorkItemID, Title: in.Title, Objective: in.Objective, AcceptanceCriteria: strings.Join(in.AcceptanceCriteria, "\n")})
+	case "unqueue_work_item":
+		var in struct {
+			ProjectID  string `json:"project_id"`
+			WorkItemID string `json:"work_item_id"`
+		}
+		if err := args(raw, &in); err != nil {
+			return nil, err
+		}
+		if err := a.workItemScope(ctx, in.ProjectID, in.WorkItemID); err != nil {
+			return nil, err
+		}
+		return a.Core.CancelQueuedWorkItem(ctx, in.WorkItemID)
 	case "steer_work_item":
 		var in engine.SteerWorkItemArgs
 		if err := args(raw, &in); err != nil {
@@ -28,7 +46,7 @@ func (a *App) workItemTool(ctx context.Context, name string, raw json.RawMessage
 		if err := a.workItemScope(ctx, in.ProjectID, in.WorkItemID); err != nil {
 			return nil, err
 		}
-		return a.Core.AddSteering(ctx, in.WorkItemID, in.MessageID, in.Message)
+		return a.AddWorkItemSteering(ctx, in.WorkItemID, in.MessageID, in.Message)
 	case "accept_work_item":
 		var in engine.AcceptWorkItemArgs
 		if err := args(raw, &in); err != nil {

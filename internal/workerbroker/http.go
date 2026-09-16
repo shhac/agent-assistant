@@ -36,7 +36,7 @@ func (b *Broker) Handler() http.Handler {
 		}
 		respond(w, 200, run.Run)
 	})
-	for _, action := range []string{"resume", "messages", "cancel"} {
+	for _, action := range []string{"resume", "messages", "cancel", "pause"} {
 		mux.HandleFunc("POST /runs/{id}/"+action, b.control)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +116,7 @@ func (b *Broker) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := uid()
-	run := &storedRun{Run: worker.Run{ID: id, DispatchKey: in.DispatchKey, Status: "queued", Summary: "Accepted into the isolated worker queue", UpdatedAt: now(), Evidence: []string{}}, Request: in, Container: "agent-assistant-" + id, Messages: []string{}, Transcript: []modelMessage{}, Commands: []commandRecord{}}
+	run := &storedRun{Run: worker.Run{ControlCapabilities: []string{"pause", "resume", "stop"}, ID: id, DispatchKey: in.DispatchKey, Status: "queued", Summary: "Accepted into the isolated worker queue", UpdatedAt: now(), Evidence: []string{}}, Request: in, Container: "agent-assistant-" + id, Messages: []string{}, Transcript: []modelMessage{}, Commands: []commandRecord{}}
 	b.state.Runs[id] = run
 	b.state.Receipts[key] = receipt{Digest: digest, RunID: id}
 	if err = b.saveLocked(); err != nil {
@@ -161,7 +161,7 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		message = in.Message
-	case "cancel":
+	case "cancel", "pause":
 		if strict(raw, &struct{}{}) != nil {
 			respond(w, 400, map[string]string{"error": "invalid cancellation body"})
 			return
@@ -195,16 +195,28 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 		respond(w, 409, map[string]string{"error": "terminal worker cannot resume"})
 		return
 	}
-	if action == "messages" && (run.Run.Status == "interrupted" || (run.Run.Status == "blocked" && run.Run.Decision == nil)) {
+	if action == "messages" && (run.Run.Status == "paused" || run.PendingStatus == "paused" || run.Run.Status == "interrupted" || (run.Run.Status == "blocked" && run.Run.Decision == nil)) {
 		respond(w, 409, map[string]string{"error": "interrupted workers require explicit resume"})
 		return
 	}
-	if action == "resume" && run.Run.Status != "interrupted" && run.Run.Status != "blocked" {
-		respond(w, 409, map[string]string{"error": "resume requires interrupted or blocked worker"})
+	if action == "resume" && run.Run.Status != "interrupted" && run.Run.Status != "blocked" && run.Run.Status != "paused" {
+		respond(w, 409, map[string]string{"error": "resume requires paused, interrupted or blocked worker"})
 		return
 	}
 	before, _ := json.Marshal(run)
-	if action == "cancel" {
+	if action == "pause" {
+		if run.Run.Status == "running" {
+			run.PendingStatus = "paused"
+			run.PendingSummary = "Paused by the owner at an operation boundary; workspace and conversation preserved"
+			run.Run.PauseRequested = true
+			run.Run.Summary = "Pause requested; finishing the current operation and confirming cleanup"
+		} else {
+			run.Run.Status = "paused"
+			run.Run.Summary = "Paused by the owner before further execution"
+			run.Run.PauseRequested = false
+		}
+	} else if action == "cancel" {
+		run.Run.StopRequested = run.Run.Status == "running"
 		if run.Run.Status == "running" {
 			run.PendingStatus = "cancelled"
 			run.PendingSummary = "Cancelled by the owner after confirmed container cleanup"
@@ -217,8 +229,14 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 			run.PendingSummary = ""
 		}
 	} else {
+		if action == "resume" {
+			run.Run.PauseRequested = false
+			run.Run.StopRequested = false
+			run.PendingStatus = ""
+			run.PendingSummary = ""
+		}
 		run.Messages = append(run.Messages, message)
-		if run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {
+		if run.Run.Status == "paused" || run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {
 			run.Run.Status = "queued"
 			run.Run.Decision = nil
 			if run.Run.Message != nil && key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID {

@@ -22,6 +22,7 @@ func New(a *app.App, auth *Auth) http.Handler {
 	workerDetailRoutes(mux, a)
 	registerChatQueue(mux, a)
 	registerWorkItems(mux, a)
+	registerAgentControls(mux, a)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		s, err := a.Snapshot(r.Context())
 		if err != nil {

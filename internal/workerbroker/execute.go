@@ -39,6 +39,12 @@ func (b *Broker) execute(parent context.Context, id string) {
 			var artifactErr error
 			evidence, artifactErr = b.artifacts(current)
 			if artifactErr != nil {
+				_ = b.update(id, func(run *storedRun) error {
+					if run.PendingStatus == "paused" {
+						run.PendingSummary += ". Artifact collection failed; inspect the preserved workspace before continuing"
+					}
+					return nil
+				})
 				b.finalize(id, "interrupted", "Artifact collection failed; preserve the isolated workspace for inspection", nil)
 				return
 			}
@@ -50,6 +56,9 @@ func (b *Broker) execute(parent context.Context, id string) {
 		}
 		b.finalize(id, status, summary, evidence)
 	}()
+	if b.pauseRequested(id) {
+		return
+	}
 	if r.WorkDir == "" {
 		workDir := filepath.Join(b.cfg.StateDir, "runs", id, "workspace")
 		baseline, copyErr := copyWorkspace(b.cfg.Workspace, workDir)
@@ -78,6 +87,9 @@ func (b *Broker) execute(parent context.Context, id string) {
 		return
 	}
 	for turn := 0; turn < b.cfg.MaxTurns; turn++ {
+		if b.pauseRequested(id) {
+			return
+		}
 		if err = ctx.Err(); err != nil {
 			b.terminal(id, "interrupted", "Worker interrupted or reached its 30-minute wall-clock bound", nil)
 			return
@@ -112,7 +124,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 			if run.ModelCalls >= b.cfg.MaxTurns {
 				return errors.New("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing")
 			}
-			if run.Run.Status != "running" {
+			if run.Run.Status != "running" || run.PendingStatus == "paused" || run.PendingStatus == "cancelled" {
 				return errInterrupted
 			}
 			run.ModelCalls++
@@ -139,6 +151,9 @@ func (b *Broker) execute(parent context.Context, id string) {
 			return
 		}
 		for _, call := range reply.ToolCalls {
+			if b.pauseRequested(id) {
+				return
+			}
 			value, finished, toolErr := b.tool(ctx, id, r, call)
 			if toolErr != nil {
 				value = map[string]string{"error": toolErr.Error()}
@@ -297,4 +312,11 @@ func (b *Broker) tool(ctx context.Context, id string, r storedRun, call toolCall
 	default:
 		return nil, false, fmt.Errorf("worker tool %q is unavailable", call.Function.Name)
 	}
+}
+
+func (b *Broker) pauseRequested(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r := b.state.Runs[id]
+	return r == nil || r.PendingStatus == "paused" || r.PendingStatus == "cancelled"
 }

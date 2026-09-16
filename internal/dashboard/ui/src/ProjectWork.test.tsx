@@ -298,3 +298,94 @@ it("shows and submits current evidence when a previously accepted outcome reopen
     evidence: ["Keyboard navigation verified", "Calendar checks pass"],
   });
 });
+
+it("shows worker interruption and recovery count prominently even alongside other active work", () => {
+  const state = fixture();
+  state.work_items[0] = {
+    ...outcome,
+    status: "interrupted",
+    status_reason: "The CLI process exited before completing its report",
+  };
+  state.agents[0] = {
+    ...state.agents[0],
+    status: "interrupted",
+    summary: "The CLI process exited before completing its report",
+    recoveries: 2,
+  };
+  render(<ProjectWork project={project} state={state} refresh={vi.fn()} />);
+  const attention = screen.getByLabelText("Worker attention");
+  expect(
+    within(attention).getByText("Garden builder · Interrupted"),
+  ).toBeTruthy();
+  expect(
+    within(attention).getByText("2 recovery attempts recorded"),
+  ).toBeTruthy();
+  expect(
+    within(attention).getByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByText("In progress")).toBeNull();
+});
+it("queues the next outcome explicitly after a named predecessor", async () => {
+  const fetch = mockFetch(() => ({}));
+  const state = fixture();
+  const refresh = vi.fn().mockResolvedValue(undefined);
+  render(<ProjectWork project={project} state={state} refresh={refresh} />);
+  fireEvent.click(screen.getByRole("button", { name: "Define an outcome" }));
+  fireEvent.change(screen.getByLabelText("Outcome name"), {
+    target: { value: "Print the plan" },
+  });
+  fireEvent.change(screen.getByLabelText("What should change?"), {
+    target: { value: "A printable plan" },
+  });
+  fireEvent.change(screen.getByLabelText("How will we know it is done?"), {
+    target: { value: "All beds included" },
+  });
+  fireEvent.change(screen.getByLabelText("When should it start?"), {
+    target: { value: outcome.id },
+  });
+  expect(
+    screen.getByText(
+      /Queueing authorizes the assistant to commission this work automatically/,
+    ),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: `Queue after ${outcome.title}` }),
+  );
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  expect(fetch.mock.calls[0][0]).toBe(
+    `/api/projects/${project.id}/work-items/queue`,
+  );
+  expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({
+    title: "Print the plan",
+    objective: "A printable plan",
+    acceptance_criteria: "All beds included",
+    after_work_item_id: outcome.id,
+  });
+});
+it("withdraws automatic queue permission while preserving the named draft", async () => {
+  const state = fixture();
+  state.agents = [];
+  state.work_items.push({
+    ...outcome,
+    id: "next",
+    title: "Export next",
+    status: "queued",
+    commission_requested: true,
+    after_work_item_id: outcome.id,
+    status_reason: "Waiting for the planting dates outcome to be accepted",
+  });
+  const fetch = mockFetch(() => ({}));
+  const refresh = vi.fn().mockResolvedValue(undefined);
+  render(<ProjectWork project={project} state={state} refresh={refresh} />);
+  const card = screen.getByRole("article", { name: "Export next" });
+  expect(within(card).getByText(outcome.title)).toBeTruthy();
+  expect(within(card).getByText("Queued next")).toBeTruthy();
+  fireEvent.click(
+    within(card).getByRole("button", { name: "Remove from queue" }),
+  );
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  expect(fetch.mock.calls[0][0]).toBe("/api/work-items/next/queue");
+  expect(fetch.mock.calls[0][1]?.method).toBe("DELETE");
+});

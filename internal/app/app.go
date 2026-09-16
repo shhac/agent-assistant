@@ -259,7 +259,7 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 			return nil, err
 		}
 		return a.Core.RefineProjectWithDirectories(ctx, in.ProjectID, in.Objective, strings.Join(in.AcceptanceCriteria, "\n"), in.Directories)
-	case "create_work_item", "steer_work_item", "accept_work_item":
+	case "create_work_item", "queue_work_item", "unqueue_work_item", "steer_work_item", "accept_work_item":
 		return a.workItemTool(ctx, name, raw)
 	case "delegate":
 		var in engine.DelegateArgs

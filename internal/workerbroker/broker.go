@@ -134,6 +134,7 @@ func New(cfg Config) (*Broker, error) {
 		if r == nil {
 			return fail(errors.New("worker state contains a missing run"))
 		}
+		r.Run.ControlCapabilities = []string{"pause", "resume", "stop"}
 		if r.Request.ProjectID != cfg.ProjectID {
 			return fail(errors.New("broker state belongs to another configured project"))
 		}
@@ -151,6 +152,16 @@ func New(cfg Config) (*Broker, error) {
 				r.Run.Summary = "Cancellation completed during restart reconciliation"
 				r.PendingStatus = ""
 				r.PendingSummary = ""
+			} else if r.PendingStatus == "paused" {
+				r.Run.Status = "paused"
+				r.Run.PauseRequested = false
+				r.Run.Summary = "Owner-requested pause confirmed during restart cleanup"
+				if r.PendingMessage != nil {
+					r.Run.Message = r.PendingMessage
+					r.PendingMessage = nil
+				}
+				r.PendingStatus = ""
+				r.PendingSummary = ""
 			} else if r.PendingMessage != nil && r.PendingStatus == "waiting" {
 				// Cleanup is confirmed. Publish the durable outbox before allowing any
 				// further model turn; a crash must not silently discard its request.
@@ -163,6 +174,10 @@ func New(cfg Config) (*Broker, error) {
 			} else {
 				r.Run.Status = "interrupted"
 				r.Run.Summary = "Broker restarted; previous session stopped. Review recorded artifacts before resuming."
+			}
+			if r.Run.Status == "paused" || r.Run.Status == "cancelled" {
+				r.Run.PauseRequested = false
+				r.Run.StopRequested = false
 			}
 			r.Run.UpdatedAt = now()
 		}
@@ -349,7 +364,7 @@ func (b *Broker) Info() map[string]any {
 }
 func (b *Broker) terminal(id, status, summary string, evidence []string) {
 	_ = b.update(id, func(r *storedRun) error {
-		if r.Run.Status == "cancelled" || r.PendingStatus == "cancelled" {
+		if r.Run.Status == "cancelled" || r.PendingStatus == "cancelled" || r.PendingStatus == "paused" {
 			return nil
 		}
 		r.PendingStatus = status
@@ -361,18 +376,20 @@ func (b *Broker) terminal(id, status, summary string, evidence []string) {
 }
 func (b *Broker) finalize(id, status, summary string, evidence []string) {
 	_ = b.update(id, func(r *storedRun) error {
-		if r.PendingStatus == "cancelled" {
-			status = "cancelled"
+		if r.PendingStatus == "cancelled" || r.PendingStatus == "paused" {
+			status = r.PendingStatus
 			summary = r.PendingSummary
 		}
 		if r.Run.Status != "cancelled" {
 			r.Run.Status = status
 			r.Run.Summary = summary
 		}
-		if (status == "waiting" || status == "interrupted") && r.PendingMessage != nil {
+		if (status == "waiting" || status == "interrupted" || status == "paused") && r.PendingMessage != nil {
 			r.Run.Message = r.PendingMessage
 			r.PendingMessage = nil
 		}
+		r.Run.PauseRequested = false
+		r.Run.StopRequested = false
 		r.Run.Evidence = evidence
 		r.Run.UpdatedAt = now()
 		r.PendingStatus = ""

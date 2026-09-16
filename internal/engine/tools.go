@@ -22,6 +22,11 @@ type CreateWorkItemArgs struct {
 	Objective          string   `json:"objective"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
+type QueueWorkItemArgs struct {
+	CreateWorkItemArgs
+	AfterWorkItemID string `json:"after_work_item_id"`
+}
+
 type SteerWorkItemArgs struct {
 	ProjectID  string `json:"project_id"`
 	WorkItemID string `json:"work_item_id"`
@@ -87,6 +92,8 @@ func Tools() []Tool {
 		tool("create_project", "Track a project in local assistant state with a title and optional existing absolute directory paths. No Linear issue, external tracker, or connection is required. Objective may be empty and acceptance_criteria may be empty until commissioning. This creates coordination metadata only; it never opens or edits project files.", []string{"title", "objective"}, []string{"acceptance_criteria"}),
 		tool("update_project", "Refine an uncommissioned project brief into concrete acceptance criteria before delegating. Optionally link existing absolute directories; null preserves current links. Cannot change the acceptance contract after workers are commissioned.", []string{"project_id", "objective"}, []string{"acceptance_criteria"}),
 		tool("create_work_item", "Record the owner's next bounded outcome inside an existing ongoing project with measurable acceptance criteria. Projects can have many successive work items; creating one does not start execution.", []string{"project_id", "title", "objective"}, []string{"acceptance_criteria"}),
+		tool("queue_work_item", "Persist an owner-authorized follow-on outcome and commission it automatically after the specified preceding work item is accepted. Use this when the owner asks to do something next; remembering a plan is not a queue. Requires a clear objective and measurable criteria. Never infer permission from a suggestion alone.", []string{"project_id", "after_work_item_id", "title", "objective"}, []string{"acceptance_criteria"}),
+		tool("unqueue_work_item", "Withdraw the owner’s authorization to start queued work before any agent is assigned. Retains its contract as a draft. Assigned work requires worker-level controls.", []string{"project_id", "work_item_id"}, nil),
 		tool("steer_work_item", "Persist owner direction for a work item and deliver it through the daemon. Use a stable message_id for retries. Delivery is not acknowledgement or completion. Existing authority and prohibitions remain binding.", []string{"project_id", "work_item_id", "message_id", "message"}, nil),
 		tool("accept_work_item", "Accept exactly the current review_revision after comparing recorded artifacts and command outcomes against every work-item criterion and steering message. Stale revisions are rejected. Accepted work leaves the ongoing project open.", []string{"project_id", "work_item_id", "review_revision"}, []string{"evidence"}),
 		tool("delegate", "Ask the daemon to commission an approved peer agent with a bounded outcome. The legacy parent_id identifies its responsible coordinator for escalation and inherited authority, not process ownership; empty means the PA. The daemon owns execution, recovery, scope and limits.", []string{"project_id", "work_item_id", "parent_id", "worker_profile", "role", "objective"}, []string{"acceptance_criteria"}),

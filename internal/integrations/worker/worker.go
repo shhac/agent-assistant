@@ -84,6 +84,9 @@ type PeerMessage struct {
 }
 
 type Run struct {
+	ControlCapabilities      []string           `json:"control_capabilities,omitempty"`
+	PauseRequested           bool               `json:"pause_requested,omitempty"`
+	StopRequested            bool               `json:"stop_requested,omitempty"`
 	SteeringAcknowledgements []string           `json:"steering_acknowledgements,omitempty"`
 	Message                  *PeerMessage       `json:"message,omitempty"`
 	Instruction              *Instruction       `json:"instruction,omitempty"`
@@ -201,6 +204,12 @@ func (c *Client) Send(ctx context.Context, id, key, message string) (Run, error)
 	return c.call(ctx, http.MethodPost, "/runs/"+url.PathEscape(id)+"/messages", key, map[string]string{"message": message})
 }
 
+func (c *Client) Pause(ctx context.Context, id, key string) (Run, error) {
+	if id == "" || key == "" {
+		return Run{}, errors.New("pause requires run ID and stable operation key")
+	}
+	return c.call(ctx, http.MethodPost, "/runs/"+url.PathEscape(id)+"/pause", key, struct{}{})
+}
 func (c *Client) Cancel(ctx context.Context, id, key string) (Run, error) {
 	if id == "" || key == "" {
 		return Run{}, errors.New("cancel requires run ID and stable operation key")
@@ -267,7 +276,7 @@ func (c *Client) call(ctx context.Context, method, path, key string, in any) (Ru
 		return Run{}, errors.New("worker returned no run ID")
 	}
 	switch result.Status {
-	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled":
+	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled", "paused":
 	default:
 		if method != http.MethodGet {
 			return Run{}, ErrUncertain

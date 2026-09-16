@@ -141,7 +141,7 @@ func (s projectExecutor) context(ctx context.Context) (json.RawMessage, error) {
 	}
 	return json.Marshal(map[string]any{"state": v, "worker_profiles": profiles, "execution_authority": s.app.executionAuthority(v.Paused)})
 }
-func (a *App) reasoning(ctx context.Context, scope projectExecutor, prompt string) (engine.Result, error) {
+func (a *App) reasoning(ctx context.Context, scope reasoningScope, prompt string) (engine.Result, error) {
 	select {
 	case a.chat <- struct{}{}:
 		defer func() { <-a.chat }()
@@ -228,6 +228,9 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 	if _, err = a.Core.ClaimEvent(ctx, key); err != nil {
 		return worker.Run{}, err
 	}
+	if err = a.Core.RecordAgentConversation(ctx, agent.ID, key, "message", "daemon_to_worker", "Message requested; broker delivery not yet confirmed.\n"+message); err != nil {
+		return worker.Run{}, err
+	}
 	message, err = a.withPeerRoster(ctx, agent, message)
 	if err != nil {
 		// No broker request has been made; permit a later deliberate attempt.
@@ -235,6 +238,7 @@ func (a *App) SendAgent(ctx context.Context, agent core.Agent, message string) (
 		return worker.Run{}, err
 	}
 	result, err := client.Send(ctx, agent.ExternalID, key, message)
+	a.recordMessageDelivery(ctx, agent.ID, key, err)
 	if err == nil {
 		err = a.Core.CompleteEvent(ctx, key)
 	}

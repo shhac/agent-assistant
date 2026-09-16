@@ -91,3 +91,13 @@ The broker persists at most 1,000 runs in one state directory. Preserve or archi
 As of v0.6, the daemon appends work-item direction to start/resume context and routes new direction to live attempts. The built-in broker exposes `acknowledge_steering` with a `message_ids` array. It persists cumulative, unique IDs in the run response's optional `steering_acknowledgements` array, including the final report and after restarts. The daemon validates each ID against the assignment's work item before recording a receipt.
 
 External brokers can implement that optional response field using explicit agent acknowledgements. A successful message HTTP response is delivery only: do not synthesize read receipts from it. Older brokers continue to run, but work with steering cannot be accepted until a completed attempt explicitly acknowledges that direction. Receipts do not grant permissions or demonstrate implementation. The daemon stores up to 200 messages and 24 KiB of encoded steering data per work item; broker receipts are bounded to 200 unique IDs per run.
+
+## Worker controls and communication history
+
+A run can advertise `control_capabilities: ["pause", "resume", "stop"]`. The built-in broker advertises all three; external brokers may advertise only those they implement. The daemon does not infer support from an endpoint's existence.
+
+`POST /runs/{id}/pause` accepts an empty JSON object and the normal idempotency key. An executing run remains `running` with `pause_requested: true` until it finishes its current operation and cleanup succeeds; it then becomes `paused`. The broker does not begin another model turn or remaining tool call after observing the pause. A queued or already-idle run can pause immediately. Resuming uses the existing `/resume` endpoint, workspace, transcript and cumulative allowances. Pending peer messages survive the pause.
+
+`POST /runs/{id}/cancel` interrupts the running operation. A running session reports `stop_requested: true` until cleanup confirms cancellation. If cleanup cannot be confirmed, execution capacity stays reserved and the run requires reconciliation. A cancelled session cannot resume. The daemon persists owner control intent before contacting the broker, preventing automatic recovery from undoing an owner pause or stop.
+
+The dashboard's conversation records application-level assignment text, instructions, reports, questions, owner direction, and delivery/control events. It does not expose private model reasoning, provider credentials or raw implementation-tool payloads. Retention is bounded to 500 entries per assignment and 10,000 overall, with 8 KiB message excerpts and explicit truncation indicators. Exchanges from before recording was installed cannot be reconstructed.

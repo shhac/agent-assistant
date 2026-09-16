@@ -169,6 +169,9 @@ func (s *Service) Delegate(ctx context.Context, in DelegateInput) (Agent, error)
 		if err != nil {
 			return err
 		}
+		if in.RequireCommissionRequest && !item.CommissionRequested {
+			return fmt.Errorf("queued commissioning request was withdrawn: %w", ErrConflict)
+		}
 		out.WorkItemID = item.ID
 		item.UpdatedAt = now
 		p.Status = "active"
@@ -261,7 +264,7 @@ func (s *Service) MarkUncertain(ctx context.Context, id, reason string) error {
 	})
 }
 func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (Agent, error) {
-	if !contains([]string{"running", "waiting", "blocked", "interrupted", "completed", "cancelled"}, in.Status) {
+	if !contains([]string{"running", "waiting", "blocked", "interrupted", "completed", "cancelled", "paused", "pause_requested", "stop_requested"}, in.Status) {
 		return Agent{}, errors.New("invalid worker update status")
 	}
 	if !required(in.Summary) {
@@ -282,6 +285,19 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 		a := agent(v, id)
 		if a == nil {
 			return ErrNotFound
+		}
+		// A report fetched before an owner control cannot release its hold or
+		// capacity. Only a confirmed checkpoint/interruption/termination does.
+		if contains([]string{"running", "waiting", "blocked", "pause_requested"}, in.Status) {
+			if a.OwnerControl == "pause" {
+				in.Status = "pause_requested"
+			}
+			if a.OwnerControl == "stop" {
+				in.Status = "stop_requested"
+			}
+		}
+		if a.OwnerControl == "stop" && in.Status == "paused" {
+			in.Status = "stop_requested"
 		}
 		if in.ExternalID != "" && a.ExternalID != "" && in.ExternalID != a.ExternalID {
 			return errors.New("worker update identity does not match")
@@ -605,7 +621,7 @@ func (s *Service) ReserveModelCall(ctx context.Context, limit int) error {
 }
 
 func holdsExecution(a Agent) bool {
-	if contains([]string{"running", "dispatching", "resuming", "reconciling"}, a.Status) {
+	if contains([]string{"running", "dispatching", "resuming", "reconciling", "pause_requested", "stop_requested"}, a.Status) {
 		return true
 	}
 	return a.Role != "manager" && a.ExternalID != "" && (a.Status == "waiting" || a.Status == "blocked")
@@ -648,14 +664,21 @@ func (s *Service) BeginInstruction(ctx context.Context, id string) error {
 	})
 }
 func (s *Service) dispatchAuthority(v *Snapshot, a *Agent) error {
+	if a.OwnerControl == "pause" || a.OwnerControl == "stop" || a.Status == "paused" {
+		return errors.New("worker is held by the owner")
+	}
 	if a.Depth > s.configuration().Limits.MaxDepth {
 		return errors.New("current delegation depth limit no longer permits execution")
 	}
 	if p := project(v, a.ProjectID); p == nil || p.Status == "completed" {
 		return errors.New("project no longer permits execution")
 	}
-	if w := workItem(v, a.WorkItemID); w == nil || workItemClosed(*w) {
+	w := workItem(v, a.WorkItemID)
+	if w == nil || workItemClosed(*w) {
 		return errors.New("work item no longer permits execution")
+	}
+	if err := workItemExecutionReady(v, w); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	for current := a; current != nil; {

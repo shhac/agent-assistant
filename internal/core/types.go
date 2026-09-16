@@ -26,6 +26,9 @@ type Project struct {
 // ParentID retains the stored/wire name for its authority and escalation link;
 // it is not subprocess ownership or a restriction on peer communication.
 type Agent struct {
+	OwnerControl        string    `json:"owner_control,omitempty"`
+	ControlKey          string    `json:"control_key,omitempty"`
+	ControlCapabilities []string  `json:"control_capabilities,omitempty"`
 	WorkItemID          string    `json:"work_item_id,omitempty"`
 	LastProgressAt      time.Time `json:"last_progress_at,omitempty"`
 	ProgressFingerprint string    `json:"progress_fingerprint,omitempty"`
@@ -96,22 +99,25 @@ type PendingOperation struct {
 }
 
 type Snapshot struct {
-	WorkItems         []WorkItem         `json:"work_items"`
-	Steering          []SteeringMessage  `json:"steering"`
-	SteeringReceipts  []SteeringReceipt  `json:"steering_receipts"`
-	ChatTurns         []ChatTurn         `json:"-"`
-	PendingOperations []PendingOperation `json:"pending_operations"`
-	Events            map[string]bool    `json:"-"`
-	Assistant         Assistant          `json:"assistant"`
-	Projects          []Project          `json:"projects"`
-	Agents            []Agent            `json:"agents"`
-	Decisions         []Decision         `json:"decisions"`
-	Messages          []Message          `json:"messages"`
-	Memories          []Memory           `json:"memories"`
-	Activity          []Activity         `json:"activity"`
-	Integrations      []Integration      `json:"integrations"`
-	Paused            bool               `json:"paused"`
-	ModelCalls        map[string]int     `json:"-"`
+	ConversationDropped  map[string]bool          `json:"-"`
+	AgentConversation    []AgentConversationEntry `json:"-"`
+	ConversationSequence int64                    `json:"-"`
+	WorkItems            []WorkItem               `json:"work_items"`
+	Steering             []SteeringMessage        `json:"steering"`
+	SteeringReceipts     []SteeringReceipt        `json:"steering_receipts"`
+	ChatTurns            []ChatTurn               `json:"-"`
+	PendingOperations    []PendingOperation       `json:"pending_operations"`
+	Events               map[string]bool          `json:"-"`
+	Assistant            Assistant                `json:"assistant"`
+	Projects             []Project                `json:"projects"`
+	Agents               []Agent                  `json:"agents"`
+	Decisions            []Decision               `json:"decisions"`
+	Messages             []Message                `json:"messages"`
+	Memories             []Memory                 `json:"memories"`
+	Activity             []Activity               `json:"activity"`
+	Integrations         []Integration            `json:"integrations"`
+	Paused               bool                     `json:"paused"`
+	ModelCalls           map[string]int           `json:"-"`
 }
 type ProjectInput struct {
 	Directories        []string `json:"directories"`
@@ -124,15 +130,17 @@ type ProjectInput struct {
 // DelegateInput requests a daemon-owned assignment. ParentID selects the
 // responsible coordinator and constrains delegated capabilities.
 type DelegateInput struct {
-	WorkItemID         string   `json:"work_item_id,omitempty"`
-	ProjectID          string   `json:"project_id"`
-	ParentID           string   `json:"parent_id,omitempty"`
-	ProfileID          string   `json:"profile_id"`
-	Name               string   `json:"name"`
-	Role               string   `json:"role"`
-	Task               string   `json:"task"`
-	AcceptanceCriteria string   `json:"acceptance_criteria"`
-	Capabilities       []string `json:"capabilities"`
+	// RequireCommissionRequest is set by the daemon queue dispatcher, never by model JSON.
+	RequireCommissionRequest bool     `json:"-"`
+	WorkItemID               string   `json:"work_item_id,omitempty"`
+	ProjectID                string   `json:"project_id"`
+	ParentID                 string   `json:"parent_id,omitempty"`
+	ProfileID                string   `json:"profile_id"`
+	Name                     string   `json:"name"`
+	Role                     string   `json:"role"`
+	Task                     string   `json:"task"`
+	AcceptanceCriteria       string   `json:"acceptance_criteria"`
+	Capabilities             []string `json:"capabilities"`
 }
 type AgentUpdate struct {
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`

@@ -9,9 +9,16 @@ import {
   type WorkItem,
 } from "./api";
 import "./work.css";
+import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
 
 const statuses: Record<WorkItem["status"], string> = {
   ready: "Ready to coordinate",
+  queued: "Queued next",
+  waiting: "Waiting to start",
+  interrupted: "Interrupted",
+  blocked: "Blocked",
+  paused: "Paused",
+  cancelled: "Stopped",
   active: "In progress",
   review: "Ready for acceptance",
   accepted: "Accepted",
@@ -58,6 +65,7 @@ export function ProjectWork({
       {adding && (
         <NewOutcome
           project={project}
+          items={items}
           refresh={refresh}
           onCreated={() => setAdding(false)}
         />
@@ -78,16 +86,20 @@ export function ProjectWork({
 
 function NewOutcome({
   project,
+  items,
   refresh,
   onCreated,
 }: {
   project: Project;
+  items: WorkItem[];
   refresh: () => Promise<void>;
   onCreated: () => void;
 }) {
   const [title, setTitle] = useState("");
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
+  const [after, setAfter] = useState("");
+  const predecessor = items.find((item) => item.id === after);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState(false);
@@ -99,13 +111,14 @@ function NewOutcome({
     try {
       if (!created) {
         await api(
-          `/api/projects/${encodeURIComponent(project.id)}/work-items`,
+          `/api/projects/${encodeURIComponent(project.id)}/work-items${after ? "/queue" : ""}`,
           {
             method: "POST",
             body: JSON.stringify({
               title: title.trim(),
               objective: objective.trim(),
               acceptance_criteria: criteria.trim(),
+              ...(after ? { after_work_item_id: after } : {}),
             }),
           },
         );
@@ -154,10 +167,29 @@ function NewOutcome({
           onChange={(e) => setCriteria(e.target.value)}
         />
       </label>
+      {!!items.length && (
+        <label>
+          When should it start?
+          <select
+            value={after}
+            disabled={busy || created}
+            onChange={(event) => setAfter(event.target.value)}
+          >
+            <option value="">
+              Record only — arrange a start with the assistant
+            </option>
+            {items.map((item) => (
+              <option value={item.id} key={item.id}>
+                After {item.title} is accepted
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <p className="field-hint">
-        Record the outcome, then discuss it with your assistant to begin
-        coordination. This keeps the project available for the next piece of
-        work.
+        {predecessor
+          ? `Queueing authorizes the assistant to commission this work automatically after “${predecessor.title}” is accepted. No additional kickoff is needed.`
+          : "Record the outcome, then discuss it with your assistant to begin coordination. This keeps the project available for the next piece of work."}
       </p>
       {error && (
         <p className="error-notice" role="alert">
@@ -175,7 +207,9 @@ function NewOutcome({
           ? "Recording…"
           : created
             ? "Refresh recorded outcome"
-            : "Record outcome"}
+            : predecessor
+              ? `Queue after ${predecessor.title}`
+              : "Record outcome"}
       </button>
     </form>
   );
@@ -191,6 +225,19 @@ function WorkCard({
   refresh: () => Promise<void>;
 }) {
   const agents = state.agents.filter((agent) => agent.work_item_id === item.id);
+  const predecessor = state.work_items.find(
+    (work) => work.id === item.after_work_item_id,
+  );
+  const attention = agents.filter((agent) =>
+    [
+      "interrupted",
+      "blocked",
+      "reconciling",
+      "pause_requested",
+      "paused",
+      "stop_requested",
+    ].includes(agent.status),
+  );
   const evidence = [
     ...new Set(agents.flatMap((agent) => agent.evidence || [])),
   ];
@@ -243,6 +290,21 @@ function WorkCard({
       setBusy(false);
     }
   }
+  async function withdraw() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/work-items/${encodeURIComponent(item.id)}/queue`, {
+        method: "DELETE",
+      });
+      await refresh();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function reload() {
     setBusy(true);
     setError("");
@@ -263,6 +325,63 @@ function WorkCard({
         </span>
       </div>
       <p className="work-objective">{item.objective}</p>
+      {item.after_work_item_id && (
+        <p className="work-queue-order">
+          After <strong>{predecessor?.title || "the preceding outcome"}</strong>{" "}
+          is accepted
+          {item.commission_requested
+            ? " · automatic coordination authorized"
+            : ""}
+        </p>
+      )}
+      {item.commission_requested && !agents.length && (
+        <div className="work-queue-controls">
+          <button
+            type="button"
+            className="button secondary"
+            disabled={state.demo || busy}
+            onClick={() => void withdraw()}
+          >
+            {busy ? "Updating queue…" : "Remove from queue"}
+          </button>
+          <p className="field-hint">
+            Keep the outcome as a draft and withdraw permission to start
+            automatically.
+          </p>
+          {error && (
+            <p className="error-notice" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+      {item.status_reason && (
+        <p className="work-state-reason" role="status">
+          {item.status_reason}
+        </p>
+      )}
+      {!!attention.length && (
+        <div className="work-attention" aria-label="Worker attention">
+          {attention.map((agent) => (
+            <div key={agent.id}>
+              <strong>
+                {agent.name} · {workerStateLabel(agent.status)}
+              </strong>
+              <p>
+                {agent.summary ||
+                  "The assistant needs to check the existing worker session before continuing."}
+              </p>
+              <small>{agent.recoveries ?? 0} recovery attempts recorded</small>
+              <WorkerConversation
+                agent={agent}
+                refresh={refresh}
+                demo={state.demo}
+                outcomeTitle={item.title}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       <div className="work-review-grid">
         <div>
           <h4>Acceptance criteria</h4>

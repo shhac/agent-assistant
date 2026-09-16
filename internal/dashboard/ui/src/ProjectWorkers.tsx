@@ -8,6 +8,7 @@ import {
   type Project,
   type State,
 } from "./api";
+import { WorkerConversation, workerStateLabel } from "./WorkerConversation";
 import { WorkerEditor } from "./WorkerEditor";
 import "./workers.css";
 
@@ -227,6 +228,7 @@ export function ProjectWorkers({
               agent={agent}
               worker={workers.find((worker) => worker.id === agent.profile_id)}
               state={state}
+              refresh={refresh}
             />
           ))}
         </div>
@@ -238,10 +240,12 @@ function Assignment({
   agent,
   worker,
   state,
+  refresh,
 }: {
   agent: Agent;
   worker?: ProjectWorker;
   state: State;
+  refresh: () => Promise<void>;
 }) {
   const decisions = pendingDecisions(state.decisions).filter(
     (decision) => decision.agent_id === agent.id,
@@ -266,7 +270,7 @@ function Assignment({
     >
       <div className="project-worker-heading">
         <h4>{agent.name || agent.role}</h4>
-        <span className="worker-state">{label(agent.status)}</span>
+        <span className="worker-state">{workerStateLabel(agent.status)}</span>
       </div>
       <p className="field-hint">
         {label(agent.role)}
@@ -277,6 +281,15 @@ function Assignment({
         {agent.task || "No task description recorded."}
       </p>
       <p>{agent.summary || "No progress report yet."}</p>
+      <p className="field-hint">
+        {agent.recoveries ?? 0} recovery attempts recorded
+      </p>
+      <WorkerConversation
+        agent={agent}
+        refresh={refresh}
+        demo={state.demo}
+        outcomeTitle={outcome?.title}
+      />
       {overdue && (
         <p className="worker-health">
           Check-in overdue. Progress needs checking; silence alone does not

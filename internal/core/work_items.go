@@ -13,16 +13,19 @@ import (
 // WorkItem preserves an outcome's contract independently of the sessions used
 // to deliver it. A project can contain successive or concurrent work items.
 type WorkItem struct {
-	ID                 string            `json:"id"`
-	ProjectID          string            `json:"project_id"`
-	Title              string            `json:"title"`
-	Objective          string            `json:"objective"`
-	AcceptanceCriteria string            `json:"acceptance_criteria"`
-	Status             string            `json:"status"`
-	CreatedAt          time.Time         `json:"created_at"`
-	UpdatedAt          time.Time         `json:"updated_at"`
-	ReviewRevision     string            `json:"review_revision"`
-	Acceptance         *AcceptanceRecord `json:"acceptance,omitempty"`
+	AfterWorkItemID     string            `json:"after_work_item_id,omitempty"`
+	CommissionRequested bool              `json:"commission_requested,omitempty"`
+	StatusReason        string            `json:"status_reason,omitempty"`
+	ID                  string            `json:"id"`
+	ProjectID           string            `json:"project_id"`
+	Title               string            `json:"title"`
+	Objective           string            `json:"objective"`
+	AcceptanceCriteria  string            `json:"acceptance_criteria"`
+	Status              string            `json:"status"`
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
+	ReviewRevision      string            `json:"review_revision"`
+	Acceptance          *AcceptanceRecord `json:"acceptance,omitempty"`
 	// Legacy permits the old explicit CompleteProject operation to accept the
 	// compatibility item. Newly created items require revision-bound acceptance.
 	Legacy bool `json:"legacy,omitempty"`
@@ -34,6 +37,7 @@ type AcceptanceRecord struct {
 	AcceptedAt time.Time `json:"accepted_at"`
 }
 type WorkItemInput struct {
+	AfterWorkItemID    string `json:"after_work_item_id,omitempty"`
 	ProjectID          string `json:"project_id"`
 	Title              string `json:"title"`
 	Objective          string `json:"objective"`
@@ -50,7 +54,12 @@ func workItem(v *Snapshot, id string) *WorkItem {
 }
 func workItemClosed(w WorkItem) bool { return w.Status == "accepted" || w.Status == "legacy_completed" }
 
+// CreateWorkItem records a contract without permission to commission it later.
 func (s *Service) CreateWorkItem(ctx context.Context, in WorkItemInput) (WorkItem, error) {
+	return s.createWorkItem(ctx, in, false)
+}
+
+func (s *Service) createWorkItem(ctx context.Context, in WorkItemInput, commissionRequested bool) (WorkItem, error) {
 	if !required(in.ProjectID, in.Title, in.Objective, in.AcceptanceCriteria) {
 		return WorkItem{}, errors.New("project, title, objective and measurable acceptance criteria are required")
 	}
@@ -58,19 +67,27 @@ func (s *Service) CreateWorkItem(ctx context.Context, in WorkItemInput) (WorkIte
 		return WorkItem{}, errors.New("work item contract is too long")
 	}
 	now := s.now().UTC()
-	out := WorkItem{ID: uid(), ProjectID: in.ProjectID, Title: strings.TrimSpace(in.Title), Objective: strings.TrimSpace(in.Objective), AcceptanceCriteria: strings.TrimSpace(in.AcceptanceCriteria), Status: "ready", CreatedAt: now, UpdatedAt: now}
+	out := WorkItem{AfterWorkItemID: in.AfterWorkItemID, CommissionRequested: commissionRequested, ID: uid(), ProjectID: in.ProjectID, Title: strings.TrimSpace(in.Title), Objective: strings.TrimSpace(in.Objective), AcceptanceCriteria: strings.TrimSpace(in.AcceptanceCriteria), Status: "ready", CreatedAt: now, UpdatedAt: now}
 	err := s.store.update(ctx, func(v *Snapshot) error {
 		p := project(v, in.ProjectID)
 		if p == nil {
 			return ErrNotFound
+		}
+		if err := validateWorkItemDependency(v, &out); err != nil {
+			return err
 		}
 		v.WorkItems = append(v.WorkItems, out)
 		if p.Status == "completed" {
 			p.Status = "active"
 		}
 		p.UpdatedAt = now
-		out.ReviewRevision = workItemRevision(v, &out)
-		record(v, now, p.ID, "work_item.created", out.Title)
+		refreshWorkItems(v)
+		out = *workItem(v, out.ID)
+		kind := "work_item.created"
+		if commissionRequested {
+			kind = "work_item.queued"
+		}
+		record(v, now, p.ID, kind, out.Title)
 		return nil
 	})
 	return out, err
@@ -84,6 +101,9 @@ func resolveDelegationWorkItem(v *Snapshot, p *Project, id string, now time.Time
 		}
 		if workItemClosed(*w) {
 			return nil, errors.New("accepted work cannot receive new assignments; create another work item")
+		}
+		if err := workItemExecutionReady(v, w); err != nil {
+			return nil, err
 		}
 		return w, nil
 	}
@@ -104,6 +124,9 @@ func resolveDelegationWorkItem(v *Snapshot, p *Project, id string, now time.Time
 		open = w
 	}
 	if open != nil {
+		if err := workItemExecutionReady(v, open); err != nil {
+			return nil, err
+		}
 		return open, nil
 	}
 	if hasItems || p.Status == "completed" {
@@ -178,11 +201,12 @@ func workItemRevision(v *Snapshot, w *WorkItem) string {
 	type receipt struct{ MessageID, AgentID string }
 	payload := struct {
 		ID, ProjectID, Title, Objective, AcceptanceCriteria string
+		AfterWorkItemID                                     string `json:",omitempty"`
 		Attempts                                            []attempt
 		Decisions                                           []decision
 		Steering                                            []steering
 		Receipts                                            []receipt
-	}{ID: w.ID, ProjectID: w.ProjectID, Title: w.Title, Objective: w.Objective, AcceptanceCriteria: w.AcceptanceCriteria}
+	}{ID: w.ID, ProjectID: w.ProjectID, Title: w.Title, Objective: w.Objective, AcceptanceCriteria: w.AcceptanceCriteria, AfterWorkItemID: w.AfterWorkItemID}
 	for _, a := range v.Agents {
 		if a.WorkItemID == w.ID {
 			payload.Attempts = append(payload.Attempts, attempt{a.ID, a.ParentID, a.ProfileID, a.Task, a.AcceptanceCriteria, a.Status, a.Summary, a.ProgressFingerprint, a.ExternalID, a.Evidence, a.Capabilities})
@@ -214,35 +238,16 @@ func decisionAffectsWorkItem(d Decision, w WorkItem) bool {
 func refreshWorkItems(v *Snapshot) {
 	for i := range v.WorkItems {
 		w := &v.WorkItems[i]
-		revision := workItemRevision(v, w)
-		w.ReviewRevision = revision
+		w.ReviewRevision = workItemRevision(v, w)
+		w.StatusReason = ""
 		if w.Status == "legacy_completed" {
 			continue
 		}
-		if w.Acceptance != nil && w.Acceptance.Revision == revision {
+		if w.Acceptance != nil && w.Acceptance.Revision == w.ReviewRevision {
 			w.Status = "accepted"
 			continue
 		}
-		total, finished, completed := 0, 0, 0
-		for _, a := range v.Agents {
-			if a.WorkItemID == w.ID {
-				total++
-				if terminal(a.Status) {
-					finished++
-				}
-				if a.Status == "completed" {
-					completed++
-				}
-			}
-		}
-		switch {
-		case total == 0:
-			w.Status = "ready"
-		case finished == total && completed > 0:
-			w.Status = "review"
-		default:
-			w.Status = "active"
-		}
+		w.Status, w.StatusReason = deriveWorkItemStatus(v, w)
 	}
 }
 
@@ -281,6 +286,7 @@ func (s *Service) AcceptWorkItem(ctx context.Context, id, revision string, evide
 		now := s.now().UTC()
 		w.Acceptance = &AcceptanceRecord{Revision: revision, Evidence: append([]string{}, evidence...), Reviewer: reviewer, AcceptedAt: now}
 		w.Status = "accepted"
+		w.StatusReason = ""
 		w.ReviewRevision = revision
 		w.UpdatedAt = now
 		out = *w
@@ -290,6 +296,9 @@ func (s *Service) AcceptWorkItem(ctx context.Context, id, revision string, evide
 	return out, err
 }
 func workItemAcceptanceReady(v *Snapshot, w *WorkItem) error {
+	if err := workItemExecutionReady(v, w); err != nil {
+		return err
+	}
 	completed := map[string]bool{}
 	for _, a := range v.Agents {
 		if a.WorkItemID != w.ID {

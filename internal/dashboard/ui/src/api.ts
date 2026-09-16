@@ -16,7 +16,21 @@ export interface WorkItem {
   title: string;
   objective: string;
   acceptance_criteria: string;
-  status: "ready" | "active" | "review" | "accepted" | "legacy_completed";
+  status:
+    | "ready"
+    | "queued"
+    | "waiting"
+    | "interrupted"
+    | "blocked"
+    | "paused"
+    | "cancelled"
+    | "active"
+    | "review"
+    | "accepted"
+    | "legacy_completed";
+  after_work_item_id?: string;
+  commission_requested?: boolean;
+  status_reason?: string;
   created_at: string;
   updated_at: string;
   review_revision: string;
@@ -40,6 +54,7 @@ export interface SteeringReceipt {
   acknowledged_at: string;
 }
 export interface Agent {
+  recoveries?: number;
   work_item_id?: string;
   id: string;
   parent_id?: string;
