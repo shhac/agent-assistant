@@ -19,6 +19,7 @@ func New(a *app.App, auth *Auth) http.Handler {
 	registerFilesystem(mux, a)
 	registerModels(mux, a)
 	registerWorkerSetup(mux, a)
+	registerChatQueue(mux, a)
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		s, err := a.Snapshot(r.Context())
 		if err != nil {
@@ -218,6 +219,9 @@ func New(a *app.App, auth *Auth) http.Handler {
 }
 func problem(w http.ResponseWriter, err error) {
 	status := 400
+	if errors.Is(err, core.ErrChatQueueFull) {
+		status = http.StatusTooManyRequests
+	}
 	if errors.Is(err, core.ErrNotFound) {
 		status = 404
 	}

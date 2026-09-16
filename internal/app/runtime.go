@@ -32,6 +32,13 @@ func (a *App) Run(ctx context.Context, noDispatch bool) error {
 		<-ctx.Done()
 		return nil
 	}
+	listeners.Add(1)
+	go func() {
+		defer listeners.Done()
+		if err := a.RunChatQueue(ctx); err != nil && ctx.Err() == nil {
+			a.Status("chat", "Conversation", "error", "The message queue stopped; restart the daemon to recover pending messages")
+		}
+	}()
 	pending, err := a.Core.PendingEvents(ctx)
 	if err != nil {
 		return err

@@ -28,7 +28,9 @@ type Config struct {
 	CodexHome   string
 	codexRun    func(context.Context, string, []string, string, []string, string) ([]byte, error)
 	// BeforeRequest reserves durable capacity before each potentially billable call.
-	BeforeRequest   func(context.Context) error
+	BeforeRequest func(context.Context) error
+	// OnTool durably records safe lifecycle metadata before and after execution.
+	OnTool          func(context.Context, ToolEvent) error
 	Endpoint        string
 	Model           string
 	APIKeyEnv       string
@@ -67,6 +69,14 @@ type Request struct {
 	History []Message
 	Context json.RawMessage
 }
+
+// ToolEvent never includes tool arguments, result data or error strings.
+type ToolEvent struct {
+	ID     string
+	Tool   string
+	Status string
+}
+
 type Action struct {
 	Name    string `json:"name"`
 	Success bool   `json:"success"`
@@ -216,7 +226,21 @@ func (e *Engine) Chat(ctx context.Context, req Request) (Result, error) {
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
+			if e.cfg.OnTool != nil {
+				if err := e.cfg.OnTool(ctx, ToolEvent{ID: call.ID, Tool: call.Function.Name, Status: "running"}); err != nil {
+					return result, err
+				}
+			}
 			value, execErr := e.executor.Execute(ctx, call.Function.Name, args)
+			if e.cfg.OnTool != nil {
+				status := "completed"
+				if execErr != nil {
+					status = "failed"
+				}
+				if err := e.cfg.OnTool(ctx, ToolEvent{ID: call.ID, Tool: call.Function.Name, Status: status}); err != nil {
+					return result, err
+				}
+			}
 			// Error strings from integrations can contain remote data. Do not reflect them
 			// into the model. The authorized operator can inspect the action audit separately.
 			if execErr != nil {

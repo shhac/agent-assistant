@@ -37,6 +37,28 @@ export interface Message {
   content: string;
   created_at?: string;
 }
+export interface ChatToolEvent {
+  id: string;
+  tool: string;
+  label: string;
+  status: "running" | "completed" | "failed" | "interrupted";
+  started_at: string;
+  finished_at?: string;
+}
+export interface ChatTurn {
+  id: string;
+  message: string;
+  status:
+    "queued" | "running" | "completed" | "failed" | "interrupted" | "cancelled";
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  user_message_id?: string;
+  assistant_message_id?: string;
+  error?: string;
+  loading_phrase?: string;
+  events: ChatToolEvent[];
+}
 export interface Memory {
   id: string;
   content: string;

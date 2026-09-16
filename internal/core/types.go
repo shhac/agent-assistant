@@ -89,6 +89,7 @@ type PendingOperation struct {
 }
 
 type Snapshot struct {
+	ChatTurns         []ChatTurn         `json:"-"`
 	PendingOperations []PendingOperation `json:"pending_operations"`
 	Events            map[string]bool    `json:"-"`
 	Assistant         Assistant          `json:"assistant"`

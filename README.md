@@ -112,6 +112,14 @@ The assistant's default name is defined once in configuration. UI labels, model 
 
 Local access uses a single-use, five-minute pairing code exchanged for an HttpOnly session cookie. `--open` passes that code in a URL fragment, which the browser clears immediately. For another browser, use `dashboard open --print`. Private API reads and writes both require authentication. Treat the host account as trusted: another process running as that account can read local credentials.
 
+### Conversation queue and activity
+
+Send another message while the assistant is working to queue it. Accepted messages are stored by the daemon and run in order, even if the browser closes. Queued messages can be cancelled before they start. The conversation displays each turn’s tool activity as it begins and finishes, using friendly labels without raw arguments or results. A daemon interruption marks the active turn as interrupted instead of replaying its actions; messages that had not started remain queued.
+
+**Settings → Conversation** controls personalized loading phrases. By default, one small local CLI request uses the current message and the previous dialogue message: Luna with low effort for Codex, or Haiku for Claude, using the assistant’s configured login. Where the CLI reports no effort dial, the model’s native default applies. A different model can be selected from the CLI catalog. Captions have no tools, receive bounded context, and count toward the existing daily model-call limit. They are decorative text; tool cards carry actual action status. Generation is cancelled when the turn ends and failures keep the static loading message. API-only assistant configurations use static loading text.
+
+The config keys are `chat.loading_phrases.enabled`, `chat.loading_phrases.model` (empty selects the small default), and `chat.loading_phrases.effort`. Disable captions to avoid the extra model request. Message delivery retries reuse a client-generated ID, so retrying an unconfirmed submission cannot enqueue it twice.
+
 ## Private Tailscale access
 
 Install and log into Tailscale on the existing daemon host, and enable HTTPS for its tailnet. Configure the exact owner identities permitted to open the dashboard:

@@ -139,9 +139,9 @@ describe("owner dashboard flows", () => {
     );
     expect(submitted[0].options!.credentials).toBe("same-origin");
   });
-  it("preserves the chat draft when the model is not configured", async () => {
+  it("preserves the submitted message when delivery is not confirmed", async () => {
     respond = (path) =>
-      path === "/api/chat"
+      path === "/api/chat/messages"
         ? {
             status: 503,
             body: { error: "Configure an assistant model in Settings." },
@@ -157,8 +157,9 @@ describe("owner dashboard flows", () => {
       "textContent",
       "Configure an assistant model in Settings.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Restore message to draft" }));
-    expect(field).toHaveProperty("value", "Please coordinate this project.");
+    expect(screen.getByText("Please coordinate this project.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry delivery" })).toBeTruthy();
+    expect(field).toHaveProperty("value", "");
     expect(screen.queryByText("Iris is working through it…")).toBeNull();
   });
   it("records acceptance criteria as text without silently starting project work", async () => {
@@ -252,7 +253,15 @@ describe("owner dashboard flows", () => {
         },
       ],
     };
-    state.projects = [{ id: "approved-project", title: "Approved project", description: "", acceptance_criteria: "", status: "ready" }];
+    state.projects = [
+      {
+        id: "approved-project",
+        title: "Approved project",
+        description: "",
+        acceptance_criteria: "",
+        status: "ready",
+      },
+    ];
     respond = (path) => ({ body: path === "/api/config" ? config : state });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /^Settings$/ }));
@@ -306,10 +315,9 @@ describe("owner dashboard flows", () => {
       "value",
       "codex",
     );
-    expect(screen.getByLabelText(/^Assistant custom model identifier/)).toHaveProperty(
-      "value",
-      "gpt-6-astra",
-    );
+    expect(
+      screen.getByLabelText(/^Assistant custom model identifier/),
+    ).toHaveProperty("value", "gpt-6-astra");
     expect(screen.getByLabelText(/^Assistant reasoning effort/)).toHaveProperty(
       "value",
       "high",

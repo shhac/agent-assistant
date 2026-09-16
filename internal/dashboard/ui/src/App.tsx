@@ -6,6 +6,7 @@ import { Avatar, ThemePicker, validTheme } from "./Identity";
 import { AssistantSetup } from "./AssistantSetup";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { ModelSettings } from "./ModelSettings";
+import { ChatSettings } from "./ChatSettings";
 import {
   useCallback,
   useEffect,
@@ -1305,6 +1306,15 @@ function Settings({
             connections={config.connections || []}
             onChange={(connections) => {
               setConfig({ ...config, connections });
+              setSaved(false);
+            }}
+          />
+        )}
+        {config && (
+          <ChatSettings
+            config={config}
+            onChange={(next) => {
+              setConfig(next);
               setSaved(false);
             }}
           />

@@ -21,6 +21,7 @@ type Store struct {
 	temporaryState bool
 }
 type diskState struct {
+	ChatTurns  []ChatTurn      `json:"chat_turns,omitempty"`
 	Events     map[string]bool `json:"events"`
 	Snapshot   Snapshot        `json:"snapshot"`
 	ModelCalls map[string]int  `json:"model_calls"`
@@ -117,6 +118,7 @@ func readState(ctx context.Context, conn *sql.Conn) (Snapshot, error) {
 	if err = json.Unmarshal([]byte(data), &d); err != nil {
 		return Snapshot{}, fmt.Errorf("decode durable state: %w", err)
 	}
+	d.Snapshot.ChatTurns = d.ChatTurns
 	d.Snapshot.Events = d.Events
 	if d.Snapshot.Events == nil {
 		d.Snapshot.Events = map[string]bool{}
@@ -154,7 +156,7 @@ func (s *Store) update(ctx context.Context, fn func(*Snapshot) error) error {
 	if err = fn(&state); err != nil {
 		return err
 	}
-	data, err := json.Marshal(diskState{Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
+	data, err := json.Marshal(diskState{ChatTurns: state.ChatTurns, Snapshot: state, ModelCalls: state.ModelCalls, Events: state.Events})
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -10,11 +10,12 @@ import {
 } from "@testing-library/react";
 import { ChatPanel } from "./ChatPanel";
 import { ConversationMarkdown } from "./ConversationMarkdown";
-import { normalizeState, type State } from "./api";
-
+import { normalizeState, type ChatTurn, type State } from "./api";
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 const initial = () =>
   normalizeState({ assistant: { name: "Iris", personality: "" } });
@@ -29,38 +30,70 @@ function panel(state = initial(), refresh = vi.fn(async () => {})) {
     />
   );
 }
-function deferredFetch() {
-  let resolve!: (result: unknown) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  const fetch = vi.fn(() => promise);
-  vi.stubGlobal("fetch", fetch);
-  return {
-    fetch,
-    resolve: async () => {
-      await act(async () => {
-        resolve({ ok: true, json: async () => ({}) });
-      });
-    },
-    reject: async () => {
-      await act(async () => {
-        reject(new Error("Connection lost"));
-      });
-    },
-  };
-}
 function typeAndSend(text: string) {
   const input = screen.getByRole("textbox");
   fireEvent.change(input, { target: { value: text } });
   fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
   return input as HTMLTextAreaElement;
 }
+const result = (body: unknown) => ({
+  ok: true,
+  status: 200,
+  json: async () => body,
+});
+const tick = async (ms = 3000) => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+};
+function backend(seed: ChatTurn[] = []) {
+  const turns = [...seed];
+  const fetch = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === "/api/chat/turns")
+      return result({ turns: turns.map((t) => ({ ...t })) });
+    if (options?.method === "POST") {
+      const body = JSON.parse(options.body as string);
+      let turn = turns.find((t) => t.id === body.id);
+      if (!turn) {
+        turn = {
+          ...body,
+          status: turns.some((t) => t.status === "running")
+            ? "queued"
+            : "running",
+          created_at: new Date().toISOString(),
+          user_message_id: `user-${body.id}`,
+          events: [],
+        };
+        turns.push(turn!);
+      }
+      return result({ ...turn });
+    }
+    if (options?.method === "DELETE") {
+      const turn = turns.find((t) => path.endsWith(t.id))!;
+      turn.status = "cancelled";
+      return result({ ...turn });
+    }
+    throw new Error("Unexpected request");
+  });
+  vi.stubGlobal("fetch", fetch);
+  return {
+    turns,
+    fetch,
+    posts: () => fetch.mock.calls.filter(([, o]) => o?.method === "POST"),
+  };
+}
+const savedTurn = (overrides: Partial<ChatTurn> = {}): ChatTurn => ({
+  id: "turn-1",
+  message: "Prepare a worker",
+  status: "running",
+  created_at: "2026-09-16T12:00:00Z",
+  user_message_id: "user-1",
+  events: [],
+  ...overrides,
+});
 describe("conversation", () => {
-  it("shows a sent turn immediately, accepts a next draft and reconciles polling without duplication", async () => {
-    const request = deferredFetch();
+  it("shows messages immediately, queues while a reply runs, and deduplicates using exact server IDs", async () => {
+    const server = backend();
     const state = initial();
     const view = render(panel(state));
     const input = typeAndSend("Please coordinate this");
@@ -68,73 +101,376 @@ describe("conversation", () => {
       within(screen.getByRole("log")).getAllByText("Please coordinate this"),
     ).toHaveLength(1);
     expect(input.value).toBe("");
+    await tick(0);
     expect(screen.getByText("Iris is working through it…")).toBeTruthy();
-    fireEvent.change(input, { target: { value: "Another thought" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(request.fetch).toHaveBeenCalledTimes(1);
-    state.messages = [
-      { id: "saved", role: "user", content: "Please coordinate this" },
-    ];
+    typeAndSend("Another thought");
+    await tick(0);
+    expect(server.posts()).toHaveLength(2);
+    expect(
+      screen.getByText("Queued · will follow the current reply"),
+    ).toBeTruthy();
+    state.messages = server.turns.map((t) => ({
+      id: t.user_message_id!,
+      role: "user",
+      content: t.message,
+      created_at: t.created_at,
+    }));
     view.rerender(panel(state));
     expect(
       within(screen.getByRole("log")).getAllByText("Please coordinate this"),
     ).toHaveLength(1);
-    await request.resolve();
-    expect(input.value).toBe("Another thought");
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Send message",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(false);
+      within(screen.getByRole("log")).getAllByText("Another thought"),
+    ).toHaveLength(1);
+    expect(input.value).toBe("");
   });
   it("does not submit Shift+Enter or an IME composition", async () => {
-    const request = deferredFetch();
+    const server = backend();
     render(panel());
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "A draft" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });
     fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
-    expect(request.fetch).not.toHaveBeenCalled();
+    expect(server.posts()).toHaveLength(0);
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(request.fetch).toHaveBeenCalledTimes(1);
-    await request.resolve();
+    await tick(0);
+    expect(server.posts()).toHaveLength(1);
   });
-  it("keeps a failed message recoverable and preserves a next draft without replaying", async () => {
-    const request = deferredFetch();
+  it("never automatically replays ambiguous delivery and retries explicitly with the same id", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    let reject = true;
+    server.fetch.mockImplementation(async (path, options) => {
+      if (options?.method === "POST" && reject) {
+        reject = false;
+        throw new Error("Connection lost");
+      }
+      return original(path, options);
+    });
     render(panel());
     const input = typeAndSend("My original request");
     fireEvent.change(input, { target: { value: "A second thought" } });
-    await request.reject();
+    await tick(0);
     expect(screen.getByText("Delivery unconfirmed")).toBeTruthy();
     expect(input.value).toBe("A second thought");
+    await tick(6000);
+    expect(server.posts()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry delivery" }));
+    await tick(0);
+    expect(server.posts()).toHaveLength(2);
+    const bodies = server
+      .posts()
+      .map(([, options]) => JSON.parse(options!.body as string));
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(input.value).toBe("A second thought");
+  });
+  it("loads durable queued turns and cancels only the selected pending message", async () => {
+    const server = backend([
+      savedTurn(),
+      savedTurn({
+        id: "turn-2",
+        user_message_id: "user-2",
+        message: "Then review it",
+        status: "queued",
+      }),
+    ]);
+    render(panel());
+    await tick(0);
+    expect(screen.getByText("Then review it")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message: Then review it",
+      }),
+    );
+    await tick(0);
+    expect(screen.getByText("Cancelled before starting")).toBeTruthy();
+    expect(server.turns[0].status).toBe("running");
+    expect(
+      server.fetch.mock.calls.filter(([, o]) => o?.method === "DELETE"),
+    ).toHaveLength(1);
+  });
+  it("polls real tool activity beside its turn and updates status through completion", async () => {
+    const server = backend([
+      savedTurn({
+        loading_phrase: "Gathering the threads…",
+        events: [
+          {
+            id: "event-1",
+            tool: "prepare_worker",
+            label: "Preparing worker",
+            status: "running",
+            started_at: "2026-09-16T12:00:01Z",
+          },
+        ],
+      }),
+    ]);
+    const refresh = vi.fn(async () => {});
+    render(panel(initial(), refresh));
+    await tick(0);
+    const activity = screen.getByRole("list", {
+      name: "Assistant tool activity",
+    });
+    expect(within(activity).getByText("Preparing worker")).toBeTruthy();
+    expect(within(activity).getByText("In progress")).toBeTruthy();
+    expect(screen.getByText("Gathering the threads…")).toBeTruthy();
+    server.turns[0] = {
+      ...server.turns[0],
+      status: "completed",
+      assistant_message_id: "answer-1",
+      events: [{ ...server.turns[0].events[0], status: "completed" }],
+    };
+    await tick();
+    expect(within(activity).getByText("Completed")).toBeTruthy();
+    expect(screen.queryByText("Gathering the threads…")).toBeNull();
+    expect(refresh.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(server.posts()).toHaveLength(0);
+  });
+  it("shows interrupted and failed tool history without retrying work or matching identical text", async () => {
+    const server = backend([
+      savedTurn({
+        status: "interrupted",
+        error: "Daemon restarted",
+        events: [
+          {
+            id: "event-1",
+            tool: "prepare_worker",
+            label: "Preparing worker",
+            status: "failed",
+            started_at: "2026-09-16T12:00:01Z",
+          },
+        ],
+      }),
+    ]);
+    const state = initial();
+    state.messages = [
+      {
+        id: "old-unrelated-message",
+        role: "user",
+        content: "Prepare a worker",
+      },
+    ];
+    render(panel(state));
+    await tick(0);
+    expect(
+      within(screen.getByRole("log")).getAllByText("Prepare a worker"),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText("Reply interrupted · not automatically retried"),
+    ).toBeTruthy();
+    expect(screen.getByText("Failed", { exact: true })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry delivery" })).toBeNull();
+    await tick();
+    expect(server.posts()).toHaveLength(0);
+  });
+  it("restores a definitively rejected message without replaying it", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation(async (path, options) =>
+      options?.method === "POST"
+        ? {
+            ok: false,
+            status: 429,
+            json: async () => ({ error: "The message queue is full." }),
+          }
+        : original(path, options),
+    );
+    render(panel());
+    const input = typeAndSend("One more thing");
+    fireEvent.change(input, { target: { value: "A next draft" } });
+    await tick(0);
+    expect(screen.getByText("Message not sent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry delivery" })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Restore message to draft" }),
     );
-    expect(input.value).toBe("A second thought\n\nMy original request");
-    expect(request.fetch).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe("A next draft\n\nOne more thing");
+    expect(server.posts()).toHaveLength(1);
   });
-  it("recognizes persisted failed turns and does not confuse an older identical message", async () => {
-    const request = deferredFetch();
-    const state = initial();
-    state.messages = [{ id: "older", role: "user", content: "Try it" }];
-    const view = render(panel(state));
-    typeAndSend("Try it");
-    expect(within(screen.getByRole("log")).getAllByText("Try it")).toHaveLength(
-      2,
+  it("does not enqueue a draft twice when Enter repeats before React renders", async () => {
+    const server = backend();
+    render(panel());
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "One request" } });
+    act(() => {
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    await tick(0);
+    expect(server.posts()).toHaveLength(1);
+  });
+  it("does not let an old poll undo a confirmed cancellation", async () => {
+    const turn = savedTurn({ status: "queued" });
+    const server = backend([turn]);
+    render(panel());
+    await tick(0);
+    const stale = { ...turn };
+    const original = server.fetch.getMockImplementation()!;
+    let release!: (value: ReturnType<typeof result>) => void;
+    server.fetch.mockImplementation((path, options) =>
+      path === "/api/chat/turns"
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : original(path, options),
     );
-    state.messages = [
-      ...state.messages,
-      { id: "new", role: "user", content: "Try it" },
-    ];
-    view.rerender(panel(state));
-    await request.reject();
-    expect(within(screen.getByRole("log")).getAllByText("Try it")).toHaveLength(
-      2,
+    await tick();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message: Prepare a worker",
+      }),
     );
-    expect(screen.getByText("Received · reply interrupted")).toBeTruthy();
+    await tick(0);
+    expect(screen.getByText("Cancelled before starting")).toBeTruthy();
+    await act(async () => {
+      release(result({ turns: [stale] }));
+    });
+    expect(screen.getByText("Cancelled before starting")).toBeTruthy();
+    expect(
+      screen.queryByText("Queued · will follow the current reply"),
+    ).toBeNull();
+  });
+  it("keeps uncertain original delivery uncertain when its explicit retry is rejected", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    let attempt = 0;
+    server.fetch.mockImplementation(async (path, options) => {
+      if (options?.method !== "POST") return original(path, options);
+      if (++attempt === 1) throw new Error("Connection lost");
+      return {
+        ok: false,
+        status: 401,
+        json: async () => ({ error: "Session expired." }),
+      };
+    });
+    render(panel());
+    typeAndSend("Start the work");
+    await tick(0);
+    fireEvent.click(screen.getByRole("button", { name: "Retry delivery" }));
+    await tick(0);
+    expect(screen.getByText("Delivery unconfirmed")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Restore message to draft" }),
+    ).toBeNull();
+    expect(server.posts()).toHaveLength(2);
+  });
+  it("waits only for the first acknowledgement before delivering the next optimistic message", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    let release!: () => void;
+    let first = true;
+    server.fetch.mockImplementation(async (path, options) => {
+      if (options?.method === "POST" && first) {
+        first = false;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return original(path, options);
+    });
+    render(panel());
+    typeAndSend("First request");
+    typeAndSend("Second request");
+    expect(screen.getByText("First request")).toBeTruthy();
+    expect(screen.getByText("Second request")).toBeTruthy();
+    expect(
+      screen.getByText("Waiting to send · kept in this browser"),
+    ).toBeTruthy();
+    expect(server.posts()).toHaveLength(1);
+    await act(async () => {
+      release();
+    });
+    expect(server.posts()).toHaveLength(2);
+    expect(server.turns.map((t) => t.message)).toEqual([
+      "First request",
+      "Second request",
+    ]);
+    expect(server.turns[0].status).toBe("running");
+    expect(server.turns[1].status).toBe("queued");
+  });
+  it("holds later submissions until an uncertain delivery is resolved by its same-id retry", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    let reject = true;
+    server.fetch.mockImplementation(async (path, options) => {
+      if (options?.method === "POST" && reject) {
+        reject = false;
+        throw new Error("Connection lost");
+      }
+      return original(path, options);
+    });
+    render(panel());
+    typeAndSend("First request");
+    typeAndSend("Second request");
+    await tick(0);
+    expect(server.posts()).toHaveLength(1);
+    expect(
+      screen.getByText("Waiting to send · kept in this browser"),
+    ).toBeTruthy();
+    await tick();
+    expect(server.posts()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry delivery" }));
+    await tick(0);
+    expect(server.posts()).toHaveLength(3);
+    expect(server.turns.map((t) => t.message)).toEqual([
+      "First request",
+      "Second request",
+    ]);
+    expect(JSON.parse(server.posts()[0][1]!.body as string).id).toBe(
+      JSON.parse(server.posts()[1][1]!.body as string).id,
+    );
+  });
+  it("shows interrupted tool outcomes as unconfirmed, rather than a known failure", async () => {
+    backend([
+      savedTurn({
+        status: "interrupted",
+        events: [
+          {
+            id: "tool-1",
+            tool: "prepare_worker",
+            label: "Preparing worker",
+            status: "interrupted",
+            started_at: "2026-09-16T12:00:01Z",
+          },
+        ],
+      }),
+    ]);
+    render(panel());
+    await tick(0);
+    expect(screen.getByText("Outcome unconfirmed")).toBeTruthy();
+    expect(screen.queryByText("Failed", { exact: true })).toBeNull();
+  });
+  it("times out only the enqueue acknowledgement and keeps delivery uncertain", async () => {
+    const server = backend();
+    const original = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation((path, options) =>
+      options?.method === "POST"
+        ? new Promise((_, reject) => {
+            options.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          })
+        : original(path, options),
+    );
+    render(panel());
+    typeAndSend("A stalled send");
+    typeAndSend("Keep this next");
+    await tick(15_000);
+    expect(screen.getByText("Delivery unconfirmed")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Delivery confirmation timed out. Checking whether your message arrived.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Waiting to send · kept in this browser"),
+    ).toBeTruthy();
+    expect(server.posts()).toHaveLength(1);
+    expect(
+      server.fetch.mock.calls.some(
+        ([, options]) => options?.method === "DELETE",
+      ),
+    ).toBe(false);
   });
   it("renders formatting and project names while suppressing unsafe HTML, URLs and image requests", () => {
     const open = vi.fn();

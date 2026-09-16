@@ -20,6 +20,7 @@ const Namespace = "agent-assistant.paulie.app"
 const DefaultAssistantName = "Milo"
 
 type Config struct {
+	Chat        Chat         `json:"chat"`
 	Assistant   Assistant    `json:"assistant"`
 	Dashboard   Dashboard    `json:"dashboard"`
 	Model       Model        `json:"model"`
@@ -30,6 +31,32 @@ type Config struct {
 	Workers     []Worker     `json:"workers"`
 	Connections []Connection `json:"connections"`
 }
+type Chat struct {
+	LoadingPhrases LoadingPhrases `json:"loading_phrases"`
+}
+type LoadingPhrases struct {
+	Enabled bool   `json:"enabled"`
+	Model   string `json:"model"`
+	Effort  string `json:"effort"`
+}
+
+// LoadingModel shares the assistant's selected local CLI/account; cosmetic text
+// never switches to an API provider. An empty model follows the engine default.
+func (c Config) LoadingModel() (Model, bool) {
+	m := c.Model
+	if !c.Chat.LoadingPhrases.Enabled || (m.Engine != "codex" && m.Engine != "claude") {
+		return Model{}, false
+	}
+	m.Model, m.Effort, m.MaxTokens = c.Chat.LoadingPhrases.Model, c.Chat.LoadingPhrases.Effort, 128
+	if m.Model == "" {
+		m.Model = "gpt-5.6-luna"
+		if m.Engine == "claude" {
+			m.Model = "haiku"
+		}
+	}
+	return m, true
+}
+
 type Assistant struct {
 	Name        string `json:"name"`
 	Personality string `json:"personality"`
@@ -102,6 +129,7 @@ type FilePaths struct {
 
 func Default() Config {
 	return Config{
+		Chat:        Chat{LoadingPhrases: LoadingPhrases{Enabled: true, Effort: "low"}},
 		Assistant:   Assistant{Name: DefaultAssistantName, Personality: "Calm, concise and proactive. Bring clear recommendations and evidence; handle the chasing.", Theme: "graphite-sage", Avatar: Avatar{Shape: "orb", Background: "#16211e", Accent: "#a8c5a8"}},
 		Dashboard:   Dashboard{Addr: "127.0.0.1:8340", Tailscale: "off", TailscalePort: 8443, AllowedUsers: []string{}},
 		Model:       defaultModel(),
@@ -260,6 +288,15 @@ func Save(path string, c Config) error {
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (c Config) Validate() error {
+	if len(c.Chat.LoadingPhrases.Model) > 200 || strings.ContainsAny(c.Chat.LoadingPhrases.Model, "\r\n\x00") {
+		return errors.New("chat loading model must be a short model identifier")
+	}
+	switch c.Chat.LoadingPhrases.Effort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	default:
+		return errors.New("chat loading effort is not recognized")
+	}
+
 	if strings.TrimSpace(c.Assistant.Name) == "" || len(c.Assistant.Name) > 80 {
 		return errors.New("assistant.name must contain 1–80 characters")
 	}

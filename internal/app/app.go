@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/core"
@@ -20,6 +19,8 @@ import (
 )
 
 type App struct {
+	loadingComplete  func(context.Context, engine.Config, []engine.Message, []engine.Tool) (engine.Message, engine.Usage, error)
+	loadingDiscover  func(context.Context, engine.Config) ([]engine.ModelOption, error)
 	workerPreflight  func(context.Context, config.Model) error
 	managedMu        sync.Mutex
 	managed          managedWorkerService
@@ -32,11 +33,16 @@ type App struct {
 	configPath       string
 	Demo             bool
 	chat             chan struct{}
+	chatWake         chan struct{}
+	chatRunning      atomic.Bool
+	chatFailed       atomic.Bool
+	chatWaiters      sync.Map
+	chatInvoker      func(context.Context, engine.Config, engine.Request, engine.ToolExecutor) (engine.Result, error)
 	statuses         map[string]core.Integration
 }
 
 func New(s *core.Service, cfg config.Config, path string, demo bool) *App {
-	return &App{connectionClient: connections.New(), Core: s, cfg: cfg, configPath: path, Demo: demo, chat: make(chan struct{}, 1), statuses: map[string]core.Integration{}}
+	return &App{connectionClient: connections.New(), Core: s, cfg: cfg, configPath: path, Demo: demo, chat: make(chan struct{}, 1), chatWake: make(chan struct{}, 1), statuses: map[string]core.Integration{}}
 }
 func (a *App) Config() config.Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) UpdateConfig(cfg config.Config) error {
@@ -102,6 +108,9 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	if status, ok := a.statuses["chat"]; ok {
+		s.Integrations = append(s.Integrations, status)
+	}
 	for i, st := range s.Integrations {
 		if live, ok := a.statuses[st.ID]; ok && !ignoreLive[st.ID] {
 			s.Integrations[i] = live
@@ -110,6 +119,9 @@ func (a *App) Snapshot(ctx context.Context) (core.Snapshot, error) {
 	return s, nil
 }
 func (a *App) context(ctx context.Context) (json.RawMessage, []engine.Message, error) {
+	return a.chatContext(ctx, "")
+}
+func (a *App) chatContext(ctx context.Context, currentMessageID string) (json.RawMessage, []engine.Message, error) {
 	s, err := a.Snapshot(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -120,7 +132,7 @@ func (a *App) context(ctx context.Context) (json.RawMessage, []engine.Message, e
 		start = 0
 	}
 	for _, m := range s.Messages[start:] {
-		if m.Role == "user" || m.Role == "assistant" {
+		if m.ID != currentMessageID && (m.Role == "user" || m.Role == "assistant") {
 			history = append(history, engine.Message{Role: m.Role, Content: m.Content})
 		}
 	}
@@ -144,43 +156,6 @@ func (a *App) context(ctx context.Context) (json.RawMessage, []engine.Message, e
 		Connections []config.Connection `json:"connections"`
 	}{s, profiles, a.Config().Connections})
 	return raw, history, err
-}
-func (a *App) Chat(ctx context.Context, message string) (engine.Result, error) {
-	if len(strings.TrimSpace(message)) == 0 || len(message) > 24000 {
-		return engine.Result{}, errors.New("message must contain 1–24000 characters")
-	}
-	select {
-	case a.chat <- struct{}{}:
-		defer func() { <-a.chat }()
-	case <-ctx.Done():
-		return engine.Result{}, ctx.Err()
-	}
-	if a.Demo {
-		return engine.Result{}, errors.New("demo mode does not invoke models or workers; start without --demo and configure a model to chat")
-	}
-	cfg := a.Config()
-	e, err := engine.New(engine.Config{WorkDirRoot: a.Core.StateDirectory(), Engine: cfg.Model.Engine, Effort: cfg.Model.Effort, CodexBin: cfg.Model.CodexBin, CodexHome: cfg.Model.CodexHome, ClaudeBin: cfg.Model.ClaudeBin, ClaudeHome: cfg.Model.ClaudeHome, Endpoint: strings.TrimRight(cfg.Model.BaseURL, "/") + "/chat/completions", Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv, AssistantName: cfg.Assistant.Name, Personality: cfg.Assistant.Personality, MaxTurns: cfg.Limits.MaxModelTurns, MaxOutputTokens: cfg.Model.MaxTokens, BeforeRequest: func(ctx context.Context) error {
-		return a.Core.ReserveModelCall(ctx, a.Config().Limits.MaxModelCallsPerDay)
-	}}, a)
-	if err != nil {
-		return engine.Result{}, err
-	}
-	raw, history, err := a.context(ctx)
-	if err != nil {
-		return engine.Result{}, err
-	}
-	if _, err = a.Core.AddMessage(ctx, "user", message); err != nil {
-		return engine.Result{}, err
-	}
-	result, err := e.Chat(ctx, engine.Request{Message: message, History: history, Context: raw})
-	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err != nil {
-		_, _ = a.Core.AddMessage(saveCtx, "system", err.Error()+". Any recorded coordination actions remain visible; no automatic replay was attempted.")
-		return result, err
-	}
-	_, err = a.Core.AddMessage(saveCtx, "assistant", result.Message)
-	return result, err
 }
 func args(raw json.RawMessage, v any) error {
 	d := json.NewDecoder(bytes.NewReader(raw))

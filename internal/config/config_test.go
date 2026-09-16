@@ -281,3 +281,31 @@ func TestManagedWorkerScopesAndSharedCLIHomes(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadingModelInheritsCLIAccountAndCanBeDisabled(t *testing.T) {
+	c := Default()
+	c.Model.CodexHome = "/synthetic/account"
+	m, ok := c.LoadingModel()
+	if !ok || m.Engine != "codex" || m.Model != "gpt-5.6-luna" || m.Effort != "low" || m.CodexHome != c.Model.CodexHome {
+		t.Fatal(m, ok)
+	}
+	c.Model.Engine = "claude"
+	m, ok = c.LoadingModel()
+	if !ok || m.Model != "haiku" || m.ClaudeHome != c.Model.ClaudeHome {
+		t.Fatal(m, ok)
+	}
+	c.Chat.LoadingPhrases.Model = "chosen-small-model"
+	m, _ = c.LoadingModel()
+	if m.Model != "chosen-small-model" {
+		t.Fatal(m)
+	}
+	c.Model.Engine = "openai-compatible"
+	if _, ok = c.LoadingModel(); ok {
+		t.Fatal("API loading request enabled")
+	}
+	c.Model.Engine = "codex"
+	c.Chat.LoadingPhrases.Enabled = false
+	if _, ok = c.LoadingModel(); ok {
+		t.Fatal("disabled loading request enabled")
+	}
+}

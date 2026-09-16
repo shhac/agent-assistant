@@ -97,3 +97,106 @@
   padding: 5px 8px;
   margin: 0 6px 5px 0;
 }
+.chat-turn-status {
+  margin-top: 10px;
+}
+.chat-turn-status .message-delivery {
+  display: inline-block;
+  margin: 0;
+}
+.chat-turn-action {
+  margin-left: 10px;
+  padding: 2px 7px;
+  background: transparent;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.chat-turn-action:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.chat-turn-error,
+.chat-update-error {
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.chat-turn-status .chat-recovery {
+  padding-top: 8px;
+}
+.chat-queue-summary {
+  color: var(--muted);
+  margin: 0 0 9px;
+  font-size: 10px;
+}
+.chat-tools {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 6px;
+}
+.chat-tool {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+.chat-tool-marker {
+  display: grid;
+  flex: 0 0 14px;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+.chat-tool-running .chat-tool-marker {
+  border: 1.5px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-tool-spin 1.2s linear infinite;
+}
+.chat-tool-failed .chat-tool-marker,
+.chat-tool-interrupted .chat-tool-marker {
+  color: var(--text);
+}
+.chat-tool-description {
+  flex: 1;
+}
+.chat-tool-description small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  margin-top: 2px;
+}
+.chat-tool details {
+  max-width: 45%;
+  color: var(--muted);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.chat-tool summary {
+  cursor: pointer;
+}
+.chat-tool code {
+  display: block;
+  padding-top: 4px;
+}
+@keyframes chat-tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-tool-running .chat-tool-marker {
+    animation: none;
+  }
+}

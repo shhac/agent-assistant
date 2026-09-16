@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Avatar, Waiting } from "./Identity";
-import { api, errorText, pendingDecisions, type State } from "./api";
+import {
+  api,
+  APIError,
+  errorText,
+  pendingDecisions,
+  type ChatTurn,
+  type State,
+} from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import "./chat.css";
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -39,6 +46,62 @@ function dateLabel(value?: string) {
         minute: "2-digit",
       });
 }
+type VisibleTurn = Omit<ChatTurn, "status"> & {
+  status:
+    ChatTurn["status"] | "waiting" | "sending" | "unconfirmed" | "rejected";
+};
+const active = (turn: VisibleTurn) =>
+  ["waiting", "sending", "queued", "running"].includes(turn.status);
+function chronological(a: { created_at?: string }, b: { created_at?: string }) {
+  return (
+    (Date.parse(a.created_at || "") || 0) -
+    (Date.parse(b.created_at || "") || 0)
+  );
+}
+function latestTurn(
+  current: VisibleTurn | undefined,
+  incoming: ChatTurn,
+): VisibleTurn {
+  const rank = (status: VisibleTurn["status"]) =>
+    status === "waiting" ||
+    status === "sending" ||
+    status === "unconfirmed" ||
+    status === "rejected"
+      ? 0
+      : status === "queued"
+        ? 1
+        : status === "running"
+          ? 2
+          : 3;
+  // A poll begun before an acknowledgement must not undo its newer status.
+  return current && rank(current.status) > rank(incoming.status)
+    ? current
+    : incoming;
+}
+function delivery(turn: VisibleTurn) {
+  switch (turn.status) {
+    case "waiting":
+      return "Waiting to send · kept in this browser";
+    case "sending":
+      return "Sending…";
+    case "unconfirmed":
+      return "Delivery unconfirmed";
+    case "rejected":
+      return "Message not sent";
+    case "queued":
+      return "Queued · will follow the current reply";
+    case "running":
+      return "Received · working on your request";
+    case "completed":
+      return "Reply complete";
+    case "cancelled":
+      return "Cancelled before starting";
+    case "interrupted":
+      return "Reply interrupted · not automatically retried";
+    case "failed":
+      return "Reply failed · not automatically retried";
+  }
+}
 export function ChatPanel({
   state,
   refresh,
@@ -55,79 +118,218 @@ export function ChatPanel({
   onProjectOpen?: (id: string) => void;
 }) {
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const draftRef = useRef("");
+  function setDraft(value: string) {
+    draftRef.current = value;
+    setMessage(value);
+  }
+  const [turns, setTurns] = useState<VisibleTurn[]>([]);
   const [error, setError] = useState("");
-  const [pending, setPending] = useState<{
-    id: string;
-    content: string;
-    created_at: string;
-    previousIDs: Set<string>;
-    status: "sending" | "failed" | "sent";
-  } | null>(null);
-  const sending = useRef(false);
-  const persisted =
-    pending &&
-    state.messages.find(
-      (m) =>
-        m.role === "user" &&
-        m.content === pending.content &&
-        !pending.previousIDs.has(m.id),
-    );
-  const messages =
-    pending && !persisted
-      ? [...state.messages, { ...pending, role: "user" }]
-      : state.messages;
+  const [pollError, setPollError] = useState("");
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set());
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const submitLocks = useRef(new Set<string>());
+  const outgoing = useRef<VisibleTurn[]>([]);
+  const delivering = useRef(false);
+  const uncertainDelivery = useRef<string | null>(null);
+  const confirmed = useRef(new Set<string>());
   const scroll = useRef<HTMLDivElement>(null);
   const name = state.assistant.name || "Assistant";
+  const messageIDs = new Set(state.messages.map((m) => m.id));
+  const messages = [
+    ...state.messages,
+    ...turns
+      .filter((t) => !t.user_message_id || !messageIDs.has(t.user_message_id))
+      .map((t) => ({
+        id: t.user_message_id || t.id,
+        role: "user",
+        content: t.message,
+        created_at: t.created_at,
+      })),
+  ].sort(chronological);
+  const turnsByMessage = new Map(
+    turns.map((t) => [t.user_message_id || t.id, t]),
+  );
+  const running = turns.find((t) => t.status === "running");
+  const queueCount = turns.filter((t) => t.status === "queued").length;
+  const eventSignature = turns
+    .map(
+      (t) =>
+        `${t.id}:${t.status}:${t.events?.map((e) => `${e.id}:${e.status}`).join(",")}`,
+    )
+    .join("|");
   useEffect(() => {
     if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [messages.length, busy]);
+  }, [messages.length, eventSignature]);
   useEffect(() => {
-    if (!busy && pending?.status === "sent" && persisted) setPending(null);
-  }, [busy, pending, persisted]);
-  async function send(e: FormEvent) {
-    e.preventDefault();
-    const submitted = message.trim();
-    if (!submitted || sending.current || pending) return;
-    sending.current = true;
-    setBusy(true);
-    setError("");
-    setPending({
-      id: crypto.randomUUID(),
-      content: submitted,
-      created_at: new Date().toISOString(),
-      previousIDs: new Set(state.messages.map((m) => m.id)),
-      status: "sending",
-    });
-    setMessage("");
-    try {
-      await api("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ message: submitted }),
-      });
-      setPending((p) => p && { ...p, status: "sent" });
-    } catch (err) {
-      setError(errorText(err));
-      setPending((p) => p && { ...p, status: "failed" });
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let previousSignature = "";
+    async function poll() {
+      try {
+        const result = await api<{ turns: ChatTurn[] }>("/api/chat/turns");
+        if (stopped) return;
+        const incoming = result.turns || [];
+        incoming.forEach((t) => confirmed.current.add(t.id));
+        if (
+          uncertainDelivery.current &&
+          confirmed.current.has(uncertainDelivery.current)
+        ) {
+          uncertainDelivery.current = null;
+          drainOutgoing();
+        }
+        const signature = incoming
+          .map(
+            (t) =>
+              `${t.id}:${t.status}:${t.user_message_id}:${t.assistant_message_id}`,
+          )
+          .join("|");
+        setTurns((current) => {
+          const merged = new Map(current.map((t) => [t.id, t]));
+          incoming.forEach((t) =>
+            merged.set(t.id, latestTurn(merged.get(t.id), t)),
+          );
+          return [...merged.values()].sort(chronological);
+        });
+        setPollError("");
+        if (signature !== previousSignature) {
+          await refreshRef.current();
+          previousSignature = signature;
+        }
+      } catch (err) {
+        if (!stopped)
+          setPollError(
+            `Live conversation updates unavailable: ${errorText(err)}`,
+          );
+      } finally {
+        if (!stopped)
+          timer = setTimeout(poll, turnsRef.current.some(active) ? 1000 : 3000);
+      }
     }
+    void poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, []);
+  function enqueue(turn: VisibleTurn) {
+    if (submitLocks.current.has(turn.id)) return;
+    submitLocks.current.add(turn.id);
+    if (turn.status === "unconfirmed") outgoing.current.unshift(turn);
+    else outgoing.current.push(turn);
+    drainOutgoing();
+  }
+  function drainOutgoing() {
+    const next = outgoing.current[0];
+    if (
+      delivering.current ||
+      !next ||
+      (uncertainDelivery.current && uncertainDelivery.current !== next.id)
+    )
+      return;
+    outgoing.current.shift();
+    delivering.current = true;
+    void deliver(next);
+  }
+  async function deliver(turn: VisibleTurn) {
+    const wasUnconfirmed = turn.status === "unconfirmed";
+    const controller = new AbortController();
+    let timedOut = false;
+    const acceptanceTimeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
+    setTurns((current) =>
+      current.map((t) =>
+        t.id === turn.id ? { ...t, status: "sending", error: undefined } : t,
+      ),
+    );
     try {
-      await refresh();
-    } catch {
-      setError(
-        (previous) =>
-          previous ||
-          "The reply could not be refreshed. Refresh the conversation before sending again.",
+      const saved = await api<ChatTurn>("/api/chat/messages", {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ id: turn.id, message: turn.message }),
+      });
+      confirmed.current.add(turn.id);
+      if (uncertainDelivery.current === turn.id)
+        uncertainDelivery.current = null;
+      setTurns((current) =>
+        current.map((t) =>
+          t.id === turn.id && ["sending", "unconfirmed"].includes(t.status)
+            ? saved
+            : t,
+        ),
+      );
+    } catch (err) {
+      const rejected =
+        !wasUnconfirmed &&
+        err instanceof APIError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 408;
+      if (!rejected && !confirmed.current.has(turn.id))
+        uncertainDelivery.current = turn.id;
+      setTurns((current) =>
+        current.map((t) =>
+          t.id === turn.id && t.status === "sending"
+            ? {
+                ...t,
+                status: rejected ? "rejected" : "unconfirmed",
+                error: timedOut
+                  ? "Delivery confirmation timed out. Checking whether your message arrived."
+                  : errorText(err),
+              }
+            : t,
+        ),
       );
     } finally {
-      sending.current = false;
-      setBusy(false);
+      clearTimeout(acceptanceTimeout);
+      submitLocks.current.delete(turn.id);
+      delivering.current = false;
+      drainOutgoing();
     }
   }
-  async function refreshConversation() {
+  function send(e: FormEvent) {
+    e.preventDefault();
+    const submitted = draftRef.current.trim();
+    if (!submitted) return;
+    const turn: VisibleTurn = {
+      id: crypto.randomUUID(),
+      message: submitted,
+      created_at: new Date().toISOString(),
+      status: "waiting",
+      events: [],
+    };
+    setTurns((current) => [...current, turn]);
+    setDraft("");
+    void enqueue(turn);
+  }
+  async function cancel(turn: VisibleTurn) {
+    if (turn.status === "waiting") {
+      outgoing.current = outgoing.current.filter((t) => t.id !== turn.id);
+      submitLocks.current.delete(turn.id);
+      setTurns((current) => current.filter((t) => t.id !== turn.id));
+      return;
+    }
+    setCancelling((current) => new Set(current).add(turn.id));
+    setError("");
     try {
-      await refresh();
+      const saved = await api<ChatTurn>(
+        `/api/chat/messages/${encodeURIComponent(turn.id)}`,
+        { method: "DELETE" },
+      );
+      setTurns((current) => current.map((t) => (t.id === turn.id ? saved : t)));
     } catch (err) {
       setError(errorText(err));
+    } finally {
+      setCancelling((current) => {
+        const next = new Set(current);
+        next.delete(turn.id);
+        return next;
+      });
     }
   }
   return (
@@ -195,17 +397,126 @@ export function ChatPanel({
                 projects={state.projects}
                 onProjectOpen={onProjectOpen}
               />
-              {pending && (m.id === pending.id || m.id === persisted?.id) && (
-                <span className="message-delivery">
-                  {busy
-                    ? "Sent · waiting for a reply"
-                    : pending.status === "failed"
-                      ? persisted
-                        ? "Received · reply interrupted"
-                        : "Delivery unconfirmed"
-                      : "Sent · refreshing conversation"}
-                </span>
-              )}
+              {turnsByMessage.has(m.id) &&
+                (() => {
+                  const turn = turnsByMessage.get(m.id)!;
+                  return (
+                    <div className="chat-turn-status">
+                      <span className="message-delivery">{delivery(turn)}</span>
+                      {["queued", "waiting"].includes(turn.status) && (
+                        <button
+                          type="button"
+                          className="chat-turn-action"
+                          disabled={cancelling.has(turn.id)}
+                          onClick={() => void cancel(turn)}
+                          aria-label={`Cancel queued message: ${turn.message}`}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {turn.error && (
+                        <p className="chat-turn-error" role="alert">
+                          {turn.error}
+                        </p>
+                      )}
+                      {turn.status === "unconfirmed" && (
+                        <div className="chat-recovery">
+                          <p>
+                            Your message is kept here while delivery is checked.
+                            Retrying delivery cannot start a second reply.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void enqueue(turn)}
+                          >
+                            Retry delivery
+                          </button>
+                        </div>
+                      )}
+                      {turn.status === "rejected" && (
+                        <div className="chat-recovery">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraft(
+                                draftRef.current
+                                  ? `${draftRef.current}\n\n${turn.message}`
+                                  : turn.message,
+                              );
+                              setTurns((current) =>
+                                current.filter((t) => t.id !== turn.id),
+                              );
+                              document.getElementById("chat-message")?.focus();
+                            }}
+                          >
+                            Restore message to draft
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTurns((current) =>
+                                current.filter((t) => t.id !== turn.id),
+                              )
+                            }
+                          >
+                            Discard message
+                          </button>
+                        </div>
+                      )}
+                      {!!turn.events?.length && (
+                        <ul
+                          className="chat-tools"
+                          aria-label="Assistant tool activity"
+                        >
+                          {turn.events.map((event) => (
+                            <li
+                              key={event.id}
+                              className={`chat-tool chat-tool-${event.status}`}
+                            >
+                              <span
+                                className="chat-tool-marker"
+                                aria-hidden="true"
+                              >
+                                {event.status === "completed"
+                                  ? "✓"
+                                  : ["failed", "interrupted"].includes(
+                                        event.status,
+                                      )
+                                    ? "!"
+                                    : ""}
+                              </span>
+                              <span className="chat-tool-description">
+                                {event.label || "Using a tool"}
+                                <small>
+                                  {event.status === "running"
+                                    ? "In progress"
+                                    : event.status === "completed"
+                                      ? "Completed"
+                                      : event.status === "interrupted"
+                                        ? "Outcome unconfirmed"
+                                        : "Failed"}
+                                </small>
+                              </span>
+                              <details>
+                                <summary>Tool details</summary>
+                                <code>{event.tool}</code>
+                              </details>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {turn.status === "running" && (
+                        <Waiting
+                          label={
+                            turn.loading_phrase ||
+                            `${name} is working through it…`
+                          }
+                          detail="An answer or a clear decision is on its way."
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
             </article>
           ))
         ) : (
@@ -228,7 +539,7 @@ export function ChatPanel({
                 <button
                   key={text}
                   onClick={() => {
-                    setMessage(text);
+                    setDraft(text);
                     document.getElementById("chat-message")?.focus();
                   }}
                 >
@@ -239,12 +550,6 @@ export function ChatPanel({
             </div>
           </div>
         )}
-        {busy && (
-          <Waiting
-            label={`${name} is working through it…`}
-            detail="Keeping the context together. An answer or a clear decision is on its way."
-          />
-        )}
       </div>
       <div className="chat-composer-wrap">
         {error && (
@@ -252,36 +557,25 @@ export function ChatPanel({
             {error}
           </div>
         )}
-        {pending && !busy && (
-          <div className="chat-recovery">
-            <p>
-              {pending.status === "failed"
-                ? persisted
-                  ? "Your message was received. Review any recorded actions before trying again."
-                  : "Your message is kept here. Refresh to check whether it arrived before trying again."
-                : "Your message was sent. Refresh to load the latest conversation."}
+        {pollError && (
+          <p className="chat-update-error" role="status">
+            {pollError} Your messages remain saved; reconnecting…
+          </p>
+        )}
+        {turns.some((t) => t.status === "waiting") &&
+          turns.some((t) => t.status === "unconfirmed") && (
+            <p className="chat-queue-summary">
+              Waiting for delivery confirmation before sending the following
+              messages. Keep this page open.
             </p>
-            <button type="button" onClick={refreshConversation}>
-              Refresh conversation
-            </button>
-            {pending.status === "failed" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setMessage((current) =>
-                    current
-                      ? `${current}\n\n${pending.content}`
-                      : pending.content,
-                  );
-                  setPending(null);
-                  setError("");
-                  document.getElementById("chat-message")?.focus();
-                }}
-              >
-                Restore message to draft
-              </button>
-            )}
-          </div>
+          )}
+        {(running || queueCount > 0) && (
+          <p className="chat-queue-summary">
+            {queueCount
+              ? `${queueCount} ${queueCount === 1 ? "message" : "messages"} queued`
+              : "You can keep writing"}{" "}
+            · Each message gets its own reply.
+          </p>
         )}
         <form className="chat-composer" onSubmit={send}>
           <label className="sr-only" htmlFor="chat-message">
@@ -290,7 +584,7 @@ export function ChatPanel({
           <textarea
             id="chat-message"
             value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            onChange={(e) => setDraft(e.target.value)}
             placeholder={`Ask ${name}, or hand over an outcome…`}
             rows={3}
             maxLength={20000}
@@ -311,7 +605,7 @@ export function ChatPanel({
             <button
               className="send-button"
               type="submit"
-              disabled={busy || !!pending || !message.trim()}
+              disabled={!message.trim()}
               aria-label="Send message"
             >
               <Icon name="Send" size={17} />
