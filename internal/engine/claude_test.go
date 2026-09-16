@@ -17,11 +17,15 @@ func TestClaudeNativeLoginEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "secret")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "secret")
 	t.Setenv("CLAUDE_CONFIG_DIR", "/wrong")
+	t.Setenv("USER", "test-owner")
 	env, err := ClaudeEnvironment("/chosen/login")
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(env, "\n")
+	if !strings.Contains("\n"+joined+"\n", "\nUSER=test-owner\n") {
+		t.Fatal("native keychain login identity was dropped")
+	}
 	if !strings.Contains(joined, "CLAUDE_CONFIG_DIR=/chosen/login") || strings.Contains(joined, "secret") || strings.Contains(joined, "/wrong") {
 		t.Fatal("environment leaked ambient auth/overrides")
 	}

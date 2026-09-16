@@ -39,6 +39,11 @@ func ClaudeEnvironment(home string) ([]string, error) {
 	if userHome := os.Getenv("HOME"); userHome != "" {
 		env = append(env, "HOME="+userHome)
 	}
+	// Claude uses USER to locate the native macOS keychain credential. Without
+	// it, an authenticated CLI reports "Not logged in" in this restricted env.
+	if user := os.Getenv("USER"); user != "" {
+		env = append(env, "USER="+user)
+	}
 	nativeHome, _ := os.UserHomeDir()
 	if home != "" && filepath.Clean(home) != filepath.Join(nativeHome, ".claude") {
 		env = append(env, "CLAUDE_CONFIG_DIR="+home)
