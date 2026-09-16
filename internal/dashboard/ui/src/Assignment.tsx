@@ -39,13 +39,19 @@ export function Assignment({
     >
       <div className="assignment-heading">
         <strong>{agent.name}</strong>
-        <Status tone={attention ? "amber" : agent.status === "completed" ? "green" : ""}>
+        <Status
+          tone={
+            attention ? "amber" : agent.status === "completed" ? "green" : ""
+          }
+        >
           {stateDetail(agent.status)}
         </Status>
       </div>
       <p className="assignment-meta">
         {progress ? `Last progress ${progress}` : "No progress recorded yet"}
-        {agent.recoveries ? ` · ${agent.recoveries} recovery attempts recorded` : ""}
+        {agent.recoveries
+          ? ` · ${agent.recoveries} recovery attempts recorded`
+          : ""}
       </p>
 
       {explained ? (
