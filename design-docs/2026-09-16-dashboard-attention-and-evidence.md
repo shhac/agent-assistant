@@ -119,3 +119,43 @@ grouping and the unchanged acceptance payload, queue sequencing, the memory
 supersede and its refusal to fork history, and the dashboard's own assertions
 that a blocked worker is visible on the overview and one click from its work.
 No test contacted a provider, started a worker, or used live owner data.
+
+## Structural pass, same day
+
+A seven-lens review of the change above found three defects it had
+introduced, each from the same cause: a concept implemented more than once,
+with the copies drifting.
+
+The memory audit trail was the worst. Correcting a memory keeps the original
+under the same key, and the key-based upsert scanned from the front — so it
+matched the superseded tombstone first and carried its marker onto the new
+value. Recording anything for that key afterwards filed the newest text as
+already corrected while the stale replacement stayed live. Forgetting either
+end of a chain left it inconsistent in the other direction.
+
+The set of states meaning "not moving" had been written out four times. Two
+copies disagreed about paused and stopping workers, and where they disagreed
+the assignment view suppressed its summary and the failure card declined to
+explain — an amber card with no account of itself. The failure card is now
+the only judge of whether it has an explanation. The wider vocabulary — three
+label maps that called one state "Ready for your review", "Ready for
+acceptance" and nothing at all — became one module, and the dashboard now
+asks the daemon's own recovery posture rather than a hardcoded list beside
+it, with a test pinning that the two describe the same states.
+
+The overview headline counted outcomes that were the worker's turn among
+those needing the owner, so a scheduled retry beside one open decision read
+"1 decision and 1 outcome need you" directly above a row saying the worker
+acts next.
+
+The rest was structure rather than behaviour: App.tsx split into page
+modules, a mode flag that made one component return two different trees
+replaced by the component it was pretending to be, the daemon stating a
+relationship the browser had been reconstructing from a naming convention,
+and the zero-time check that five call sites each carried folded into the
+shared helper.
+
+Deliberately not done: extracting the chat panel's at-most-once delivery
+machine, and a shared polling hook across four components. Both trade a
+safety property or four components' lifecycle behaviour for readability, and
+neither is what the owner asked for.
