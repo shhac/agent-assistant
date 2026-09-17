@@ -24,9 +24,10 @@ import (
 //     computed or guessed from a path, and knowing one file's URL does not
 //     describe the directory it sits in.
 //   - A token is minted only for a path the daemon itself recorded as evidence
-//     AND that lies inside its own state directory. Evidence text is
-//     worker-authored, so a run that reported a path outside that directory
-//     simply never gets a token.
+//     AND that is one of a run's preserved artifacts. Evidence text is
+//     worker-authored, and the state directory also holds the owner's database,
+//     this file's own salt, the pairing code and the admin token — so anything
+//     outside a run's artifact directory never gets a token.
 //   - The file is opened through a root anchored at the state directory, so a
 //     symlink or traversal cannot reach outside it even if the recorded path
 //     tries to.
@@ -97,10 +98,16 @@ func artifactPath(line string) string {
 	return ""
 }
 
-// withinStateDirectory reports whether a recorded path is one the daemon owns.
-// Evidence is worker-authored, so this is what stops a reported path outside
-// the daemon's own state from ever being offered for download.
-func withinStateDirectory(root, path string) (string, bool) {
+// artifactRoot is where a managed worker preserves a run's files, relative to
+// the daemon's state directory: managed-workers/<project>/broker/runs/<id>/artifacts.
+var artifactRoot = []string{"managed-workers", "", "broker", "runs", "", "artifacts"}
+
+// withinArtifacts reports whether a recorded path is one of a run's preserved
+// files. Evidence is worker-authored, so this is the rule that decides what the
+// daemon will serve — and "somewhere under the state directory" is far too
+// wide: that directory also holds the owner's database, this file's own salt,
+// the pairing code and the admin token. Only run artifact directories qualify.
+func withinArtifacts(root, path string) (string, bool) {
 	if root == "" || !filepath.IsAbs(path) {
 		return "", false
 	}
@@ -108,34 +115,59 @@ func withinStateDirectory(root, path string) (string, bool) {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < len(artifactRoot) {
+		return "", false
+	}
+	for i, want := range artifactRoot {
+		// An empty pattern segment is a name the daemon chose (a project or a
+		// run); it may be anything except a traversal.
+		if want == "" {
+			if parts[i] == "" || parts[i] == "." || parts[i] == ".." {
+				return "", false
+			}
+			continue
+		}
+		if parts[i] != want {
+			return "", false
+		}
+	}
 	return rel, true
 }
 
-// ArtifactLinks maps each downloadable artifact path to its token. Paths the
-// daemon does not own are absent, so the dashboard shows them as plain text.
-func (a *App) ArtifactLinks(s core.Snapshot) map[string]string {
-	root := a.Core.StateDirectory()
-	out := map[string]string{}
+// artifactCandidates lists the paths this snapshot makes downloadable: those an
+// attempt recorded that are one of a run's preserved artifacts.
+func artifactCandidates(s core.Snapshot, root string) []string {
+	out, seen := []string{}, map[string]bool{}
 	for _, agent := range s.Agents {
 		for _, line := range agent.Evidence {
 			path := artifactPath(line)
-			if path == "" {
+			if path == "" || seen[path] {
 				continue
 			}
-			if _, ok := withinStateDirectory(root, path); !ok {
+			if _, ok := withinArtifacts(root, path); !ok {
 				continue
 			}
-			if _, done := out[path]; done {
-				continue
-			}
-			token, err := a.artifactToken(path)
-			if err != nil {
-				return map[string]string{}
-			}
-			out[path] = token
+			seen[path] = true
+			out = append(out, path)
 		}
 	}
 	return out
+}
+
+// ArtifactLinks maps each downloadable artifact path to its token. A failure to
+// read the installation secret is reported rather than returned as an empty
+// map, which would be indistinguishable from an attempt that recorded nothing.
+func (a *App) ArtifactLinks(s core.Snapshot) (map[string]string, error) {
+	out := map[string]string{}
+	for _, path := range artifactCandidates(s, a.Core.StateDirectory()) {
+		token, err := a.artifactToken(path)
+		if err != nil {
+			return nil, err
+		}
+		out[path] = token
+	}
+	return out, nil
 }
 
 var errArtifactNotFound = errors.New("artifact not found")
@@ -149,7 +181,11 @@ func (a *App) OpenArtifact(s core.Snapshot, token string) (string, io.ReadCloser
 	}
 	root := a.Core.StateDirectory()
 	match := ""
-	for path, candidate := range a.ArtifactLinks(s) {
+	for _, path := range artifactCandidates(s, root) {
+		candidate, err := a.artifactToken(path)
+		if err != nil {
+			return "", nil, 0, err
+		}
 		// Compared in constant time so a wrong token cannot be narrowed by
 		// timing the response.
 		if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1 {
@@ -159,7 +195,7 @@ func (a *App) OpenArtifact(s core.Snapshot, token string) (string, io.ReadCloser
 	if match == "" {
 		return "", nil, 0, errArtifactNotFound
 	}
-	rel, ok := withinStateDirectory(root, match)
+	rel, ok := withinArtifacts(root, match)
 	if !ok {
 		return "", nil, 0, errArtifactNotFound
 	}

@@ -14,7 +14,7 @@ func artifactFixture(t *testing.T) (*App, string) {
 	t.Helper()
 	a := testApp(t)
 	root := a.Core.StateDirectory()
-	dir := filepath.Join(root, "runs", "run-1", "artifacts")
+	dir := filepath.Join(root, "managed-workers", "p1", "broker", "runs", "run-1", "artifacts")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -24,6 +24,15 @@ func artifactFixture(t *testing.T) (*App, string) {
 	return a, dir
 }
 
+func links(t *testing.T, a *App, s core.Snapshot) map[string]string {
+	t.Helper()
+	out, err := a.ArtifactLinks(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 func snapshotWithEvidence(evidence ...string) core.Snapshot {
 	return core.Snapshot{Agents: []core.Agent{{ID: "a1", Evidence: evidence}}}
 }
@@ -31,8 +40,8 @@ func snapshotWithEvidence(evidence ...string) core.Snapshot {
 func TestArtifactTokenIsOpaqueAndPathSpecific(t *testing.T) {
 	a, dir := artifactFixture(t)
 	patch := filepath.Join(dir, "changes.patch")
-	links := a.ArtifactLinks(snapshotWithEvidence("Patch: " + patch))
-	token := links[patch]
+	minted := links(t, a, snapshotWithEvidence("Patch: "+patch))
+	token := minted[patch]
 	if token == "" {
 		t.Fatal("no token minted for a recorded artifact")
 	}
@@ -41,7 +50,7 @@ func TestArtifactTokenIsOpaqueAndPathSpecific(t *testing.T) {
 	}
 	// Another installation must not produce the same token for the same path.
 	other, _ := artifactFixture(t)
-	if other.ArtifactLinks(snapshotWithEvidence("Patch: " + patch))[patch] == token {
+	if links(t, other, snapshotWithEvidence("Patch: "+patch))[patch] == token {
 		t.Fatal("token is derived without an installation secret")
 	}
 	// A sibling in the same directory gets an unrelated token, so knowing one
@@ -50,7 +59,7 @@ func TestArtifactTokenIsOpaqueAndPathSpecific(t *testing.T) {
 	if err := os.WriteFile(sibling, []byte("[]"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	siblingToken := a.ArtifactLinks(snapshotWithEvidence("Command results: " + sibling))[sibling]
+	siblingToken := links(t, a, snapshotWithEvidence("Command results: "+sibling))[sibling]
 	if siblingToken == "" || siblingToken == token {
 		t.Fatal("sibling artifacts share a token")
 	}
@@ -59,8 +68,8 @@ func TestArtifactTokenIsOpaqueAndPathSpecific(t *testing.T) {
 func TestArtifactTokenIsStableAcrossSnapshots(t *testing.T) {
 	a, dir := artifactFixture(t)
 	patch := filepath.Join(dir, "changes.patch")
-	first := a.ArtifactLinks(snapshotWithEvidence("Patch: " + patch))[patch]
-	second := a.ArtifactLinks(snapshotWithEvidence("Patch: " + patch))[patch]
+	first := links(t, a, snapshotWithEvidence("Patch: "+patch))[patch]
+	second := links(t, a, snapshotWithEvidence("Patch: "+patch))[patch]
 	if first == "" || first != second {
 		t.Fatal("a link changes between reads of the same state")
 	}
@@ -82,7 +91,7 @@ func TestArtifactsOutsideTheStateDirectoryAreNeverOffered(t *testing.T) {
 		"Patch: relative/path.txt",
 		"Patch: ",
 	} {
-		links := a.ArtifactLinks(snapshotWithEvidence(line))
+		links := links(t, a, snapshotWithEvidence(line))
 		if len(links) != 0 {
 			t.Fatalf("minted a link for %q: %v", line, links)
 		}
@@ -93,7 +102,7 @@ func TestOpenArtifactRefusesAnythingItDidNotMint(t *testing.T) {
 	a, dir := artifactFixture(t)
 	patch := filepath.Join(dir, "changes.patch")
 	state := snapshotWithEvidence("Patch: " + patch)
-	good := a.ArtifactLinks(state)[patch]
+	good := links(t, a, state)[patch]
 
 	name, file, size, err := a.OpenArtifact(state, good)
 	if err != nil {
@@ -140,7 +149,7 @@ func TestOpenArtifactDoesNotFollowSymlinksOutOfTheStateDirectory(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	state := snapshotWithEvidence("Changed-file summary: " + link)
-	token := a.ArtifactLinks(state)[link]
+	token := links(t, a, state)[link]
 	if token == "" {
 		t.Fatal("expected a token for a path inside the state directory")
 	}
@@ -152,11 +161,87 @@ func TestOpenArtifactDoesNotFollowSymlinksOutOfTheStateDirectory(t *testing.T) {
 func TestOpenArtifactRefusesDirectoriesAndOversizedFiles(t *testing.T) {
 	a, dir := artifactFixture(t)
 	state := snapshotWithEvidence("Worker artifacts: " + dir)
-	token := a.ArtifactLinks(state)[dir]
+	token := links(t, a, state)[dir]
 	if token == "" {
 		t.Fatal("expected a token for the artifacts directory line")
 	}
 	if _, _, _, err := a.OpenArtifact(state, token); err == nil {
 		t.Fatal("served a directory as a file")
+	}
+}
+
+// The state directory holds the owner's database, this feature's own salt, the
+// pairing code and the admin token. Evidence text is worker-authored, so a run
+// naming one of them must never produce a download link.
+func TestDaemonPrivateFilesAreNeverOffered(t *testing.T) {
+	a, _ := artifactFixture(t)
+	root := a.Core.StateDirectory()
+	for _, name := range []string{
+		"state.db",
+		"artifact-salt",
+		"pairing-code",
+		"config.json",
+		filepath.Join("state.db.runtime", "admin-token"),
+		filepath.Join("managed-workers", "p1", "broker", "broker.json"),
+		filepath.Join("managed-workers", "p1", "broker", "docker-config"),
+		filepath.Join("projects", "p1", "notes.txt"),
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("SECRET"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := links(t, a, snapshotWithEvidence("Patch: "+path)); len(got) != 0 {
+			t.Fatalf("offered a daemon-private file %q: %v", name, got)
+		}
+	}
+}
+
+// A directory whose name merely starts with the state directory's is outside it.
+func TestSiblingPrefixDirectoryIsNotInsideTheStateDirectory(t *testing.T) {
+	a, _ := artifactFixture(t)
+	root := a.Core.StateDirectory()
+	outside := root + "-elsewhere/managed-workers/p1/broker/runs/r/artifacts/x"
+	if got := links(t, a, snapshotWithEvidence("Patch: "+outside)); len(got) != 0 {
+		t.Fatalf("a sibling directory was treated as inside: %v", got)
+	}
+}
+
+func TestOversizedArtifactIsRefused(t *testing.T) {
+	a, dir := artifactFixture(t)
+	big := filepath.Join(dir, "huge.bin")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sparse: no real bytes are written.
+	if err := f.Truncate(maxArtifactBytes + 1); err != nil {
+		f.Close()
+		t.Skipf("sparse files unavailable: %v", err)
+	}
+	f.Close()
+	state := snapshotWithEvidence("Patch: " + big)
+	token := links(t, a, state)[big]
+	if token == "" {
+		t.Fatal("expected a token for a file inside the artifacts directory")
+	}
+	if _, _, _, err := a.OpenArtifact(state, token); err == nil {
+		t.Fatal("served a file past the size cap")
+	}
+}
+
+func TestArtifactSaltIsPrivate(t *testing.T) {
+	a, _ := artifactFixture(t)
+	if _, err := a.artifactToken("/anything"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(a.Core.StateDirectory(), "artifact-salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("salt mode = %v, want 0600: it is the only thing making a token unguessable", info.Mode().Perm())
 	}
 }
