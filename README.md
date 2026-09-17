@@ -165,7 +165,7 @@ Workers use copied project workspaces inside non-root containers with no network
 
 Managed state and recovery records live under the daemon’s state directory. The private loopback endpoint and its random token are owned by the daemon; users do not enter or share them. All managed workers share the configured worker CLI login by default. Existing external services remain supported through the [worker broker guide](docs/worker-broker.md). Use **Edit worker settings** on the project page, or ask the assistant to discover and select a model for that worker. The model and effort choices come from the selected CLI login. A saved preference alone does not change the model. Project-level edits preserve the login and workspace, require all project work and broker cleanup to be finished, and reconnect the idle broker automatically. Configured model information is not a claim that an assignment has run on that model. Changes made through global advanced settings may still require a daemon restart for an already-connected broker.
 
-`--max-turns` on a manually operated broker is its cumulative model-call cap, including resumes and messages. Output, command duration and per-attempt wall time are bounded. Stable dispatch keys and durable receipts prevent blind retries of uncertain effects. Tests use fake CLIs, runtimes, providers, and brokers; a full real-runtime installation and paid worker run have not been exercised during development.
+A worker's limits are the resources it consumes, not how long it thinks. There is no cap on turns, tools, or how long an assignment may run: it continues while its subscription has headroom and, if one is configured, while its token budget lasts. Individual requests, commands and container operations stay bounded. `--max-turns` on a manually operated broker is retired and no longer enforces anything; it once capped cumulative model calls, which stopped long assignments that were doing useful work. Stable dispatch keys and durable receipts prevent blind retries of uncertain effects. Tests use fake CLIs, runtimes, providers, and brokers; a full real-runtime installation and paid worker run have not been exercised during development.
 
 External brokers remain trusted enforcement boundaries. They must provide idempotency, truthful progress timestamps, isolated workspaces and role-specific tools. Coordinators request work through the daemon, which enforces inherited scope and shared limits.
 
@@ -202,7 +202,9 @@ CLI phase and exit status when reported; older attempts may have no such detail.
 
 ## Worker subscription limits
 
-**Settings → Capacity and supervision → Worker subscription usage** controls when to hold new worker starts, resumes, and follow-up instructions. Codex and Claude default to **90% consumed**: reaching the threshold in any applicable short or weekly quota window holds new work, while existing workers continue. Queued work is retried when usage falls below the threshold. The gate uses the worker’s configured CLI login, including any per-worker profile, rather than assuming it shares the assistant’s account.
+**Settings → Capacity and supervision → Worker subscription usage** controls when to hold worker model requests. Codex and Claude default to **90% consumed**: reaching the threshold in any applicable short or weekly quota window holds work. This gate runs before starting or resuming an assignment *and* before every request a running worker makes, including the summaries it uses to compact its own context. The gate uses the worker’s configured CLI login, including any per-worker profile, rather than assuming it shares the assistant’s account.
+
+A held worker reports **Waiting for worker resources**. Its workspace, conversation and any direction you have queued are preserved; nothing was rejected, nothing is retried, and no recovery attempt is spent. When the report names a reset, the daemon continues the assignment by itself once headroom returns. Your pause or stop, a global pause and a no-dispatch boot all take precedence.
 
 The equivalent configuration is:
 
@@ -218,13 +220,31 @@ The equivalent configuration is:
 }
 ```
 
-Set an engine’s threshold to `0` to disable its gate. `on_unavailable` defaults to `allow`, so a missing or failed meter does not stop work; choose `pause` to hold new work until usage can be checked. External broker accounts cannot be inspected locally and follow that unavailable-usage policy. Usage is cached for up to one minute; the provider may also cache its report. These are admission limits, not a hard cap: already-running workers and assistant chat can continue consuming usage.
+Set an engine’s threshold to `0` to disable its gate. `on_unavailable` defaults to `allow`, so a missing or failed meter does not stop work; choose `pause` to hold work until usage can be checked. External broker accounts cannot be inspected locally and follow that unavailable-usage policy. Usage is cached for up to one minute and the provider may also cache its report, so admission during that window — and any request already in flight — can carry usage a little past the threshold. This is **headroom on a shared account**, not a raw token budget and not a cap on subscription charges. It does not apply to assistant chat.
+
+The same policy governs a separately operated `worker serve` broker, from its own configuration file, using the same code.
+
+## Worker token budget
+
+**Settings → Capacity and supervision → Worker token budget** optionally caps how many tokens one assignment may consume over its whole life, including context summaries and every resume.
+
+```json
+{ "limits": { "worker_token_budget": 0 } }
+```
+
+`0` is the default and disables the budget. Otherwise the count is the provider's own reported usage — input, which includes cached input as the provider reports it, plus output. Enforcement happens before each request, so the request that crosses the limit finishes: the overshoot is bounded by one request, not pre-reserved. This counts tokens, not money; no price is estimated and no pricing table is consulted.
+
+When the budget is reached the assignment waits for you. Raise the number, or set it to `0`, then resume that assignment to continue with its saved context.
+
+**Usage that cannot be established is never counted as free.** If a provider reports no usage for a call, or a reservation survives a crash, or an assignment recorded calls before this ledger existed, those calls are recorded as unknown consumption. With a budget configured, an assignment holding unknown calls waits for an explicit decision; raising the budget cannot measure what was never reported, so only disabling the budget continues it. The dashboard and `inspect_agent` report unknown calls beside the token total, so a total is never read as complete when it is not.
+
+`limits.max_model_calls_per_day` and `limits.max_model_turns` are separate and bound the **assistant's** own conversation and tool loop. They are not worker lifetime budgets and never were.
 
 ## Operating boundaries
 
 The PA has no shell, code-writing, deployment, production-data, or purchase tool. Worker commissions carry immutable deployment, production-data-access, and purchase prohibitions. A broker must enforce those outside its prompts. Inference and approved worker execution are permitted operating usage.
 
-The current limits bound concurrent execution, delegation depth, recovery attempts, model turns and durable model-call reservations per UTC day. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, quiet hours/digests, transcript-retention controls, raster avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
+The current limits bound concurrent execution, delegation depth, recovery attempts, the assistant's own model turns and its durable model-call reservations per UTC day, plus the worker resource limits described above. API output-token caps and Codex process bounds are described above. **A call limit is not a dollar budget or a provider subscription meter.** Provider-enforced monetary caps, quiet hours/digests, transcript-retention controls, raster avatar generation, WhatsApp, and phone calls remain follow-on work from the design journal.
 
 Completion requires recorded evidence and no unfinished assignments or unresolved project decisions. The PA reviews that evidence against the recorded acceptance criteria; it does not deploy the result. Uncertain outbound actions are retained for inspection rather than silently repeated. Private state and external provider copies have separate lifetimes; deleting a memory does not erase earlier transcripts or remote copies.
 

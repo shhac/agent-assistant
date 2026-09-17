@@ -24,7 +24,6 @@ agent-assistant worker serve \
   --project <assistant-project-id> \
   --image <locally-installed-image@sha256:digest> \
   --http 127.0.0.1:8350 \
-  --max-turns 24 \
   --max-output-tokens 4096 \
   --max-concurrent 1
 ```
@@ -61,11 +60,19 @@ The owner-supplied image and local Docker daemon are trusted infrastructure. Thi
 
 ## Bounds and recovery
 
-`--max-turns` is the **cumulative model-request limit for a worker session**, including resumes, delivered messages and broker restarts. It is never reset by a resume. API output tokens are capped per request. Codex has no per-request token cap here; its process time and output bytes are bounded separately. Reasoning effort is independent of these limits. Each execution attempt also has a 30-minute wall-clock bound; individual commands have a 60-second bound, with at most 128 commands per session. Source/artifact collection is limited to 10,000 source files, 64 MiB total and 2 MiB per file. Model context is limited to 128 KiB and command output to 64 KiB.
+A worker's limits are the resources it consumes. There is no cap on model calls, turns, tools or elapsed time: an assignment continues while its account has headroom and, where one is configured, while its token budget lasts. Its lifetime belongs to the broker process, and the owner's pause and stop are honoured between operations.
+
+`--max-turns` is **retired**. It capped cumulative model requests for a worker session and stopped long assignments that were doing useful work, so passing it now prints a notice and changes nothing. Configure `limits.worker_usage` (subscription headroom, 90% by default) and `limits.worker_token_budget` (per-assignment tokens, 0 disables) instead; a standalone broker reads both from its own configuration file and applies the same policy the daemon does.
+
+Both gates run before **every** request, including the summaries a worker uses to compact its own context and any request made while recovering from a provider failure. A refused request is made no other way: nothing is sent, nothing is accounted, the conversation is unchanged, and the run reports `usage_wait` with its reason. Headroom is re-read about once a minute, and a token budget is checked before each request, so consumption can exceed either by the work already admitted or in flight. Neither is a pre-reserved guarantee, and neither is a currency limit.
+
+Consumption is the provider's own reported usage: input, including cached input as the provider normalizes it, plus output. A reservation is persisted before each request, so a crash records an unmeasured call as *unknown* rather than as free work; the same applies to calls reported without usage, and to a session's history from before this accounting existed. With a token budget configured, an assignment carrying unknown calls waits for an explicit owner decision.
+
+Individual operations remain bounded: one model request, a 60-second command limit with at most 128 commands per session, and bounded container operations. API output tokens are capped per request. Codex has no per-request token cap here; its process time and output bytes are bounded separately. Reasoning effort is independent of these limits. Source/artifact collection is limited to 10,000 source files, 64 MiB total and 2 MiB per file. Model context is limited to 128 KiB and command output to 64 KiB. A bounded run of turns in which every requested operation failed stops the worker for inspection; any success resets that count, so productive work is never bounded by it.
 
 These are resource bounds, not a dollar estimate or a promise of free model inference. Model calls can cost money under the configured provider. No paid model call is automatically retried after an uncertain response.
 
-Launch and control requests use durable idempotency keys. Interrupted execution requires the explicit resume endpoint; an ordinary message cannot bypass recovery limits. Resuming keeps the existing copied workspace and baseline. On broker restart, recorded containers must be verified as owned and stopped before any run becomes recoverable. Incomplete tool acknowledgements become explicit uncertainty results, not repeated tool executions. An exhausted cumulative model allowance requires an explicit higher limit from the owner before further model work.
+Launch and control requests use durable idempotency keys. Interrupted execution requires the explicit resume endpoint; an ordinary message cannot bypass recovery limits. Resuming keeps the existing copied workspace and baseline. On broker restart, recorded containers must be verified as owned and stopped before any run becomes recoverable. Incomplete tool acknowledgements become explicit uncertainty results, not repeated tool executions. A resource wait is not a recovery: it consumes no recovery allowance, schedules no retry and carries no provider failure classification. A wait with a known reset is re-admitted automatically by the daemon; a wait on a token budget or on unestablished consumption requires an owner decision and an explicit resume.
 
 ## Review results
 
