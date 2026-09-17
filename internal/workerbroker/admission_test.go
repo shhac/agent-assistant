@@ -3,8 +3,11 @@ package workerbroker
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -368,28 +371,136 @@ func TestOwnerControlsOutrankResourceHolds(t *testing.T) {
 	}
 }
 
-// Turns whose every operation fails are observable absence of progress. That is
-// bounded; successful work resets it and is never bounded.
-func TestOnlyRepeatedFailureBoundsTheLoop(t *testing.T) {
+func engineUsage(input, output int) engine.Usage {
+	return engine.Usage{InputTokens: input, OutputTokens: output, TotalTokens: input + output, Known: true}
+}
+
+// A worker running a long build-and-test loop must not be stopped because it
+// has run a certain number of commands. Per-command time and output bounds are
+// what contain a command; a lifetime count is not a resource limit.
+func TestCommandsAreNotCappedByCount(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
 	id := contextRun(t, b)
-	if err := b.update(id, func(r *storedRun) error { r.FailingTurns = maxFailingTurns; return nil }); err != nil {
-		t.Fatal(err)
-	}
 	r, _ := b.snapshot(id)
-	if r.FailingTurns < maxFailingTurns {
-		t.Fatal("failing-turn accounting not persisted")
+	r.Container = "agent-assistant-" + id
+	for i := 0; i < 128; i++ {
+		if err := b.update(id, func(run *storedRun) error {
+			run.Commands = append(run.Commands, commandRecord{Command: "synthetic", Success: true})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := b.update(id, func(run *storedRun) error { run.FailingTurns = 0; return nil }); err != nil {
-		t.Fatal(err)
+	var call toolCall
+	call.ID, call.Type, call.Function.Name = "command-129", "function", "run_command"
+	call.Function.Arguments = `{"command":"go test ./..."}`
+	value, finished, err := b.tool(context.Background(), id, r, call)
+	if err != nil || finished {
+		t.Fatalf("command 129 was refused: %v", err)
+	}
+	record, ok := value.(commandRecord)
+	if !ok || record.Command != "go test ./..." {
+		t.Fatalf("command 129 did not run: %+v", value)
 	}
 	after, _ := b.snapshot(id)
-	if after.FailingTurns != 0 {
-		t.Fatal("a successful operation did not clear the failing-turn count")
+	if len(after.Commands) != 129 {
+		t.Fatalf("command 129 was not recorded: %d", len(after.Commands))
 	}
 }
 
-func engineUsage(input, output int) engine.Usage {
-	return engine.Usage{InputTokens: input, OutputTokens: output, TotalTokens: input + output, Known: true}
+// A settlement that did not persist leaves consumption unrecorded. Continuing
+// to act on that reply would spend against a ledger the broker cannot vouch
+// for, so the failure has to reach the caller instead of the proposals.
+func TestUnpersistedSettlementStopsTheReplyAndHoldsTheNextRequest(t *testing.T) {
+	var calls atomic.Int64
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// The reservation has persisted by now; make the settlement that follows
+		// unable to write, which is what a durability failure looks like here.
+		if err := os.Chmod(b.cfg.StateDir, 0500); err != nil {
+			t.Error(err)
+		}
+		call := toolCall{ID: "call", Type: "function"}
+		call.Function.Name = "finish"
+		call.Function.Arguments = `{"summary":"Claiming completion"}`
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}, "finish_reason": "tool_calls"}}})
+	}))
+	defer provider.Close()
+	defer os.Chmod(b.cfg.StateDir, 0700)
+	b.cfg.ModelEndpoint = provider.URL
+	id := contextRun(t, b)
+
+	reply, err := b.completeForRun(context.Background(), id, nil)
+	if err == nil {
+		t.Fatal("an unrecorded settlement returned a usable reply")
+	}
+	if len(reply.ToolCalls) != 0 {
+		t.Fatalf("proposals escaped an unrecorded settlement: %+v", reply.ToolCalls)
+	}
+	if err := os.Chmod(b.cfg.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	held, _ := b.snapshot(id)
+	if held.PendingUsage == nil {
+		t.Fatal("the unsettled reservation was discarded rather than retained")
+	}
+
+	// The next request is refused while that reservation is open, budget or not.
+	request := ""
+	err = b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request)
+	if !errors.Is(err, worker.ErrResourceHold) || request != "" {
+		t.Fatalf("another request was authorized over an open reservation: %v", err)
+	}
+	after, _ := b.snapshot(id)
+	if after.Run.ResourceHold == nil || after.Run.ResourceHold.Kind != worker.HoldUsageUnknown || !after.Run.ResourceHold.OwnerAction {
+		t.Fatalf("an unresolved reservation was not surfaced for the owner: %+v", after.Run.ResourceHold)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the provider was contacted again: %d", calls.Load())
+	}
+}
+
+// A figure that is negative, incomplete or too large to add is not a
+// measurement. Recording it as a number would make it indistinguishable from a
+// real one later.
+func TestUnusableUsageIsRecordedAsUnknownNotRepaired(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage engine.Usage
+		seed  int64
+	}{
+		{"unknown", engine.Usage{InputTokens: 5, OutputTokens: 5}, 0},
+		{"negative input", engine.Usage{InputTokens: -5, OutputTokens: 5, Known: true}, 0},
+		{"negative output", engine.Usage{InputTokens: 5, OutputTokens: -5, Known: true}, 0},
+		{"overflowing total", engine.Usage{InputTokens: math.MaxInt64 / 2, OutputTokens: 1, Known: true}, math.MaxInt64 - 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+			defer b.Close()
+			id := contextRun(t, b)
+			if err := b.update(id, func(r *storedRun) error { r.UsageInputTokens = tc.seed; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			request := ""
+			if err := b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.settleUsage(id, request, tc.usage); err != nil {
+				t.Fatal(err)
+			}
+			r, _ := b.snapshot(id)
+			if r.UsageUnknownCalls != 1 {
+				t.Fatalf("unusable usage was accepted: unknown=%d", r.UsageUnknownCalls)
+			}
+			if r.UsageInputTokens != tc.seed || r.UsageOutputTokens != 0 {
+				t.Fatalf("unusable usage changed the total: %d/%d", r.UsageInputTokens, r.UsageOutputTokens)
+			}
+			if r.PendingUsage != nil {
+				t.Fatal("the reservation was left open after an unknown settlement")
+			}
+		})
+	}
 }

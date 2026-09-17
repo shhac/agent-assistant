@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/engine"
@@ -35,6 +36,13 @@ func (b *Broker) reserveWorkerModelCall(ctx context.Context, id, stage string, r
 		return err
 	}
 	budget := b.tokenBudget()
+	// An unresolved reservation means the previous request's consumption was
+	// never established — it may still be in flight, or its settlement may have
+	// failed to persist. Authorizing another one would build on a ledger we
+	// cannot vouch for, so this holds whether or not a budget is configured.
+	if hold := unresolvedHold(current); hold != nil {
+		return b.refuse(id, *hold)
+	}
 	if hold := budgetHold(current, budget); hold != nil {
 		return b.refuse(id, *hold)
 	}
@@ -54,6 +62,9 @@ func (b *Broker) reserveWorkerModelCall(ctx context.Context, id, stage string, r
 		}
 		// Re-check under the lock: an owner budget change or a settled call may
 		// have landed between the snapshot and here.
+		if hold := unresolvedHold(*run); hold != nil {
+			return &worker.HoldError{Hold: *hold}
+		}
 		if hold := budgetHold(*run, budget); hold != nil {
 			return &worker.HoldError{Hold: *hold}
 		}
@@ -133,28 +144,59 @@ func budgetHold(run storedRun, budget int64) *worker.ResourceHold {
 	return nil
 }
 
+// unresolvedHold refuses further work while a reservation is still open. The
+// owner has to look, because the alternative is continuing to spend against a
+// record that is known to be incomplete.
+func unresolvedHold(run storedRun) *worker.ResourceHold {
+	if run.PendingUsage == nil {
+		return nil
+	}
+	return &worker.ResourceHold{Kind: worker.HoldUsageUnknown, OwnerAction: true, Reason: "A previous model request's consumption was never recorded, so this worker's usage cannot be established. Inspect the preserved work and the assistant's diagnostics, then resume explicitly to continue; the unrecorded request is counted as unknown consumption."}
+}
+
 // settleUsage closes one reservation. Matching by request ID means a repeated
 // or late settlement changes nothing, and a reservation belonging to an earlier
 // process is left for restart reconciliation to convert into uncertainty.
-func (b *Broker) settleUsage(id, request string, usage engine.Usage) {
+//
+// Its error must reach the caller: a settlement that did not persist leaves
+// consumption unrecorded, and continuing to execute proposals on top of that
+// would spend against a ledger the broker cannot vouch for.
+func (b *Broker) settleUsage(id, request string, usage engine.Usage) error {
 	if request == "" {
-		return
+		return nil
 	}
 	budget := b.tokenBudget()
-	_ = b.update(id, func(run *storedRun) error {
+	return b.update(id, func(run *storedRun) error {
 		if run.PendingUsage == nil || run.PendingUsage.RequestID != request {
 			return nil
 		}
 		run.PendingUsage = nil
-		if usage.Known {
-			run.UsageInputTokens += int64(max(usage.InputTokens, 0))
-			run.UsageOutputTokens += int64(max(usage.OutputTokens, 0))
+		if input, output, ok := countable(usage); ok && addable(run, input, output) {
+			run.UsageInputTokens += input
+			run.UsageOutputTokens += output
 		} else {
+			// A figure that is absent, negative or too large to add is not a
+			// measurement. Recording it as unknown keeps the total honest instead
+			// of repairing it into something indistinguishable from a real one.
 			run.UsageUnknownCalls++
 		}
 		publishUsage(run, budget)
 		return nil
 	})
+}
+
+// countable accepts only a complete, non-negative report.
+func countable(usage engine.Usage) (input, output int64, ok bool) {
+	if !usage.Known || usage.InputTokens < 0 || usage.OutputTokens < 0 {
+		return 0, 0, false
+	}
+	return int64(usage.InputTokens), int64(usage.OutputTokens), true
+}
+
+// addable rejects a total that would wrap. An assignment whose accounting has
+// grown past what can be represented is unknown, not zero and not negative.
+func addable(run *storedRun, input, output int64) bool {
+	return input <= math.MaxInt64-run.UsageInputTokens && output <= math.MaxInt64-run.UsageOutputTokens
 }
 
 // publishUsage keeps the reported ledger identical to the persisted one. The

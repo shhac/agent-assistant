@@ -97,9 +97,6 @@ type storedRun struct {
 	UsageInputTokens  int64 `json:"usage_input_tokens,omitempty"`
 	UsageOutputTokens int64 `json:"usage_output_tokens,omitempty"`
 	UsageUnknownCalls int   `json:"usage_unknown_calls,omitempty"`
-	// FailingTurns counts consecutive turns in which every requested operation
-	// failed. That is observable absence of progress, not a call ceiling.
-	FailingTurns int `json:"failing_turns,omitempty"`
 }
 type pendingUsage struct {
 	RequestID string    `json:"request_id"`

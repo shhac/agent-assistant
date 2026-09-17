@@ -53,7 +53,9 @@ func (b *Broker) prepareContext(ctx context.Context, id string) ([]modelMessage,
 		cfg := b.modelConfig(id, stageSummary, &request)
 		cfg.MaxOutputTokens = min(cfg.MaxOutputTokens, 2048)
 		reply, usage, summaryErr := engine.Complete(ctx, cfg, input, nil)
-		b.settleUsage(id, request, usage)
+		if settleErr := b.settleUsage(id, request, usage); settleErr != nil {
+			return engine.Message{}, usage, settleErr
+		}
 		return reply, usage, summaryErr
 	})
 	if err != nil {

@@ -15,7 +15,11 @@ func (b *Broker) completeForRun(ctx context.Context, id string, messages []model
 	message, usage, err := engine.Complete(ctx, cfg, messages, workerTools())
 	// A rejection can still report what it consumed. Settle whatever the
 	// provider established, and record an unmeasured attempt as unknown.
-	b.settleUsage(id, request, usage)
+	// An unpersisted settlement outranks the reply: acting on proposals whose
+	// cost was never recorded is exactly what the ledger exists to prevent.
+	if settleErr := b.settleUsage(id, request, usage); settleErr != nil {
+		return modelMessage{}, settleErr
+	}
 	if err != nil {
 		return modelMessage{}, err
 	}
