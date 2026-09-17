@@ -20,7 +20,7 @@ func (a *App) workerUsageAllowed(ctx context.Context, profileID string) error {
 	if err != nil {
 		return err
 	}
-	hold, err := a.workerHeadroom(ctx, profile, true)
+	hold, err := a.workerHeadroom(ctx, headroomSubject{StatusID: profile.ID, Name: profile.Name, Model: workerModel(a.Config(), profile), Inspectable: profile.Managed}, true)
 	if err != nil {
 		return err
 	}
@@ -34,18 +34,13 @@ func (a *App) workerUsageAllowed(ctx context.Context, profileID string) error {
 // before each of its model requests, including context summaries and recovery
 // attempts. It applies exactly the policy that gates new worker work, so a
 // worker cannot keep consuming an account that is already too full to start on.
-func (a *App) workerInferenceAdmission(ctx context.Context, projectID string) error {
-	cfg := a.Config()
-	// Fall back to the default worker profile rather than skipping the policy:
-	// a broker exists for this project, so its account is being consumed.
-	profile := config.Worker{ID: "managed-" + projectID, Name: "this project's worker", ProjectID: projectID, Managed: true}
-	for _, w := range cfg.Workers {
-		if w.Managed && w.ProjectID == projectID {
-			profile = w
-			break
-		}
-	}
-	hold, err := a.workerHeadroom(ctx, profile, false)
+//
+// The model comes from the broker, not from current configuration. A broker
+// keeps the engine, binary and login it was created with until it is restarted,
+// so reading a since-edited profile would measure headroom on an account this
+// worker is not spending from. Only the thresholds are read live.
+func (a *App) workerInferenceAdmission(ctx context.Context, projectID string, model config.Model) error {
+	hold, err := a.workerHeadroom(ctx, headroomSubject{StatusID: "managed-" + projectID, Name: "this project's worker", Model: model, Inspectable: true}, false)
 	if err != nil {
 		return err
 	}
@@ -55,14 +50,21 @@ func (a *App) workerInferenceAdmission(ctx context.Context, projectID string) er
 	return nil
 }
 
+// headroomSubject names the account a decision is about. Inspectable is false
+// for a broker whose CLI login this host cannot read, such as an external one.
+type headroomSubject struct {
+	StatusID, Name string
+	Model          config.Model
+	Inspectable    bool
+}
+
 // workerHeadroom is the one subscription decision, shared by the admission that
 // precedes new worker work and by the admission the broker runs before every
 // inference. report controls only whether the dashboard integration row is
 // rewritten: a per-inference check must not rewrite that row on every call.
-func (a *App) workerHeadroom(ctx context.Context, profile config.Worker, report bool) (*worker.ResourceHold, error) {
-	cfg := a.Config()
-	policy := cfg.Limits.WorkerUsage
-	id, name := "worker-usage:"+profile.ID, "Usage for "+profile.Name
+func (a *App) workerHeadroom(ctx context.Context, subject headroomSubject, report bool) (*worker.ResourceHold, error) {
+	policy := a.Config().Limits.WorkerUsage
+	id, name := "worker-usage:"+subject.StatusID, "Usage for "+subject.Name
 	status := func(state, detail string) {
 		if report {
 			a.Status(id, name, state, detail)
@@ -82,10 +84,10 @@ func (a *App) workerHeadroom(ctx context.Context, profile config.Worker, report 
 		// recovers by itself when readings return or the owner relaxes the policy.
 		return &worker.ResourceHold{Kind: worker.HoldTelemetryUnavailable, Reason: detail, NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}, nil
 	}
-	if !profile.Managed {
+	if !subject.Inspectable {
 		return unavailable("The external broker's CLI account cannot be inspected locally")
 	}
-	model := workerModel(cfg, profile)
+	model := subject.Model
 	threshold, supported := quota.Threshold(policy, model.Engine)
 	if !supported {
 		return unavailable("Subscription usage is unavailable for this engine")

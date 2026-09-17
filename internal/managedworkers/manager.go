@@ -62,7 +62,12 @@ type Manager struct {
 	// broker it opens. They are read per request, so an owner changing a limit
 	// does not require restarting a worker to apply it. Both are set before the
 	// manager is used; nil leaves a broker with no configured resource policy.
-	Admit        func(context.Context, string) error
+	//
+	// Admit receives the model the broker was actually opened with. A running
+	// broker keeps its engine, binary and login until it is restarted, so the
+	// account its headroom must be measured against is that one, not whatever
+	// configuration now names.
+	Admit        func(context.Context, string, config.Model) error
 	TokenBudget  func() int64
 	root         string
 	mu           sync.Mutex
@@ -196,7 +201,8 @@ func (m *Manager) client(ctx context.Context, projectID, workspace string, model
 	token := hex.EncodeToString(key[:])
 	var admit func(context.Context) error
 	if m.Admit != nil {
-		admit = func(ctx context.Context) error { return m.Admit(ctx, projectID) }
+		opened := model
+		admit = func(ctx context.Context) error { return m.Admit(ctx, projectID, opened) }
 	}
 	var command workerbroker.Commander
 	if local, ok := m.runtime.(*localRuntime); ok {

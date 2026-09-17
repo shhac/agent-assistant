@@ -9,6 +9,7 @@ import (
 
 	"github.com/shhac/agent-assistant/internal/core"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
+	"github.com/shhac/lib-agent-harness/session"
 )
 
 func usageWaitRun(kind string, ownerAction bool) worker.Run {
@@ -279,7 +280,8 @@ func TestTelemetryOutageHoldRecoversWithoutAnOwnerDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := a.workerHeadroom(ctx, profile, false)
+	subject := headroomSubject{StatusID: profile.ID, Name: profile.Name, Model: workerModel(a.Config(), profile), Inspectable: true}
+	hold, err := a.workerHeadroom(ctx, subject, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,8 +294,61 @@ func TestTelemetryOutageHoldRecoversWithoutAnOwnerDecision(t *testing.T) {
 	// Readings return; the same policy now allows work with no owner involvement.
 	a.workerUsage.Inspect = lowUsageInspection
 	a.workerUsage.Forget()
-	hold, err = a.workerHeadroom(ctx, profile, false)
+	hold, err = a.workerHeadroom(ctx, subject, false)
 	if err != nil || hold != nil {
 		t.Fatalf("recovered telemetry still held work: %+v %v", hold, err)
+	}
+}
+
+// A running broker keeps the engine, binary and login it was opened with. Its
+// headroom has to be measured against that account, not against a profile the
+// owner has edited since — otherwise the guard inspects an account this worker
+// is not spending from. Thresholds, by contrast, are read live.
+func TestInferenceAdmissionInspectsTheBrokersOwnLoginNotCurrentConfig(t *testing.T) {
+	ctx := context.Background()
+	a, _ := usageRuntimeFixture(t, func(http.ResponseWriter, *http.Request) {})
+	opened := a.Config().WorkerModel
+	opened.CodexHome = "/synthetic/original-login"
+	opened.CodexBin = "original-codex"
+
+	var inspected []session.Options
+	a.workerUsage.Inspect = func(_ context.Context, o session.Options) (session.Inspection, error) {
+		inspected = append(inspected, o)
+		return session.Inspection{Quota: quotaFixture(92)}, nil
+	}
+	projectID := a.Config().Workers[0].ProjectID
+
+	// The owner edits the worker profile to a different engine and login. The
+	// broker that is already running has not changed.
+	cfg := a.Config()
+	changed := cfg.WorkerModel
+	changed.Engine = "claude"
+	changed.Model = "claude-opus-5"
+	changed.ClaudeHome = "/synthetic/different-login"
+	cfg.Workers[0].ModelProfile = &changed
+	if err := a.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.workerInferenceAdmission(ctx, projectID, opened); err == nil {
+		t.Fatal("an account over its limit was admitted")
+	}
+	if len(inspected) != 1 || inspected[0].Engine != session.Codex || inspected[0].Home != opened.CodexHome || inspected[0].Binary != opened.CodexBin {
+		t.Fatalf("admission inspected the wrong account: %+v", inspected)
+	}
+
+	// Only the threshold is live: raising it releases the same broker's work
+	// without the broker's identity being re-read from configuration.
+	cfg = a.Config()
+	cfg.Limits.WorkerUsage.CodexMaxUsedPercent = 95
+	if err := a.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a.workerUsage.Forget()
+	if err := a.workerInferenceAdmission(ctx, projectID, opened); err != nil {
+		t.Fatalf("a raised threshold did not apply: %v", err)
+	}
+	if len(inspected) != 2 || inspected[1].Home != opened.CodexHome {
+		t.Fatalf("the second check changed account: %+v", inspected)
 	}
 }
