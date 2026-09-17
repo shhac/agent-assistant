@@ -224,8 +224,9 @@ describe("conversation", () => {
     expect(within(activity).getByText("Completed")).toBeTruthy();
     // A finished step collapses into a count so it stops competing with the
     // reply, while still being one click away.
-    const settled = within(activity).getByText("1 step completed");
-    expect((settled.parentElement as HTMLDetailsElement).open).toBe(false);
+    // One finished step is shown rather than hidden behind a summary that
+    // would cost a row and a click to save a row.
+    expect(within(activity).queryByText(/steps completed/)).toBeNull();
     expect(screen.queryByText("Gathering the threads…")).toBeNull();
     expect(refresh.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(server.posts()).toHaveLength(0);

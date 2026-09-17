@@ -18,6 +18,9 @@ type VisibleTurn = Omit<ChatTurn, "status"> & {
   status:
     ChatTurn["status"] | "waiting" | "sending" | "unconfirmed" | "rejected";
 };
+// A turn has spoken once its reply is in the thread; until then its newest
+// tool step is still the most recent thing the owner has to look at.
+const turnReplied = (turn?: VisibleTurn) => !!turn?.assistant_message_id;
 const active = (turn: VisibleTurn) =>
   ["waiting", "sending", "queued", "running"].includes(turn.status);
 function chronological(a: { created_at?: string }, b: { created_at?: string }) {
@@ -75,33 +78,57 @@ function delivery(turn: VisibleTurn) {
  * operations stay visible; finished ones collapse into a count so a long
  * successful turn does not bury the reply it produced.
  */
-function ToolActivity({ events }: { events: ChatToolEvent[] }) {
-  const settled = events.filter((e) => e.status === "completed");
+/**
+ * Tool activity, weighted by what still needs watching.
+ *
+ * Anything unfinished stays visible wherever it sits. So does the newest step
+ * while it is the most recent thing in the thread: collapsing it would hide
+ * what just happened at the moment the owner is watching for it. Once a reply
+ * arrives, that step joins the others.
+ *
+ * A single remaining step is shown rather than hidden behind a summary that
+ * would cost a row and a click to save one row.
+ */
+export function ToolActivity({
+  events,
+  live = false,
+}: {
+  events: ChatToolEvent[];
+  /** This turn is the most recent thing in the thread and has not replied. */
+  live?: boolean;
+}) {
+  const last = events[events.length - 1];
+  const tail = live && last?.status === "completed" ? last : undefined;
+  const settled = events.filter((e) => e.status === "completed" && e !== tail);
   const notable = events.filter((e) => e.status !== "completed");
+  const collapse = settled.length > 1;
+  const visible = [
+    ...notable,
+    ...(collapse ? [] : settled),
+    ...(tail ? [tail] : []),
+  ];
   return (
     <div
       className="chat-tools"
       role="group"
       aria-label="Assistant tool activity"
     >
-      {!!notable.length && (
-        <ul>
-          {notable.map((event) => (
-            <ToolRow key={event.id} event={event} />
-          ))}
-        </ul>
-      )}
-      {!!settled.length && (
+      {collapse && (
         <details className="chat-tools-settled">
-          <summary>
-            {settled.length} {settled.length === 1 ? "step" : "steps"} completed
-          </summary>
+          <summary>{settled.length} steps completed</summary>
           <ul>
             {settled.map((event) => (
               <ToolRow key={event.id} event={event} />
             ))}
           </ul>
         </details>
+      )}
+      {!!visible.length && (
+        <ul>
+          {visible.map((event) => (
+            <ToolRow key={event.id} event={event} />
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -142,6 +169,7 @@ function ToolRow({ event }: { event: ChatToolEvent }) {
  */
 function TurnStatus({
   turn,
+  live,
   name,
   cancelling,
   onCancel,
@@ -150,6 +178,8 @@ function TurnStatus({
   onRetry,
 }: {
   turn?: VisibleTurn;
+  /** Nothing in the thread is newer than this turn, and it has not replied. */
+  live?: boolean;
   name: string;
   cancelling: Set<string>;
   onCancel: (turn: VisibleTurn) => void;
@@ -198,7 +228,9 @@ function TurnStatus({
           </button>
         </div>
       )}
-      {!!turn.events?.length && <ToolActivity events={turn.events} />}
+      {!!turn.events?.length && (
+        <ToolActivity events={turn.events} live={live} />
+      )}
       {turn.status === "running" && (
         <Waiting
           label={
@@ -274,6 +306,9 @@ export function ChatPanel({
         created_at: t.created_at,
       })),
   ].sort(chronological);
+  // The last rendered message in the thread. Only its turn may hold a
+  // completed step out of the accordion.
+  const newestMessageID = messages[messages.length - 1]?.id;
   const turnsByMessage = new Map(
     turns.map((t) => [t.user_message_id || t.id, t]),
   );
@@ -527,6 +562,10 @@ export function ChatPanel({
               />
               <TurnStatus
                 turn={turnsByMessage.get(m.id)}
+                live={
+                  m.id === newestMessageID &&
+                  !turnReplied(turnsByMessage.get(m.id))
+                }
                 name={name}
                 cancelling={cancelling}
                 onCancel={cancel}
