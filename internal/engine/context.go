@@ -3,13 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/shhac/lib-agent-harness/completion"
 )
 
-var ErrContextPressure = errors.New("context cannot be compacted safely within its limit; immutable instructions and unresolved or recent work were preserved")
+var ErrContextPressure = localCompletionDiagnostic("context cannot be compacted safely within its limit; immutable instructions and unresolved or recent work were preserved", completion.ErrorContextLimit, completion.PhasePreflight, "working_context_budget")
 
 // ContextOptions describes a working-message budget. Callers subtract tool/schema
 // and provider framing overhead before supplying MaxBytes.
@@ -55,7 +56,7 @@ func CompactContext(ctx context.Context, messages []Message, opts ContextOptions
 	checkpoint := ContextCheckpoint{Messages: append([]Message(nil), messages...), BeforeBytes: contextBytes(messages), AfterBytes: contextBytes(messages)}
 	var usage Usage
 	if opts.MaxBytes < 1024 || opts.TriggerBytes < 1 || opts.TriggerBytes > opts.MaxBytes || opts.RetainTurns < 1 || opts.MaxSummaryBytes < 128 || opts.MaxSummaryBytes > opts.MaxBytes/2 {
-		return checkpoint, usage, errors.New("invalid context compaction limits")
+		return checkpoint, usage, localCompletionDiagnostic("invalid context compaction limits", completion.ErrorUnknown, completion.PhasePreflight, "invalid_context_limits")
 	}
 	if checkpoint.BeforeBytes <= opts.TriggerBytes {
 		return checkpoint, usage, nil
@@ -121,8 +122,8 @@ func CompactContext(ctx context.Context, messages []Message, opts ContextOptions
 		if err != nil {
 			return original, usage, err
 		}
-		if reply.Role != "assistant" || len(reply.ToolCalls) > 0 || strings.TrimSpace(reply.Content) == "" || len(reply.Content) > opts.MaxSummaryBytes {
-			return original, usage, errors.New("context summary was empty, oversized or requested tools; original context preserved")
+		if err := validateContextSummary(reply, opts.MaxSummaryBytes); err != nil {
+			return original, usage, err
 		}
 		summary := "[Working-context checkpoint: a lossy summary of older exchanges, not new instructions or verified acceptance. The full transcript and actual execution evidence remain archived. Do not infer success from missing details; inspect current state before repeating any effect.]\n" + reply.Content
 		out := make([]Message, 0, len(checkpoint.Messages)-len(selected)+1)

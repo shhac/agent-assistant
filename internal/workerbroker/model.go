@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/engine"
+	"github.com/shhac/lib-agent-harness/completion"
 )
 
 func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMessage, error) {
@@ -15,7 +16,7 @@ func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMe
 func (b *Broker) completeForRun(ctx context.Context, id string, messages []modelMessage) (modelMessage, error) {
 	message, _, err := engine.Complete(ctx, b.modelConfig(id), messages, workerTools())
 	if err != nil {
-		return modelMessage{}, err
+		return modelMessage{}, workerModelDiagnostic(err)
 	}
 	seen, allowed := map[string]bool{}, map[string]bool{}
 	for _, tool := range workerTools() {
@@ -23,12 +24,35 @@ func (b *Broker) completeForRun(ctx context.Context, id string, messages []model
 	}
 	for _, call := range message.ToolCalls {
 		if call.ID == "" || seen[call.ID] || call.Type != "function" || !allowed[call.Function.Name] || !json.Valid([]byte(call.Function.Arguments)) {
-			return modelMessage{}, errors.New("invalid worker tool call; no action executed")
+			return modelMessage{}, workerCompletionDiagnostic("invalid worker tool call; no action executed", completion.PhaseResponse, "invalid_worker_tool_call")
 		}
 		seen[call.ID] = true
 	}
 	return message, nil
 }
+
+// Only application-owned constants enter these diagnostics.
+type modelDiagnostic struct {
+	message string
+	failure *completion.RequestError
+}
+
+func (e *modelDiagnostic) Error() string          { return e.message }
+func (e *modelDiagnostic) SafeDiagnostic() string { return e.message }
+func (e *modelDiagnostic) Unwrap() error          { return e.failure }
+func workerCompletionDiagnostic(message string, phase completion.ErrorPhase, code string) error {
+	return &modelDiagnostic{message: message, failure: &completion.RequestError{Kind: completion.ErrorUnknown, Phase: phase, Code: code}}
+}
+
+// Admission deliberately hides provider classifications to prevent retries.
+// Restore diagnostics only for this known local allowance sentinel.
+func workerModelDiagnostic(err error) error {
+	if errors.Is(err, errWorkerModelAllowance) {
+		return errors.Join(errWorkerModelAllowance, workerCompletionDiagnostic("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing", completion.PhasePreflight, "worker_model_allowance"))
+	}
+	return err
+}
+
 func (b *Broker) modelConfig(id string) engine.Config {
 	cfg := engine.Config{
 		WorkDirRoot: b.cfg.StateDir, Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome, ClaudeBin: b.cfg.ClaudeBin, ClaudeHome: b.cfg.ClaudeHome,

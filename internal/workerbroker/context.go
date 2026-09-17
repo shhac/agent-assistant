@@ -5,9 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 
 	"github.com/shhac/agent-assistant/internal/engine"
+	"github.com/shhac/lib-agent-harness/completion"
 )
 
 func transcriptDigest(messages []modelMessage) string {
@@ -52,7 +52,7 @@ func (b *Broker) prepareContext(ctx context.Context, id string) ([]modelMessage,
 		return engine.Complete(ctx, cfg, input, nil)
 	})
 	if err != nil {
-		return nil, err
+		return nil, workerModelDiagnostic(err)
 	}
 	if !checkpoint.Compacted {
 		raw, _ := json.Marshal(messages)
@@ -62,13 +62,13 @@ func (b *Broker) prepareContext(ctx context.Context, id string) ([]modelMessage,
 		return messages, nil
 	}
 	if len(checkpoint.Messages) == 0 || checkpoint.Messages[0].Role != "system" || checkpoint.Messages[0].Content != workerPrompt(run.Request) {
-		return nil, errors.New("worker contract was not preserved during context compaction")
+		return nil, workerCompletionDiagnostic("worker contract was not preserved during context compaction", completion.PhaseResponse, "worker_contract_changed")
 	}
 	through := len(run.Transcript)
 	digest := transcriptDigest(run.Transcript)
 	if err = b.update(id, func(current *storedRun) error {
 		if len(current.Transcript) < through || transcriptDigest(current.Transcript[:through]) != digest {
-			return errors.New("worker context changed during compaction; original history retained")
+			return workerCompletionDiagnostic("worker context changed during compaction; original history retained", completion.PhaseResponse, "worker_context_changed")
 		}
 		current.WorkingContext = append([]modelMessage(nil), checkpoint.Messages[1:]...)
 		current.ContextThrough = through

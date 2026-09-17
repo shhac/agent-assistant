@@ -14,11 +14,13 @@ import (
 
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/core"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/connections"
 )
 
 type App struct {
+	Diagnostics      *diagnostics.Logger // Set before starting the daemon.
 	workerDiscover   func(context.Context, engine.Config) ([]engine.ModelOption, error)
 	workerUsage      workerUsageMeter
 	loadingComplete  func(context.Context, engine.Config, []engine.Message, []engine.Tool) (engine.Message, engine.Usage, error)

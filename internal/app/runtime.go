@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/core"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	linearapi "github.com/shhac/agent-assistant/internal/integrations/linear"
 	slackapi "github.com/shhac/agent-assistant/internal/integrations/slack"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
@@ -36,6 +37,7 @@ func (a *App) Run(ctx context.Context, noDispatch bool) error {
 	go func() {
 		defer listeners.Done()
 		if err := a.RunChatQueue(ctx); err != nil && ctx.Err() == nil {
+			a.Diagnostics.Failure(diagnostics.Event{Component: "daemon", Stage: "chat_queue"}, err)
 			a.Status("chat", "Conversation", "error", "The message queue stopped; restart the daemon to recover pending messages")
 		}
 	}()
@@ -76,6 +78,7 @@ func (a *App) Run(ctx context.Context, noDispatch bool) error {
 	_ = a.SyncLinear(ctx)
 	supervise := func() {
 		if err := a.tick(ctx, noDispatch); err != nil && ctx.Err() == nil {
+			a.Diagnostics.Failure(diagnostics.Event{Component: "daemon", Stage: "worker_supervision"}, err)
 			a.Status("workers", "Worker runtimes", "error", err.Error())
 		}
 		if slackClient != nil {

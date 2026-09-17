@@ -8,6 +8,7 @@ import (
 
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/core"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 	"github.com/shhac/agent-assistant/internal/managedworkers"
@@ -27,6 +28,7 @@ func (a *App) managedWorkers() (managedWorkerService, error) {
 		if err != nil {
 			return nil, err
 		}
+		manager.Diagnostics = a.Diagnostics
 		a.managed = manager
 	}
 	return a.managed, nil
@@ -87,6 +89,7 @@ func (a *App) PrepareWorker(ctx context.Context, projectID, workspace string) (c
 		preflight = checkWorkerModel
 	}
 	if err := preflight(ctx, workerModel(cfg, profile)); err != nil {
+		a.Diagnostics.Failure(diagnostics.Event{Component: "worker", Stage: "model_setup", ProjectID: projectID, Engine: workerModel(cfg, profile).Engine}, err)
 		return config.Worker{}, err
 	}
 	manager, err := a.managedWorkers()
@@ -94,6 +97,7 @@ func (a *App) PrepareWorker(ctx context.Context, projectID, workspace string) (c
 		return config.Worker{}, err
 	}
 	if _, err = manager.Prepare(ctx, project.ID, workspace, workerModel(cfg, profile)); err != nil {
+		a.Diagnostics.Failure(diagnostics.Event{Component: "worker", Stage: "runtime_setup", ProjectID: projectID}, err)
 		return config.Worker{}, err
 	}
 	cfg = a.Config()

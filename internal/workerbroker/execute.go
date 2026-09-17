@@ -26,6 +26,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 			removeErr := reconcileContainer(cleanupCtx, b.cfg.Command, r)
 			stop()
 			if removeErr != nil {
+				b.reportFailure(id, "container_cleanup", removeErr)
 				b.cleanupUncertain(id, "Container cleanup could not be confirmed; execution capacity remains reserved until restart reconciliation")
 				return
 			}
@@ -39,6 +40,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 			var artifactErr error
 			evidence, artifactErr = b.artifacts(current)
 			if artifactErr != nil {
+				b.reportFailure(id, "artifact_collection", artifactErr)
 				_ = b.update(id, func(run *storedRun) error {
 					if run.PendingStatus == "paused" {
 						run.PendingSummary += ". Artifact collection failed; inspect the preserved workspace before continuing"
@@ -63,10 +65,12 @@ func (b *Broker) execute(parent context.Context, id string) {
 		workDir := filepath.Join(b.cfg.StateDir, "runs", id, "workspace")
 		baseline, copyErr := copyWorkspace(b.cfg.Workspace, workDir)
 		if copyErr != nil {
+			b.reportFailure(id, "workspace_copy", copyErr)
 			b.terminal(id, "interrupted", copyErr.Error())
 			return
 		}
 		if dependencyErr := b.prepareRunDependencies(ctx, workDir); dependencyErr != nil {
+			b.reportFailure(id, "dependency_preparation", dependencyErr)
 			b.terminal(id, "interrupted", dependencyErr.Error())
 			return
 		}
@@ -83,6 +87,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 	stop()
 	containerCreated = true
 	if err != nil {
+		b.reportFailure(id, "container_start", err)
 		b.terminal(id, "interrupted", "Could not establish the isolated worker container; no host commands were executed")
 		return
 	}
@@ -106,11 +111,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 			if b.pauseRequested(id) {
 				return
 			}
-			if errors.Is(contextErr, errWorkerModelAllowance) {
-				b.terminal(id, "blocked", contextErr.Error())
-			} else {
-				b.modelFailure(id, contextErr)
-			}
+			b.modelFailureAt(id, "context_preparation", contextErr)
 			return
 		}
 		reply, modelErr := b.completeForRun(ctx, id, messages)
@@ -118,11 +119,7 @@ func (b *Broker) execute(parent context.Context, id string) {
 			if b.pauseRequested(id) {
 				return
 			}
-			if errors.Is(modelErr, errWorkerModelAllowance) {
-				b.terminal(id, "blocked", modelErr.Error())
-			} else {
-				b.modelFailure(id, modelErr)
-			}
+			b.modelFailure(id, modelErr)
 			return
 		}
 		b.clearProviderFailure(id)

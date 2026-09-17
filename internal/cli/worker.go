@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/workerbroker"
 	"github.com/spf13/cobra"
 )
@@ -54,7 +55,7 @@ func registerWorker(root *cobra.Command, o *options) {
 			return err
 		}
 		defer listener.Close()
-		broker, err := workerbroker.New(workerbroker.Config{StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, Engine: profile.Engine, Effort: profile.Effort, CodexBin: profile.CodexBin, CodexHome: profile.CodexHome, ClaudeBin: profile.ClaudeBin, ClaudeHome: profile.ClaudeHome, ModelEndpoint: strings.TrimRight(profile.BaseURL, "/") + "/chat/completions", Model: profile.Model, APIKeyEnv: profile.APIKeyEnv, TokenEnv: tokenEnv, MaxTurns: turns, MaxOutputTokens: profile.MaxTokens, MaxConcurrent: concurrency})
+		broker, err := workerbroker.New(workerbroker.Config{Diagnostics: diagnostics.New(cmd.ErrOrStderr()), StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, Engine: profile.Engine, Effort: profile.Effort, CodexBin: profile.CodexBin, CodexHome: profile.CodexHome, ClaudeBin: profile.ClaudeBin, ClaudeHome: profile.ClaudeHome, ModelEndpoint: strings.TrimRight(profile.BaseURL, "/") + "/chat/completions", Model: profile.Model, APIKeyEnv: profile.APIKeyEnv, TokenEnv: tokenEnv, MaxTurns: turns, MaxOutputTokens: profile.MaxTokens, MaxConcurrent: concurrency})
 		if err != nil {
 			return err
 		}

@@ -43,6 +43,10 @@ const evidencePhrases: Record<string, string> = {
     "The failure did not arrive as a provider error envelope, so no phase or provider code was available to record.",
   unclassified_kind:
     "The provider returned an error whose classification is not one this daemon recognises, so it was recorded as unknown rather than guessed at.",
+  application_validation:
+    "The daemon rejected a model response during local validation. The summary and diagnostic code describe what failed.",
+  local_process:
+    "The local CLI process failed. The technical details record the available process evidence; a provider rejection was not established.",
   local_preflight:
     "This was measured by the daemon before the request was sent, not reported by the provider.",
 };

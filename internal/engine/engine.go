@@ -280,7 +280,11 @@ func (e *Engine) Chat(ctx context.Context, req Request) (Result, error) {
 func Complete(ctx context.Context, cfg Config, messages []Message, tools []Tool) (Message, Usage, error) {
 	e, err := New(cfg, ExecutorFunc(func(context.Context, string, json.RawMessage) (any, error) { return nil, errors.New("no executor") }))
 	if err != nil {
-		return Message{}, Usage{}, err
+		failure := localCompletionDiagnostic("invalid model completion configuration", completion.ErrorUnknown, completion.PhasePreflight, "invalid_model_configuration")
+		if errors.Is(err, ErrNotConfigured) {
+			return Message{}, Usage{}, errors.Join(ErrNotConfigured, failure)
+		}
+		return Message{}, Usage{}, failure
 	}
 	return e.completeWithTools(ctx, messages, tools)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/shhac/agent-assistant/internal/app"
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/core"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -58,6 +59,7 @@ func registerServe(root *cobra.Command, o *options) {
 		}
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		o.diagnostics = diagnostics.New(cmd.ErrOrStderr())
 		return serve(ctx, o, cfg, demo, open, noDispatch)
 	}}
 	cmd.Flags().StringVar(&addr, "http", "", "Local dashboard address (loopback only)")
@@ -112,6 +114,7 @@ func serve(ctx context.Context, o *options, cfg config.Config, demo, open, noDis
 		appConfigPath = filepath.Join(o.runtimeDir(), "demo-config.json")
 	}
 	a := app.New(service, cfg, appConfigPath, demo)
+	a.Diagnostics = o.diagnostics
 	if noDispatch {
 		a.SetNoDispatch()
 	}
@@ -147,7 +150,13 @@ func serve(ctx context.Context, o *options, cfg config.Config, demo, open, noDis
 	go func() { errs <- httpServer.Serve(listener) }()
 	loopCtx := ctx
 	done := make(chan struct{})
-	go func() { defer close(done); a.Run(loopCtx, noDispatch) }()
+	loopErrors := make(chan error, 1)
+	go func() {
+		defer close(done)
+		err := a.Run(loopCtx, noDispatch)
+		a.Diagnostics.Failure(diagnostics.Event{Component: "daemon", Stage: "supervision_loop"}, err)
+		loopErrors <- err
+	}()
 	_ = o.emit(map[string]any{"url": url, "state": o.statePath, "demo": demo, "login": "agent-assistant --state " + o.statePath + " dashboard open"})
 	if open {
 		if err := openDashboard(o, false); err != nil {
@@ -157,6 +166,7 @@ func serve(ctx context.Context, o *options, cfg config.Config, demo, open, noDis
 	var serveErr error
 	select {
 	case <-ctx.Done():
+	case serveErr = <-loopErrors:
 	case serveErr = <-errs:
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil

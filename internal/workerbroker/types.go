@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
@@ -21,7 +22,8 @@ type DependencyMount struct {
 }
 
 type Config struct {
-	Dependencies []DependencyMount `json:"-"`
+	Diagnostics  *diagnostics.Logger `json:"-"`
+	Dependencies []DependencyMount   `json:"-"`
 
 	StateDir        string
 	Workspace       string

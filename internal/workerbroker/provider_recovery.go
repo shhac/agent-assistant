@@ -21,6 +21,7 @@ type classifiedFailure struct {
 	kind            completion.ErrorKind
 	evidence        string
 	contextPressure bool
+	message         string
 }
 
 func classifyModelFailure(err error) classifiedFailure {
@@ -33,7 +34,17 @@ func classifyModelFailure(err error) classifiedFailure {
 			kind = failure.Kind
 		}
 	}
-	out := classifiedFailure{failure: failure, kind: kind, evidence: failureEvidence(failure, kind)}
+	out := classifiedFailure{failure: failure, kind: kind, evidence: failureEvidence(failure, kind), message: (&completion.RequestError{Kind: kind}).Error()}
+	if failure != nil {
+		out.message = failure.Error()
+	}
+	var safe interface{ SafeDiagnostic() string }
+	if errors.As(err, &safe) {
+		out.message = safe.SafeDiagnostic()
+		if failure != nil && failure.Phase == completion.PhaseResponse {
+			out.evidence = evidenceApplication
+		}
+	}
 	if errors.Is(err, engine.ErrContextPressure) {
 		out.kind, out.evidence, out.contextPressure = completion.ErrorContextLimit, evidenceLocalPreflight, true
 	}
@@ -44,6 +55,11 @@ func classifyModelFailure(err error) classifiedFailure {
 // completion never executed tools. Earlier acknowledged operations remain in
 // Transcript and must not be replayed. The daemon admits every retry.
 func (b *Broker) modelFailure(id string, err error) {
+	b.modelFailureAt(id, "model_completion", err)
+}
+
+func (b *Broker) modelFailureAt(id, stage string, err error) {
+	defer b.reportFailure(id, stage, err)
 	var failure *completion.RequestError
 	if errors.As(err, &failure) && failure.Retryable() {
 		b.scheduleProviderRetry(id, failure)
@@ -67,7 +83,7 @@ func (b *Broker) blockOnModelFailure(id string, cls classifiedFailure) {
 		}
 		r.Run.RetryAt = time.Time{}
 		r.PendingStatus = "blocked"
-		r.PendingSummary = (&completion.RequestError{Kind: cls.kind}).Error() + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
+		r.PendingSummary = cls.message + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
 		r.Run.Summary = "Finalizing isolated execution and collecting evidence"
 		r.Run.UpdatedAt = now()
 		return nil
@@ -158,11 +174,19 @@ const (
 	evidenceUntyped        = "untyped_error"
 	evidenceUnclassified   = "unclassified_kind"
 	evidenceLocalPreflight = "local_preflight"
+	evidenceLocalProcess   = "local_process"
+	evidenceApplication    = "application_validation"
 )
 
 func failureEvidence(failure *completion.RequestError, kind completion.ErrorKind) string {
 	if failure == nil {
 		return evidenceUntyped
+	}
+	if failure.Phase == completion.PhasePreflight {
+		return evidenceLocalPreflight
+	}
+	if failure.Phase == completion.PhaseProcess {
+		return evidenceLocalProcess
 	}
 	if kind == completion.ErrorUnknown && failure.Kind != completion.ErrorUnknown {
 		return evidenceUnclassified

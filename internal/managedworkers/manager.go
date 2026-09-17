@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 	"github.com/shhac/agent-assistant/internal/statepath"
 	"github.com/shhac/agent-assistant/internal/workerbroker"
@@ -55,6 +56,8 @@ type running struct {
 }
 
 type Manager struct {
+	// Diagnostics is set before the manager is used; nil writes to stderr.
+	Diagnostics  *diagnostics.Logger
 	root         string
 	mu           sync.Mutex
 	ctx          context.Context
@@ -191,7 +194,7 @@ func (m *Manager) client(ctx context.Context, projectID, workspace string, model
 			return local.docker(ctx, m.root, saved.Environment.Socket, args, input)
 		})
 	}
-	b, err := m.open(workerbroker.Config{Command: command, Dependencies: mounts, StateDir: brokerDir, Workspace: canonical, ProjectID: projectID, Image: saved.Environment.Image, DockerSocket: saved.Environment.Socket, AuthToken: token, Engine: model.Engine, Model: model.Model, Effort: model.Effort, CodexBin: model.CodexBin, CodexHome: model.CodexHome, ClaudeBin: model.ClaudeBin, ClaudeHome: model.ClaudeHome, ModelEndpoint: strings.TrimRight(model.BaseURL, "/") + "/chat/completions", APIKeyEnv: model.APIKeyEnv, MaxOutputTokens: model.MaxTokens})
+	b, err := m.open(workerbroker.Config{Diagnostics: m.Diagnostics, Command: command, Dependencies: mounts, StateDir: brokerDir, Workspace: canonical, ProjectID: projectID, Image: saved.Environment.Image, DockerSocket: saved.Environment.Socket, AuthToken: token, Engine: model.Engine, Model: model.Model, Effort: model.Effort, CodexBin: model.CodexBin, CodexHome: model.CodexHome, ClaudeBin: model.ClaudeBin, ClaudeHome: model.ClaudeHome, ModelEndpoint: strings.TrimRight(model.BaseURL, "/") + "/chat/completions", APIKeyEnv: model.APIKeyEnv, MaxOutputTokens: model.MaxTokens})
 	if err != nil {
 		return nil, fmt.Errorf("prepare project worker: %w", err)
 	}
@@ -210,8 +213,17 @@ func (m *Manager) client(ctx context.Context, projectID, workspace string, model
 	server := &http.Server{Handler: b.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	r := &running{client: c, workspace: canonical, directory: dir, model: model, cancel: runCancel, server: server, done: make(chan struct{}), broker: b}
 	m.running[projectID] = r
-	go func() { _ = server.Serve(listener) }()
-	go func() { r.err = b.Run(runCtx); close(r.done) }()
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			m.Diagnostics.Failure(diagnostics.Event{Component: "worker", Stage: "broker_http", ProjectID: projectID}, err)
+			runCancel()
+		}
+	}()
+	go func() {
+		r.err = b.Run(runCtx)
+		m.Diagnostics.Failure(diagnostics.Event{Component: "worker", Stage: "broker_runtime", ProjectID: projectID}, r.err)
+		close(r.done)
+	}()
 	return c, nil
 }
 func saveManifest(dir string, m manifest) error {

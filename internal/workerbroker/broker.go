@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	"os"
 	"path/filepath"
@@ -208,7 +209,12 @@ func uid() string {
 	}
 	return hex.EncodeToString(raw[:])
 }
-func (b *Broker) saveLocked() error {
+func (b *Broker) saveLocked() (saveErr error) {
+	defer func() {
+		if saveErr != nil {
+			b.cfg.Diagnostics.Failure(diagnostics.Event{Component: "worker", Stage: "state_persistence", ProjectID: b.cfg.ProjectID}, saveErr)
+		}
+	}()
 	if b.persistenceErr != nil {
 		return errors.New("worker persistence is unavailable; restart before accepting new work")
 	}

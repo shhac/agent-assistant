@@ -18,6 +18,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/shhac/agent-assistant/internal/config"
+	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	libcli "github.com/shhac/lib-agent-cli/cli"
 	_ "github.com/shhac/lib-agent-cli/yaml"
@@ -26,6 +27,7 @@ import (
 )
 
 type options struct {
+	diagnostics           *diagnostics.Logger
 	configPath, statePath string
 	globals               *libcli.Globals
 }

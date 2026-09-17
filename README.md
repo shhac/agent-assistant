@@ -249,6 +249,25 @@ configured model and login.
 See the [context and recovery decision](design-docs/decisions/2026-09-context-and-provider-recovery.md)
 for exact bounds and the distinction from native CLI session compaction.
 
+## Worker diagnostics
+
+`agent-assistant serve` and `agent-assistant worker serve` write structured NDJSON
+errors to stderr through `lib-agent-output`. Each record includes the failing
+stage, project/run IDs where available, engine, diagnostic code, observed exit
+status, model-call count, context bytes, and any scheduled retry time. Capture
+stderr alongside your usual launch command with `2>agent-assistant-errors.ndjson`.
+No debug flag is needed. Supervision, persistence, container startup/cleanup and
+artifact collection failures also emit diagnostics; a stopped supervision loop
+causes the daemon to shut down rather than leave a connected but idle dashboard.
+
+Local capability checks, context-summary validation and provider request failures
+have distinct codes. Safe explanations are retained in worker state for the
+dashboard and assistant. Unknown errors include their Go wrapper types, not raw
+error text. Prompts, tool output, credentials and provider stderr are never copied
+into these logs. Historical failures cannot acquire detail that was discarded by
+an earlier version; new diagnostics apply to subsequent attempts. Logging never
+resumes a worker or changes retry eligibility.
+
 ## Development
 
 ```sh
