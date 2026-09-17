@@ -27,16 +27,28 @@ import (
 func standaloneAdmission(cfg config.Config, profile config.Model, meter *quota.Meter) func(context.Context) error {
 	return func(ctx context.Context) error {
 		policy := cfg.Limits.WorkerUsage
+		// An engine with no local subscription meter is unmeasured, not exempt:
+		// it follows the same unavailable-usage policy the daemon applies, so
+		// choosing "pause" means nothing runs unmeasured either way.
+		unmeasured := func(reason string) error {
+			if policy.OnUnavailable != "pause" {
+				return nil
+			}
+			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, OwnerAction: true, Reason: "Worker paused: " + reason + ", and the configured policy is to pause when usage cannot be measured"}}
+		}
 		threshold, supported := quota.Threshold(policy, profile.Engine)
-		if !supported || threshold == 0 {
+		if !supported {
+			return unmeasured("subscription usage is unavailable for the " + profile.Engine + " engine")
+		}
+		if threshold == 0 {
 			return nil
 		}
 		verdict := quota.Evaluate(meter.Read(ctx, profile), profile, threshold, time.Now())
 		if verdict.Held {
 			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Worker paused: " + verdict.Detail, ResetsAt: verdict.ResetsAt, NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}}
 		}
-		if !verdict.Known && policy.OnUnavailable == "pause" {
-			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, OwnerAction: true, Reason: "Worker paused: fresh subscription usage is unavailable for " + profile.Engine + " and the configured policy is to pause when it cannot be measured"}}
+		if !verdict.Known {
+			return unmeasured("fresh subscription usage is unavailable for " + profile.Engine)
 		}
 		return nil
 	}
