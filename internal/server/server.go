@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,8 +37,29 @@ func New(a *app.App, auth *Auth) http.Handler {
 		respond(w, 200, struct {
 			core.Snapshot
 			Attention []core.ProjectAttention `json:"attention"`
+			Artifacts map[string]string       `json:"artifacts"`
 			Demo      bool                    `json:"demo"`
-		}{s, core.DeriveAttention(s), a.Demo})
+		}{s, core.DeriveAttention(s), a.ArtifactLinks(s), a.Demo})
+	})
+	// The path segment after the token is a download name only. It never takes
+	// part in resolution, so it cannot be used to reach another file.
+	mux.HandleFunc("GET /api/artifacts/{token}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s, err := a.Snapshot(r.Context())
+		if err != nil {
+			problem(w, err)
+			return
+		}
+		name, file, size, err := a.OpenArtifact(s, r.PathValue("token"))
+		if err != nil {
+			fail(w, 404, "artifact not found")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))
+		w.WriteHeader(200)
+		_, _ = io.Copy(w, file)
 	})
 	mux.HandleFunc("POST /api/operations/{id}/acknowledge", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

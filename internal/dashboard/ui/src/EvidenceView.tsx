@@ -5,6 +5,11 @@ import {
   splitLiteral,
 } from "./evidence";
 
+function basename(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? path : path.slice(at + 1);
+}
+
 /** Recognises the artifact path at the end of an artifact evidence line. */
 function artifactParts(text: string): { label: string; path: string } {
   const at = text.indexOf(": ");
@@ -21,9 +26,12 @@ function artifactParts(text: string): { label: string; path: string } {
 export function EvidenceView({
   evidence,
   accepted,
+  artifacts = {},
 }: {
   evidence: string[];
   accepted: boolean;
+  /** Paths the daemon will serve, by opaque token. */
+  artifacts?: Record<string, string>;
 }) {
   if (!evidence.length)
     return <p className="muted">No evidence reported yet.</p>;
@@ -49,10 +57,20 @@ export function EvidenceView({
               {lines.map((line, i) => {
                 if (group === "artifacts") {
                   const { label, path } = artifactParts(line.text);
+                  const token = artifacts[path];
                   return (
                     <li key={i} className="evidence-artifact">
                       <span>{label}</span>
-                      <code title={path}>{path || line.text}</code>
+                      {token ? (
+                        <a
+                          href={`/api/artifacts/${token}/${encodeURIComponent(basename(path))}`}
+                          download={basename(path)}
+                        >
+                          Download {basename(path)}
+                        </a>
+                      ) : (
+                        <code title={path}>{path || line.text}</code>
+                      )}
                     </li>
                   );
                 }

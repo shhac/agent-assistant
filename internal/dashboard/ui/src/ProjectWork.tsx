@@ -503,6 +503,7 @@ function WorkCard({
           <EvidenceView
             evidence={displayedEvidence}
             accepted={!!acceptanceCurrent}
+            artifacts={state.artifacts}
           />
         </div>
       </div>

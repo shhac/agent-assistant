@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -228,5 +229,105 @@ func TestCorrectMemoryReportsRefusalsToTheOwner(t *testing.T) {
 	_ = json.Unmarshal(call("GET", "/api/state", "").Body.Bytes(), &state)
 	if len(state.Memories) != 2 {
 		t.Fatalf("expected the original and its replacement, got %d", len(state.Memories))
+	}
+}
+
+// The dashboard downloads an artifact by token. The route must stay behind
+// owner access, must not accept a path, and must not let the name segment
+// steer resolution.
+func TestArtifactDownloadRequiresAccessAndAToken(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	store, err := core.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := core.NewService(store, cfg)
+	a := app.New(s, cfg, filepath.Join(dir, "config.json"), false)
+	auth, _ := NewAuth(dir, "http://127.0.0.1:8340", "", nil)
+	h := New(a, auth)
+
+	artifacts := filepath.Join(s.StateDirectory(), "runs", "run-1", "artifacts")
+	if err := os.MkdirAll(artifacts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	patch := filepath.Join(artifacts, "changes.patch")
+	if err := os.WriteFile(patch, []byte("diff --git a/a b/a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token := a.ArtifactLinks(core.Snapshot{Agents: []core.Agent{{ID: "a1", Evidence: []string{"Patch: " + patch}}}})[patch]
+	if token == "" {
+		t.Fatal("no token minted")
+	}
+
+	get := func(path string, authorized bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "http://127.0.0.1:8340"+path, nil)
+		r.RemoteAddr = "127.0.0.1:4321"
+		if authorized {
+			r.Header.Set("Authorization", "Bearer "+auth.admin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	// Without owner access the route is closed like the rest of the API.
+	if got := get("/api/artifacts/"+token+"/changes.patch", false); got.Code != 401 {
+		t.Fatalf("unauthenticated download returned %d, want 401", got.Code)
+	}
+
+	// The daemon has no agent recording this evidence, so the link is not live.
+	if got := get("/api/artifacts/"+token+"/changes.patch", true); got.Code != 404 {
+		t.Fatalf("a token without live evidence returned %d, want 404", got.Code)
+	}
+
+	// With the evidence actually recorded, the same token downloads the file.
+	cfg.Workers = []config.Worker{{ID: "test", Name: "Builder", Endpoint: "http://127.0.0.1:9999", Capabilities: []string{"implement"}}}
+	if err := s.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	project, err := s.CreateProject(ctx, core.ProjectInput{Title: "Artifacts", Description: "d", AcceptanceCriteria: "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := s.Delegate(ctx, core.DelegateInput{ProjectID: project.ID, ProfileID: "test", Role: "worker", Task: "Build", AcceptanceCriteria: "Reviewed", Capabilities: []string{"implement"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginDispatch(ctx, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDispatched(ctx, agent.ID, "external-"+agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAgent(ctx, agent.ID, core.AgentUpdate{Status: "completed", Summary: "done", Evidence: []string{"Patch: " + patch}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ok := get("/api/artifacts/"+token+"/changes.patch", true)
+	if ok.Code != 200 {
+		t.Fatalf("download returned %d: %s", ok.Code, ok.Body.String())
+	}
+	if ok.Body.String() != "diff --git a/a b/a\n" {
+		t.Fatalf("served %q", ok.Body.String())
+	}
+	if ct := ok.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("content type = %q; a served artifact must not be rendered inline", ct)
+	}
+	if cd := ok.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+		t.Fatalf("content disposition = %q, want an attachment", cd)
+	}
+
+	// The trailing segment is a download name; it cannot select another file.
+	if got := get("/api/artifacts/"+token+"/anything-else.txt", true); got.Code != 200 {
+		t.Fatalf("name segment affected resolution: %d", got.Code)
+	}
+	// A path is not a token.
+	for _, bad := range []string{"/api/artifacts/" + patch + "/changes.patch", "/api/artifacts/..%2f..%2fetc%2fpasswd/x", "/api/artifacts/deadbeef/changes.patch"} {
+		if got := get(bad, true); got.Code == 200 {
+			t.Fatalf("%s was served", bad)
+		}
 	}
 }

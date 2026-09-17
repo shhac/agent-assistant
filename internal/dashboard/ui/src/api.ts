@@ -205,6 +205,8 @@ export interface State {
   memories: Memory[];
   activity: Activity[];
   attention: ProjectAttention[];
+  /** Absolute artifact path to the opaque token that downloads it. */
+  artifacts: Record<string, string>;
   integrations: Integration[];
   paused: boolean;
   demo: boolean;
@@ -268,6 +270,7 @@ export function normalizeState(raw: Partial<State>): State {
     memories: raw.memories ?? [],
     activity: raw.activity ?? [],
     attention: raw.attention ?? [],
+    artifacts: raw.artifacts ?? {},
     integrations: raw.integrations ?? [],
     paused: raw.paused ?? false,
     demo: raw.demo ?? false,

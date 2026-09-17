@@ -517,3 +517,7 @@
 .queue-review .field-hint {
   margin: 4px 0 0;
 }
+.evidence-artifact a {
+  font-size: 11px;
+  color: var(--accent);
+}

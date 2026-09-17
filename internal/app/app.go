@@ -41,6 +41,7 @@ type App struct {
 	chatWaiters      sync.Map
 	chatInvoker      func(context.Context, engine.Config, engine.Request, engine.ToolExecutor) (engine.Result, error)
 	statuses         map[string]core.Integration
+	artifactKey      artifactSecret
 }
 
 func New(s *core.Service, cfg config.Config, path string, demo bool) *App {

@@ -111,4 +111,36 @@ describe("evidence", () => {
       "1 evidence record · acceptance not yet verified",
     );
   });
+
+  it("offers a download only for artifacts the daemon will serve", () => {
+    const patch = "/state/runs/run-1/artifacts/changes.patch";
+    render(
+      <EvidenceView
+        evidence={brokerEvidence}
+        accepted={false}
+        artifacts={{ [patch]: "a".repeat(64) }}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Download changes.patch" });
+    expect(link.getAttribute("href")).toBe(
+      `/api/artifacts/${"a".repeat(64)}/changes.patch`,
+    );
+    // The URL carries a token, never the path it stands for.
+    expect(link.getAttribute("href")).not.toContain("/state/");
+    // An artifact with no minted link stays plain text rather than guessing one.
+    expect(
+      screen.getByText("/state/runs/run-1/artifacts/commands.json"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "Download commands.json" }),
+    ).toBeNull();
+  });
+
+  it("shows paths as text when the daemon offers no links at all", () => {
+    render(<EvidenceView evidence={brokerEvidence} accepted={false} />);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(
+      screen.getByText("/state/runs/run-1/artifacts/changes.patch"),
+    ).toBeTruthy();
+  });
 });
