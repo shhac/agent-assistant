@@ -208,7 +208,7 @@ describe("attention resource waits", () => {
     show([
       {
         ...blocked,
-        execution: "usage_wait",
+        execution: "usage_decision",
         next_action: "owner",
         recovery: "held",
         reason: "Worker token budget reached",
@@ -218,5 +218,8 @@ describe("attention resource waits", () => {
       screen.getByRole("region", { name: "Work needing attention" }),
     ).toBeTruthy();
     expect(screen.getByText(/Worker token budget reached/)).toBeTruthy();
+    // Never a raw identifier, and never phrased as a failure.
+    expect(document.body.textContent).not.toContain("usage_decision");
+    expect(screen.getByText("Waiting for your resource decision")).toBeTruthy();
   });
 });

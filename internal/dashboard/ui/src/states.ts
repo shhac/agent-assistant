@@ -20,6 +20,7 @@ const labels: Record<string, string> = {
   resuming: "Resuming",
   retry_wait: "Waiting for the model provider",
   usage_wait: "Waiting for worker resources",
+  usage_decision: "Waiting for your resource decision",
   reconciling: "Checking worker state",
   completed: "Reported complete",
   // Shared
@@ -41,6 +42,7 @@ const details: Record<string, string> = {
   pause_requested: "Pause requested · waiting for current operation",
   stop_requested: "Stop requested · waiting for cleanup",
   usage_wait: "Waiting for worker resources · saved work is preserved",
+  usage_decision: "Waiting for you to change a worker resource limit",
 };
 
 export function stateLabel(state: string): string {

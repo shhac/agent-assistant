@@ -18,11 +18,14 @@ Go CLI and daemon for personal-assistant coordination. Dashboard is dark-mode-fi
   sessions are a different execution contract and must not silently replace
   constrained completion. Depend on published library versions, not local replaces.
 - Worker limits are resource limits: shared subscription headroom and an optional
-  per-assignment token budget, both admitted before every inference including
-  context summaries. Never reintroduce a cumulative turn, call or wall-clock cap
-  as work authority. A resource hold is a wait, not a failure: it preserves work,
-  spends no recovery allowance and carries no provider classification. Usage that
-  cannot be established is never counted as zero.
+  per-assignment token budget, both admitted before every model invocation
+  including context summaries. Never reintroduce a cumulative turn, call, command
+  or wall-clock cap as work authority, and do not add no-progress heuristics that
+  cannot distinguish repeated red tests from stuck work. A resource hold is a
+  wait, not a failure: it preserves work, spends no recovery allowance, carries no
+  provider classification and releases execution capacity. Usage that cannot be
+  established is never counted as zero, and unresolved accounting blocks further
+  requests rather than being assumed free.
 - Completion retries cover only explicit transient provider rejections, never whole
   turns or tools. Workers persist provider cooldown and re-enter through daemon
   admission; unknown/authentication/context failures remain blocked across restart.

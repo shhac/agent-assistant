@@ -68,7 +68,7 @@ export function Assignment({
           {agent.resource_hold_owner_action
             ? "Waiting for your decision about worker resources. Saved work and conversation are preserved."
             : resumesAt
-              ? `Waiting for the account allowance to reset at ${resumesAt}. Work continues by itself; nothing failed.`
+              ? `Waiting for worker resources; the provider reports its allowance resets around ${resumesAt}. Work continues by itself once the assistant next checks and the limit allows it; nothing failed.`
               : "Waiting for worker resources. Work continues by itself once they are available; nothing failed."}
         </p>
       )}

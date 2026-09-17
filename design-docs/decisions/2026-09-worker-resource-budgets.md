@@ -142,3 +142,55 @@ Read from the pinned module source rather than documentation:
 cost and its usage normalization; `session/session.go`, `session/options.go`,
 `session/types.go`, `session/telemetry.go`, `session/transport.go` for native
 session capabilities, telemetry and the fail-closed request boundary.
+
+## Review corrections, same day
+
+A review of the implementation found seven things this record should not be
+read as claiming, and they were fixed before publication.
+
+- A lifetime allowance of 128 commands per session survived the pass that
+  removed the call cap. It was the same kind of limit and was removed, leaving
+  per-command time and output containment as what bounds a command.
+- A consecutive-failing-turn safeguard was added and then removed. Repeated red
+  tests are ordinary progress, and the heuristic could not tell them apart from
+  genuinely stuck work. The daemon's existing stalled-progress escalation covers
+  the real case; nothing speculative replaced it.
+- A settlement that failed to persist was ignored, so a transient write failure
+  could erase consumption and still authorize the reply's tools and the next
+  request. The failure now reaches the caller ahead of the reply, and an open
+  reservation refuses further requests whether or not a budget is configured.
+- Negative or overflowing figures were clamped and stored as measured. They are
+  now recorded as unknown, because a repaired number cannot afterwards be told
+  apart from a real one.
+- Continuing an automatic wait keyed off the provider's published reset. That is
+  the provider's expectation about its window, not the earliest moment work can
+  resume — the owner may raise or disable the threshold. Continuation now honours
+  only the hold's stated next check, and admission re-reads policy and account
+  before anything restarts. A hold with no recognized kind or no stated next
+  check is not continued automatically at all.
+- Unavailable telemetry under a fail-closed policy was recorded as an owner
+  decision, which meant an outage never recovered on its own. It has its own
+  `telemetry_unavailable` kind, stays recheckable, and resumes by itself when
+  readings return. Budget and unestablished-usage holds still require an owner.
+- Two assignments waiting on resources in one project could let an automatic
+  wait take the attention row from a sibling that needed a decision. Owner
+  decisions now rank above automatic waits, and `core.PrepareOwnerControl`
+  accepts a resume from a resource hold — the control had been offered by the
+  dashboard while the durable API still refused it.
+
+Two claims in the first version of this document were also too strong.
+`BeforeRequest` gates one CLI invocation, which is the unit the daemon controls;
+a CLI or provider may make more than one upstream request inside it, so it is
+not a per-inference pre-billing gate and the overshoot is not bounded to one
+provider request. And a resource hold releases its execution slot, so the
+earlier note about one assignment holding a project's slot "for its whole life"
+applies only while it is actually executing.
+
+## External evidence consulted, review pass
+
+`lib-agent-harness` dropped reported usage on its failure paths: a rejected,
+abandoned or nonzero-exit invocation returned zero usage even when the CLI's
+terminal result stated what had been charged. Provider parsing belongs in that
+library, so the fix landed there — authoritative terminal reports are read on
+the failure paths, with absent, duplicated, malformed, negative and overflowing
+figures staying unknown.

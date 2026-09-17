@@ -76,8 +76,13 @@ describe("assignment resource waits", () => {
     });
     const card = screen.getByLabelText("Assignment for Garden builder");
     expect(card.className).not.toContain("needs-attention");
-    expect(screen.getByText(/Waiting for worker resources/)).toBeTruthy();
+    expect(screen.getAllByText(/Waiting for worker resources/).length).toBe(2);
     expect(screen.getByText(/continues by itself/)).toBeTruthy();
+    // A published reset is what the provider reports, not a promise about when
+    // this assignment resumes.
+    expect(
+      screen.getByText(/reports its allowance resets around/),
+    ).toBeTruthy();
     expect(screen.getByText(/128,000 tokens/)).toBeTruthy();
   });
 

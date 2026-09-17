@@ -336,7 +336,7 @@ function WorkerConversationPanel({
           {agent.resource_hold_owner_action
             ? "Waiting for your decision about worker resources. Saved work and conversation are preserved; nothing failed."
             : fullDateLabel(agent.resource_hold_resets_at)
-              ? `Waiting for the account allowance to reset after ${fullDateLabel(agent.resource_hold_resets_at)}. Work continues by itself; saved work is preserved.`
+              ? `Waiting for worker resources; the provider reports its allowance resets around ${fullDateLabel(agent.resource_hold_resets_at)}. Work continues by itself at the next check if the limit allows it; saved work is preserved.`
               : "Waiting for worker resources. Work continues by itself once they are available; saved work is preserved."}
         </p>
       )}
