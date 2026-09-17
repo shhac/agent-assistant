@@ -349,7 +349,21 @@ func continuable(run worker.Run) bool {
 		return !run.RetryAt.IsZero() && !time.Now().Before(run.RetryAt)
 	}
 	if run.Status == "usage_wait" {
-		return run.ResourceHold == nil || !run.ResourceHold.OwnerAction
+		if run.ResourceHold == nil {
+			return true
+		}
+		if run.ResourceHold.OwnerAction {
+			return false
+		}
+		// Continuing before the allowance can have recovered would start and
+		// stop a container for nothing. Wait for whichever the broker named
+		// later: its own next check, or the reset the provider reported. The
+		// owner can still resume by hand at any point.
+		next := run.ResourceHold.NextCheckAt
+		if run.ResourceHold.ResetsAt.After(next) {
+			next = run.ResourceHold.ResetsAt
+		}
+		return next.IsZero() || !time.Now().Before(next)
 	}
 	return false
 }

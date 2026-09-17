@@ -16,7 +16,7 @@ func usageWaitRun(kind string, ownerAction bool) worker.Run {
 		ID: "held-session", Status: "usage_wait", Summary: "Waiting for worker resources",
 		UpdatedAt:           time.Now().UTC(),
 		ControlCapabilities: []string{"pause", "resume", "stop"},
-		ResourceHold:        &worker.ResourceHold{Kind: kind, Reason: "Waiting for worker resources", OwnerAction: ownerAction, ResetsAt: time.Now().Add(time.Hour).UTC()},
+		ResourceHold:        &worker.ResourceHold{Kind: kind, Reason: "Waiting for worker resources", OwnerAction: ownerAction, ResetsAt: time.Now().Add(-time.Minute).UTC()},
 		Usage:               worker.Usage{InputTokens: 900, OutputTokens: 100, TokenBudget: 1000},
 	}
 }
@@ -170,5 +170,42 @@ func TestAttentionSeparatesOrdinaryWaitFromOwnerDecision(t *testing.T) {
 	rows = core.DeriveAttention(base)
 	if rows[0].NextAction != "owner" || rows[0].Recovery != "held" || rows[0].RecoveryAt != nil {
 		t.Fatalf("an owner decision was reported as an ordinary wait: %+v", rows[0])
+	}
+}
+
+// A reset the provider has already named is when the allowance actually comes
+// back. Continuing before then would start and stop a container for nothing.
+func TestResourceContinuationWaitsForTheReportedReset(t *testing.T) {
+	ctx := context.Background()
+	posts := 0
+	run := usageWaitRun(worker.HoldSubscriptionQuota, false)
+	run.ResourceHold.ResetsAt = time.Now().Add(time.Hour).UTC()
+	a, _ := runtimeFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			posts++
+			t.Error("continued before the allowance could have recovered")
+		}
+		writeRun(w, run)
+	})
+	ag := commission(t, a, "")
+	run.DispatchKey = ag.DispatchKey
+	a.Core.BeginDispatch(ctx, ag.ID)
+	a.Core.MarkDispatched(ctx, ag.ID, run.ID)
+	for i := 0; i < 3; i++ {
+		if err := a.tick(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, _ := a.Core.Snapshot(ctx)
+	if posts != 0 || snapshot.Agents[0].Status != "usage_wait" {
+		t.Fatalf("early continuation: posts=%d %+v", posts, snapshot.Agents[0])
+	}
+	// The owner is never made to wait for it: their own resume is available.
+	controls, err := a.AgentControls(ctx, ag.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !controls.Resume {
+		t.Fatal("owner cannot override the wait")
 	}
 }
