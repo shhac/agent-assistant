@@ -5,7 +5,6 @@ import {
   APIError,
   errorText,
   pendingDecisions,
-  type ChatToolEvent,
   type ChatTurn,
   type State,
 } from "./api";
@@ -13,6 +12,7 @@ import { ConversationMarkdown } from "./ConversationMarkdown";
 import { dateLabel, Icon } from "./ui";
 import { isHeldUp } from "./states";
 import { ChatQueue, type QueueHold } from "./ChatQueue";
+import { ToolActivity } from "./ToolActivity";
 import { fullDateLabel } from "./ui";
 import "./chat.css";
 type VisibleTurn = Omit<ChatTurn, "status"> & {
@@ -75,95 +75,6 @@ function delivery(turn: VisibleTurn) {
   }
 }
 /**
- * Tool activity, weighted by what still needs watching. Running and failed
- * operations stay visible; finished ones collapse into a count so a long
- * successful turn does not bury the reply it produced.
- */
-/**
- * Tool activity, weighted by what still needs watching.
- *
- * Anything unfinished stays visible wherever it sits. So does the newest step
- * while it is the most recent thing in the thread: collapsing it would hide
- * what just happened at the moment the owner is watching for it. Once a reply
- * arrives, that step joins the others.
- *
- * A single remaining step is shown rather than hidden behind a summary that
- * would cost a row and a click to save one row.
- */
-export function ToolActivity({
-  events,
-  live = false,
-}: {
-  events: ChatToolEvent[];
-  /** This turn is the most recent thing in the thread and has not replied. */
-  live?: boolean;
-}) {
-  const last = events[events.length - 1];
-  const tail = live && last?.status === "completed" ? last : undefined;
-  const settled = events.filter((e) => e.status === "completed" && e !== tail);
-  const notable = events.filter((e) => e.status !== "completed");
-  const collapse = settled.length > 1;
-  const visible = [
-    ...notable,
-    ...(collapse ? [] : settled),
-    ...(tail ? [tail] : []),
-  ];
-  return (
-    <div
-      className="chat-tools"
-      role="group"
-      aria-label="Assistant tool activity"
-    >
-      {collapse && (
-        <details className="chat-tools-settled">
-          <summary>{settled.length} steps completed</summary>
-          <ul>
-            {settled.map((event) => (
-              <ToolRow key={event.id} event={event} />
-            ))}
-          </ul>
-        </details>
-      )}
-      {!!visible.length && (
-        <ul>
-          {visible.map((event) => (
-            <ToolRow key={event.id} event={event} />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-function ToolRow({ event }: { event: ChatToolEvent }) {
-  return (
-    <li className={`chat-tool chat-tool-${event.status}`}>
-      <span className="chat-tool-marker" aria-hidden="true">
-        {event.status === "completed"
-          ? "✓"
-          : ["failed", "interrupted"].includes(event.status)
-            ? "!"
-            : ""}
-      </span>
-      <span className="chat-tool-description">
-        {event.label || "Using a tool"}
-        <small>
-          {event.status === "running"
-            ? "In progress"
-            : event.status === "completed"
-              ? "Completed"
-              : event.status === "interrupted"
-                ? "Outcome unconfirmed"
-                : "Failed"}
-        </small>
-      </span>
-      <details>
-        <summary>Tool details</summary>
-        <code>{event.tool}</code>
-      </details>
-    </li>
-  );
-}
-/**
  * What happened to one owner message: its delivery state, any recovery the
  * owner can choose, the assistant's tool activity and its working indicator.
  * Rendered for a message that has a turn; absent when it has none.
@@ -192,7 +103,7 @@ function TurnStatus({
   return (
     <div className="chat-turn-status">
       <span className="message-delivery">{delivery(turn)}</span>
-      {["queued", "waiting"].includes(turn.status) && (
+      {turn.status === "waiting" && (
         <button
           type="button"
           className="chat-turn-action"
@@ -323,7 +234,6 @@ export function ChatPanel({
   );
   const heldUp = state.attention.filter((a) => isHeldUp(a.execution));
   const running = turns.find((t) => t.status === "running");
-  const queueCount = turns.filter((t) => t.status === "queued").length;
   const eventSignature = turns
     .map(
       (t) =>
@@ -341,11 +251,11 @@ export function ChatPanel({
       try {
         const result = await api<{
           turns: ChatTurn[];
-          hold?: QueueHold | null;
-          revision?: number;
+          hold: QueueHold | null;
+          revision: number;
         }>("/api/chat/turns");
         if (stopped) return;
-        setQueue({ hold: result.hold ?? null, revision: result.revision ?? 0 });
+        setQueue({ hold: result.hold, revision: result.revision });
         const incoming = result.turns || [];
         incoming.forEach((t) => confirmed.current.add(t.id));
         if (
@@ -473,6 +383,9 @@ export function ChatPanel({
     const turn: VisibleTurn = {
       id: crypto.randomUUID(),
       message: submitted,
+      // The daemon has not seen this message yet, so it has no revision of its
+      // own; it gets one once the queue accepts it.
+      revision: 0,
       created_at: new Date().toISOString(),
       status: "waiting",
       events: [],
@@ -659,21 +572,11 @@ export function ChatPanel({
               messages. Keep this page open.
             </p>
           )}
-        {running && queueCount === 0 && (
-          <p className="chat-queue-summary">
-            You can keep writing · Each message gets its own reply.
-          </p>
-        )}
         <ChatQueue
-          turns={turns
-            .filter((t) => t.status === "queued")
-            .map((t) => ({
-              id: t.id,
-              message: t.message,
-              revision: t.revision ?? 0,
-            }))}
+          turns={turns.filter((t) => t.status === "queued")}
           revision={queue.revision}
           hold={queue.hold}
+          running={!!running}
           cancelling={cancelling}
           onCancel={(id) => {
             const turn = turns.find((t) => t.id === id);

@@ -1,17 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import { api, errorText } from "./api";
+import { api, errorText, type ChatTurn } from "./api";
 import { Icon } from "./ui";
 
-export interface QueuedTurn {
-  id: string;
-  message: string;
-  revision: number;
-}
+/** Only the fields the queue works with, taken from the turn itself. */
+export type QueuedTurn = Pick<ChatTurn, "id" | "message" | "revision">;
 
 export interface QueueHold {
   turn_id: string;
   reason: string;
   expires_at: string;
+}
+
+/** Moves one entry within an order, or returns the order unchanged. */
+export function moveItem(ids: string[], from: number, to: number): string[] {
+  if (
+    from < 0 ||
+    to < 0 ||
+    from >= ids.length ||
+    to >= ids.length ||
+    from === to
+  )
+    return ids;
+  const next = [...ids];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
 }
 
 /** Refreshed well inside the daemon's two-minute lease. */
@@ -33,6 +45,7 @@ export function ChatQueue({
   turns,
   revision,
   hold,
+  running,
   cancelling,
   onCancel,
   onChanged,
@@ -40,6 +53,8 @@ export function ChatQueue({
   turns: QueuedTurn[];
   revision: number;
   hold?: QueueHold | null;
+  /** A reply is in progress, so the owner can keep writing behind it. */
+  running?: boolean;
   cancelling?: Set<string>;
   onCancel?: (id: string) => void;
   onChanged: () => Promise<void> | void;
@@ -49,26 +64,48 @@ export function ChatQueue({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [order, setOrder] = useState<string[] | null>(null);
+  const [holding, setHolding] = useState<{ id: string; reason: string } | null>(
+    null,
+  );
   const dragging = useRef<string | null>(null);
+  const dropped = useRef(false);
   const held = useRef<string | null>(null);
 
-  // The lease is the daemon's, so it has to be refreshed while a change is open
-  // and released when it is not.
+  // Keyed on what is held, not on the queue array: the queue polls, so that
+  // array is rebuilt every second or so, and depending on it would release and
+  // retake the lease on every poll — leaving a window where the message being
+  // changed could start.
+  //
+  // Only work that spans time takes a lease. Moving with the buttons commits
+  // immediately against the queue revision, so the revision check already
+  // guarantees the order the owner saw; a lease would buy nothing.
+  const holdID = holding?.id;
+  const holdReason = holding?.reason;
   useEffect(() => {
-    const target = editing ?? (order ? turns[0]?.id : undefined);
-    if (!target) return;
-    const reason = editing ? "editing" : "reordering";
+    if (!holdID || !holdReason) return;
     let stopped = false;
+    const release = (id: string) =>
+      void api(`/api/chat/messages/${encodeURIComponent(id)}/hold`, {
+        method: "DELETE",
+      }).catch(() => {
+        /* The lease lapses on its own; a failed release is not the owner's problem. */
+      });
     const take = async () => {
-      if (stopped) return;
       try {
-        await api(`/api/chat/messages/${encodeURIComponent(target)}/hold`, {
+        await api(`/api/chat/messages/${encodeURIComponent(holdID)}/hold`, {
           method: "POST",
-          body: JSON.stringify({ reason }),
+          body: JSON.stringify({ reason: holdReason }),
         });
-        held.current = target;
+        // The lease may have been taken after this effect was torn down. Left
+        // alone it would hold the queue for its whole term with nobody
+        // refreshing or releasing it.
+        if (stopped) {
+          release(holdID);
+          return;
+        }
+        held.current = holdID;
       } catch (err) {
-        setError(errorText(err));
+        if (!stopped) setError(errorText(err));
       }
     };
     void take();
@@ -76,16 +113,11 @@ export function ChatQueue({
     return () => {
       stopped = true;
       clearInterval(timer);
-      const release = held.current;
+      const outstanding = held.current;
       held.current = null;
-      if (release)
-        void api(`/api/chat/messages/${encodeURIComponent(release)}/hold`, {
-          method: "DELETE",
-        }).catch(() => {
-          /* The lease lapses on its own; a failed release is not the owner's problem. */
-        });
+      if (outstanding) release(outstanding);
     };
-  }, [editing, order, turns]);
+  }, [holdID, holdReason]);
 
   const shown = order
     ? order
@@ -103,6 +135,7 @@ export function ChatQueue({
       });
       setEditing(null);
       setDraft("");
+      setHolding(null);
       await onChanged();
     } catch (err) {
       setError(errorText(err));
@@ -132,20 +165,23 @@ export function ChatQueue({
   function move(id: string, by: number) {
     const current = shown.map((t) => t.id);
     const from = current.indexOf(id);
-    const to = from + by;
-    if (from < 0 || to < 0 || to >= current.length) return;
-    const next = [...current];
-    next.splice(to, 0, ...next.splice(from, 1));
+    const next = moveItem(current, from, from + by);
+    if (next === current) return;
     setOrder(next);
     void commit(next);
   }
 
-  if (!turns.length) return null;
+  if (!turns.length)
+    return running ? (
+      <p className="chat-queue-summary">
+        You can keep writing · Each message gets its own reply.
+      </p>
+    ) : null;
   return (
     <section className="chat-queue" aria-label="Queued messages">
       <p className="chat-queue-summary">
         {turns.length} {turns.length === 1 ? "message" : "messages"} queued ·
-        Each gets its own reply.
+        Each message gets its own reply.
       </p>
       {hold && (
         <p className="chat-queue-held" role="status">
@@ -164,27 +200,42 @@ export function ChatQueue({
             key={turn.id}
             className="chat-queue-item"
             aria-label={`Queued message ${index + 1}`}
-            draggable={editing === null}
+            draggable={editing === null && !busy}
             onDragStart={() => {
               dragging.current = turn.id;
-              setOrder(shown.map((t) => t.id));
+              const current = shown.map((t) => t.id);
+              setOrder(current);
+              // A drag spans time, so it takes a lease. The move buttons do
+              // not: they commit at once against the queue revision, which
+              // already guarantees the order the owner saw.
+              if (current[0])
+                setHolding({ id: current[0], reason: "reordering" });
             }}
             onDragOver={(event) => {
               event.preventDefault();
               const from = dragging.current;
               if (!from || from === turn.id) return;
               const current = shown.map((t) => t.id);
-              const next = [...current];
-              next.splice(
-                current.indexOf(turn.id),
-                0,
-                ...next.splice(current.indexOf(from), 1),
+              setOrder(
+                moveItem(
+                  current,
+                  current.indexOf(from),
+                  current.indexOf(turn.id),
+                ),
               );
-              setOrder(next);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              dropped.current = true;
+              if (order) void commit(order);
             }}
             onDragEnd={() => {
               dragging.current = null;
-              if (order) void commit(order);
+              setHolding(null);
+              // A drag abandoned outside the list never drops. The owner did
+              // not choose that order, so it is not committed.
+              if (!dropped.current) setOrder(null);
+              dropped.current = false;
             }}
           >
             <span className="chat-queue-position" aria-hidden="true">
@@ -215,6 +266,7 @@ export function ChatQueue({
                     onClick={() => {
                       setEditing(null);
                       setDraft("");
+                      setHolding(null);
                     }}
                   >
                     Cancel
@@ -250,6 +302,7 @@ export function ChatQueue({
                     onClick={() => {
                       setEditing(turn.id);
                       setDraft(turn.message);
+                      setHolding({ id: turn.id, reason: "editing" });
                     }}
                   >
                     Edit

@@ -16,10 +16,16 @@ const turns = [
   { id: "c", message: "Then the third", revision: 0 },
 ];
 
-function mount(calls: { path: string; options?: RequestInit }[] = []) {
+function mount(
+  calls: { path: string; options?: RequestInit }[] = [],
+  reply: (path: string) => { status: number; body?: unknown } = () => ({
+    status: 200,
+  }),
+) {
   const fetch = vi.fn(async (path: string, options?: RequestInit) => {
     calls.push({ path, options });
-    return { ok: true, status: 200, json: async () => ({}) };
+    const { status, body } = reply(path);
+    return { ok: status < 400, status, json: async () => body ?? {} };
   });
   vi.stubGlobal("fetch", fetch);
   const onChanged = vi.fn(async () => {});
@@ -133,5 +139,87 @@ describe("queued messages", () => {
       <ChatQueue turns={[]} revision={0} onChanged={vi.fn()} />,
     );
     expect(container.innerHTML).toBe("");
+  });
+
+  // The queue polls, so this component re-renders with a fresh turns array
+  // every second or so. The hold must not be released and retaken on each one:
+  // that would leave a window where the message being edited could start.
+  it("keeps one hold across re-renders while editing", async () => {
+    const calls: { path: string; options?: RequestInit }[] = [];
+    const fetch = vi.fn(async (path: string, options?: RequestInit) => {
+      calls.push({ path, options });
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetch);
+    const { rerender } = render(
+      <ChatQueue turns={turns} revision={7} onChanged={vi.fn()} />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit message 2" }));
+    });
+    const holds = () =>
+      calls.filter(
+        (c) =>
+          c.path === "/api/chat/messages/b/hold" &&
+          c.options?.method === "POST",
+      ).length;
+    const releases = () =>
+      calls.filter(
+        (c) =>
+          c.path === "/api/chat/messages/b/hold" &&
+          c.options?.method === "DELETE",
+      ).length;
+    expect(holds()).toBe(1);
+
+    // Three polls' worth of fresh arrays carrying identical data.
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        rerender(
+          <ChatQueue
+            turns={turns.map((t) => ({ ...t }))}
+            revision={7}
+            onChanged={vi.fn()}
+          />,
+        );
+      });
+    }
+    expect(releases()).toBe(0);
+    expect(holds()).toBe(1);
+  });
+
+  // The 409 is the whole point of the revision scheme: a turn started while the
+  // owner was deciding. The displayed order must go back to the daemon's.
+  it("puts the queue back and says why when a reorder is refused", async () => {
+    mount([], (path) =>
+      path === "/api/chat/queue"
+        ? { status: 409, body: { error: "the queue changed since you saw it" } }
+        : { status: 200 },
+    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Move message 3 earlier" }),
+      );
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "the queue changed since you saw it",
+    );
+    const list = screen.getAllByRole("listitem");
+    expect(
+      list.map((li) => li.querySelector(".chat-queue-text")?.textContent ?? ""),
+    ).toEqual(["Do the first thing", "Then the second", "Then the third"]);
+  });
+
+  it("tells the owner when the queue could not be held", async () => {
+    mount([], (path) =>
+      path.endsWith("/hold")
+        ? { status: 409, body: { error: "another message is being changed" } }
+        : { status: 200 },
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit message 1" }));
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "another message is being changed",
+    );
   });
 });

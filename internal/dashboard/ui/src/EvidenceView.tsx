@@ -1,4 +1,6 @@
 import {
+  artifactLabelOf,
+  artifactPathOf,
   classifyEvidence,
   evidenceGroups,
   evidenceSummary,
@@ -8,14 +10,6 @@ import {
 function basename(path: string): string {
   const at = path.lastIndexOf("/");
   return at < 0 ? path : path.slice(at + 1);
-}
-
-/** Recognises the artifact path at the end of an artifact evidence line. */
-function artifactParts(text: string): { label: string; path: string } {
-  const at = text.indexOf(": ");
-  return at < 0
-    ? { label: text, path: "" }
-    : { label: text.slice(0, at), path: text.slice(at + 2) };
 }
 
 /**
@@ -56,7 +50,8 @@ export function EvidenceView({
             <ul>
               {lines.map((line, i) => {
                 if (group === "artifacts") {
-                  const { label, path } = artifactParts(line.text);
+                  const path = artifactPathOf(line.text);
+                  const label = artifactLabelOf(line.text);
                   const token = artifacts[path];
                   return (
                     <li key={i} className="evidence-artifact">

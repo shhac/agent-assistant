@@ -194,11 +194,13 @@ func TestReorderAgainstAStaleQueueIsRefused(t *testing.T) {
 			t.Fatalf("a reorder decided against a stale queue was applied: %v", err)
 		}
 	}
-	// Naming an unknown or duplicated turn is the same kind of refusal.
+	// An order that does not name the queued messages is malformed, not stale:
+	// refreshing will not make it work, so it is a different refusal.
 	v, _ = s.store.Snapshot(testContext)
-	for _, order := range [][]string{{"a", "b", "gone"}, {"a", "a", "b"}} {
-		if _, err := s.ReorderChat(testContext, order, v.ChatQueueRevision); !errors.Is(err, ErrConflict) {
-			t.Fatalf("accepted %v", order)
+	for _, order := range [][]string{{"a", "b", "gone"}, {"a", "a", "b"}, {"a", "b"}} {
+		_, err := s.ReorderChat(testContext, order, v.ChatQueueRevision)
+		if !errors.Is(err, ErrChatValidation) {
+			t.Fatalf("order %v was not reported as malformed: %v", order, err)
 		}
 	}
 	if got := queuedIDs(t, s); got[0] != "a" || got[1] != "b" || got[2] != "c" {
@@ -222,5 +224,75 @@ func TestReorderLeavesStartedTurnsAlone(t *testing.T) {
 	}
 	if got := queuedIDs(t, s); got[0] != "c" || got[1] != "b" {
 		t.Fatalf("queued order = %v", got)
+	}
+}
+
+// Cancelling changes the queued set, so an order decided before it must be
+// refused by the revision rather than relying on a length check to catch it.
+func TestCancellingMovesTheQueueRevision(t *testing.T) {
+	s := queueFixture(t, "a", "b", "c")
+	v, _ := s.store.Snapshot(testContext)
+	before := v.ChatQueueRevision
+	if _, err := s.CancelChat(testContext, "c"); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = s.store.Snapshot(testContext)
+	if v.ChatQueueRevision == before {
+		t.Fatal("cancelling left the revision that guards the queue unchanged")
+	}
+	if _, err := s.ReorderChat(testContext, []string{"b", "a"}, before); !errors.Is(err, ErrConflict) {
+		t.Fatal("an order decided before the cancellation was not refused")
+	}
+}
+
+// reorderQueued is the whole permutation rule, testable without a store.
+func TestReorderQueuedRebuildsAroundStartedTurns(t *testing.T) {
+	turns := []ChatTurn{
+		{ID: "running", Status: "running"},
+		{ID: "a", Status: "queued"},
+		{ID: "done", Status: "completed"},
+		{ID: "b", Status: "queued"},
+	}
+	next, err := reorderQueued(turns, []string{"b", "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, turn := range next {
+		got = append(got, turn.ID)
+	}
+	// Started turns keep their slots; the queued slots take the new order.
+	if got[0] != "running" || got[1] != "b" || got[2] != "done" || got[3] != "a" {
+		t.Fatalf("order = %v", got)
+	}
+	for _, bad := range [][]string{{"a"}, {"a", "a"}, {"a", "missing"}, {}} {
+		if _, err := reorderQueued(turns, bad); !errors.Is(err, ErrChatValidation) {
+			t.Fatalf("accepted %v", bad)
+		}
+	}
+}
+
+// Cancelling the message you were changing must not leave a hold standing: it
+// would tell the owner the queue is paused while turns visibly run, and refuse
+// every other change until it lapsed. (A held turn cannot start, so cancelling
+// is the only way a held turn leaves the queue.)
+func TestCancellingAHeldTurnEndsTheHold(t *testing.T) {
+	s := queueFixture(t, "a", "b")
+	if _, err := s.HoldChat(testContext, "a", "editing", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelChat(testContext, "a"); err != nil {
+		t.Fatal(err)
+	}
+	hold, _, err := s.ChatQueueState(testContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold != nil {
+		t.Fatalf("a spent hold is still reported: %+v", hold)
+	}
+	// Another message can be changed rather than being locked out.
+	if _, err := s.HoldChat(testContext, "b", "editing", time.Minute); err != nil {
+		t.Fatalf("a spent hold still blocks other changes: %v", err)
 	}
 }

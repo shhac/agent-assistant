@@ -88,6 +88,7 @@ const savedTurn = (overrides: Partial<ChatTurn> = {}): ChatTurn => ({
   status: "running",
   created_at: "2026-09-16T12:00:00Z",
   user_message_id: "user-1",
+  revision: 0,
   events: [],
   ...overrides,
 });

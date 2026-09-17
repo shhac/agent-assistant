@@ -243,9 +243,3 @@ func (a *App) runChatTurn(ctx context.Context, turn core.ChatTurn) (engine.Resul
 	}
 	return e.Chat(ctx, req)
 }
-
-// ChatQueueState reports the current hold and the revision a reorder must be
-// decided against, so the dashboard can show one and submit the other.
-func (a *App) ChatQueueState(ctx context.Context) (*core.ChatHold, int, error) {
-	return a.Core.ChatQueueState(ctx)
-}

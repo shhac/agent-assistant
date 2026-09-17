@@ -43,22 +43,23 @@ func (h *ChatHold) Active(now time.Time) bool {
 	return h != nil && h.TurnID != "" && now.Before(h.ExpiresAt)
 }
 
-// heldFrom reports the first queue index a hold blocks, or -1 when nothing is
-// blocked. A hold on a turn that has since started or been cancelled blocks
-// nothing, so a stale marker cannot strand the queue.
-func heldFrom(v *Snapshot, now time.Time) int {
+// liveHold reports the hold that is really in force. A hold naming a turn that
+// has since started or been cancelled is spent: leaving it standing would keep
+// telling the owner the queue is paused and would refuse every other change
+// until it lapsed.
+func liveHold(v *Snapshot, now time.Time) *ChatHold {
 	if !v.ChatHold.Active(now) {
-		return -1
+		return nil
 	}
 	for i := range v.ChatTurns {
 		if v.ChatTurns[i].ID == v.ChatHold.TurnID {
 			if v.ChatTurns[i].Status != "queued" {
-				return -1
+				return nil
 			}
-			return i
+			return v.ChatHold
 		}
 	}
-	return -1
+	return nil
 }
 
 func queuedTurn(v *Snapshot, id string) (int, *ChatTurn, error) {
@@ -90,7 +91,7 @@ func (s *Service) HoldChat(ctx context.Context, id, reason string, ttl time.Dura
 		if _, _, err := queuedTurn(v, id); err != nil {
 			return err
 		}
-		if v.ChatHold.Active(now) && v.ChatHold.TurnID != id {
+		if live := liveHold(v, now); live != nil && live.TurnID != id {
 			return fmt.Errorf("another message is being changed: %w", ErrConflict)
 		}
 		out = ChatHold{TurnID: id, Reason: reason, ExpiresAt: now.Add(ttl)}
@@ -137,44 +138,52 @@ func (s *Service) EditChatMessage(ctx context.Context, id, message string, revis
 	return out, err
 }
 
+// reorderQueued rebuilds the turns with their queued entries in the requested
+// order. Turns that have started keep their place. A set of ids that does not
+// name exactly the queued turns is a malformed order, not a stale one.
+func reorderQueued(turns []ChatTurn, ids []string) ([]ChatTurn, error) {
+	queued := map[string]*ChatTurn{}
+	count := 0
+	for i := range turns {
+		if turns[i].Status == "queued" {
+			queued[turns[i].ID] = &turns[i]
+			count++
+		}
+	}
+	if len(ids) != count {
+		return nil, fmt.Errorf("the order must name every queued message exactly once: %w", ErrChatValidation)
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if queued[id] == nil || seen[id] {
+			return nil, fmt.Errorf("the order must name every queued message exactly once: %w", ErrChatValidation)
+		}
+		seen[id] = true
+	}
+	next, slot := make([]ChatTurn, 0, len(turns)), 0
+	for i := range turns {
+		if turns[i].Status != "queued" {
+			next = append(next, turns[i])
+			continue
+		}
+		next = append(next, *queued[ids[slot]])
+		slot++
+	}
+	return next, nil
+}
+
 // ReorderChat sets the order queued turns will run in. The caller names the
 // whole intended order and the queue revision it was decided against, so a
-// queue that changed underneath is refused rather than merged. Turns that have
-// started keep their place ahead of everything queued.
+// queue that changed underneath is refused rather than merged.
 func (s *Service) ReorderChat(ctx context.Context, ids []string, revision int) ([]ChatTurn, error) {
 	var out []ChatTurn
 	err := s.store.update(ctx, func(v *Snapshot) error {
 		if v.ChatQueueRevision != revision {
 			return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
 		}
-		queued := map[string]*ChatTurn{}
-		order := []string{}
-		for i := range v.ChatTurns {
-			if v.ChatTurns[i].Status == "queued" {
-				queued[v.ChatTurns[i].ID] = &v.ChatTurns[i]
-				order = append(order, v.ChatTurns[i].ID)
-			}
-		}
-		if len(ids) != len(order) {
-			return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
-		}
-		seen := map[string]bool{}
-		for _, id := range ids {
-			if queued[id] == nil || seen[id] {
-				return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
-			}
-			seen[id] = true
-		}
-		// Rebuild in place: started turns keep their position, and the queued
-		// slots they leave are filled in the requested order.
-		next, slot := make([]ChatTurn, 0, len(v.ChatTurns)), 0
-		for i := range v.ChatTurns {
-			if v.ChatTurns[i].Status != "queued" {
-				next = append(next, v.ChatTurns[i])
-				continue
-			}
-			next = append(next, *queued[ids[slot]])
-			slot++
+		next, err := reorderQueued(v.ChatTurns, ids)
+		if err != nil {
+			return err
 		}
 		v.ChatTurns = next
 		v.ChatQueueRevision++
@@ -188,9 +197,10 @@ func (s *Service) ReorderChat(ctx context.Context, ids []string, revision int) (
 // reported as absent so the dashboard never shows a block that is not real.
 func (s *Service) ChatQueueState(ctx context.Context) (*ChatHold, int, error) {
 	v, err := s.store.Snapshot(ctx)
-	if !v.ChatHold.Active(s.now().UTC()) {
+	live := liveHold(&v, s.now().UTC())
+	if live == nil {
 		return nil, v.ChatQueueRevision, err
 	}
-	hold := *v.ChatHold
+	hold := *live
 	return &hold, v.ChatQueueRevision, err
 }

@@ -36,7 +36,7 @@ func registerChatQueue(mux *http.ServeMux, a *app.App) {
 			fail(w, http.StatusInternalServerError, "Could not read the message queue.")
 			return
 		}
-		hold, revision, err := a.ChatQueueState(r.Context())
+		hold, revision, err := a.Core.ChatQueueState(r.Context())
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "Could not read the message queue.")
 			return
@@ -71,14 +71,14 @@ func registerChatQueue(mux *http.ServeMux, a *app.App) {
 		}
 		hold, err := a.Core.HoldChat(r.Context(), r.PathValue("id"), in.Reason, core.MaxChatHold)
 		if err != nil {
-			problem(w, err)
+			queueProblem(w, err)
 			return
 		}
 		respond(w, http.StatusOK, hold)
 	})
 	mux.HandleFunc("DELETE /api/chat/messages/{id}/hold", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Core.ReleaseChatHold(r.Context(), r.PathValue("id")); err != nil {
-			problem(w, err)
+			queueProblem(w, err)
 			return
 		}
 		respond(w, http.StatusOK, map[string]bool{"released": true})
@@ -95,7 +95,7 @@ func registerChatQueue(mux *http.ServeMux, a *app.App) {
 		}
 		turn, err := a.Core.EditChatMessage(r.Context(), r.PathValue("id"), in.Message, in.Revision)
 		if err != nil {
-			problem(w, err)
+			queueProblem(w, err)
 			return
 		}
 		respond(w, http.StatusOK, turn)
@@ -112,11 +112,23 @@ func registerChatQueue(mux *http.ServeMux, a *app.App) {
 		}
 		turns, err := a.Core.ReorderChat(r.Context(), in.Order, in.Revision)
 		if err != nil {
-			problem(w, err)
+			queueProblem(w, err)
 			return
 		}
 		respond(w, http.StatusOK, struct {
 			Turns []core.ChatTurn `json:"turns"`
 		}{turns})
 	})
+}
+
+// queueProblem reports a refusal the queue operations can actually produce. An
+// error outside that vocabulary is a daemon fault, not a malformed request:
+// reporting it as 400 would blame the owner and show them internal text.
+func queueProblem(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, core.ErrChatValidation), errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrConflict):
+		problem(w, err)
+	default:
+		fail(w, http.StatusInternalServerError, "The daemon could not change the queue. Refresh it before trying again.")
+	}
 }

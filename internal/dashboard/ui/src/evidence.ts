@@ -8,11 +8,7 @@
  * the grouping breaks loudly rather than silently degrading to "other".
  */
 export type EvidenceGroup =
-  | "files"
-  | "commands"
-  | "artifacts"
-  | "diagnostics"
-  | "notes";
+  "files" | "commands" | "artifacts" | "diagnostics" | "notes";
 
 interface EvidenceCounts {
   changedFiles: number | null;
@@ -39,6 +35,21 @@ const artifactPrefixes = [
   "Changed-file summary: ",
   "Worker artifacts: ",
 ];
+
+/**
+ * The path an artifact line names, by the same rule the daemon used when it
+ * decided what it would serve. A looser split here would produce a key that can
+ * never match a minted token, and the download would silently become plain text.
+ */
+export function artifactPathOf(line: string): string {
+  const prefix = artifactPrefixes.find((p) => line.startsWith(p));
+  return prefix ? line.slice(prefix.length).trim() : "";
+}
+
+export function artifactLabelOf(line: string): string {
+  const prefix = artifactPrefixes.find((p) => line.startsWith(p));
+  return prefix ? prefix.replace(/: $/, "") : line;
+}
 
 function groupOf(line: string): { group: EvidenceGroup; literal: boolean } {
   if (artifactPrefixes.some((p) => line.startsWith(p)))
@@ -95,16 +106,17 @@ export function classifyEvidence(lines: string[]): ClassifiedEvidence {
  * The one-line summary. Acceptance is never asserted here: command exit status
  * is an exit-status fact, and only a recorded acceptance can say otherwise.
  */
-export function evidenceSummary(
-  lines: string[],
-  accepted: boolean,
-): string {
+export function evidenceSummary(lines: string[], accepted: boolean): string {
   if (!lines.length)
-    return accepted ? "Accepted · no evidence recorded" : "No evidence reported yet";
+    return accepted
+      ? "Accepted · no evidence recorded"
+      : "No evidence reported yet";
   const { changedFiles, commandsTotal, commandsFailed } = evidenceCounts(lines);
   const parts: string[] = [];
   if (changedFiles !== null)
-    parts.push(`${changedFiles} ${changedFiles === 1 ? "file" : "files"} changed`);
+    parts.push(
+      `${changedFiles} ${changedFiles === 1 ? "file" : "files"} changed`,
+    );
   if (commandsTotal !== null) {
     const failed = commandsFailed ?? 0;
     parts.push(
@@ -114,7 +126,9 @@ export function evidenceSummary(
     );
   }
   if (!parts.length)
-    parts.push(`${lines.length} evidence ${lines.length === 1 ? "record" : "records"}`);
+    parts.push(
+      `${lines.length} evidence ${lines.length === 1 ? "record" : "records"}`,
+    );
   parts.push(accepted ? "acceptance recorded" : "acceptance not yet verified");
   return parts.join(" · ");
 }

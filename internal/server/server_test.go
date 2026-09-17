@@ -248,7 +248,7 @@ func TestArtifactDownloadRequiresAccessAndAToken(t *testing.T) {
 	auth, _ := NewAuth(dir, "http://127.0.0.1:8340", "", nil)
 	h := New(a, auth)
 
-	artifacts := filepath.Join(s.StateDirectory(), "runs", "run-1", "artifacts")
+	artifacts := filepath.Join(s.StateDirectory(), "managed-workers", "p1", "broker", "runs", "run-1", "artifacts")
 	if err := os.MkdirAll(artifacts, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,11 @@ func TestArtifactDownloadRequiresAccessAndAToken(t *testing.T) {
 	if err := os.WriteFile(patch, []byte("diff --git a/a b/a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	token := a.ArtifactLinks(core.Snapshot{Agents: []core.Agent{{ID: "a1", Evidence: []string{"Patch: " + patch}}}})[patch]
+	allLinks, err := a.ArtifactLinks(core.Snapshot{Agents: []core.Agent{{ID: "a1", Evidence: []string{"Patch: " + patch}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := allLinks[patch]
 	if token == "" {
 		t.Fatal("no token minted")
 	}

@@ -107,15 +107,16 @@ func (s *Service) StartNextChat(ctx context.Context) (ChatTurn, error) {
 			}
 		}
 		now := s.now().UTC()
-		blocked := heldFrom(v, now)
 		for i := range v.ChatTurns {
 			t := &v.ChatTurns[i]
 			if t.Status != "queued" {
 				continue
 			}
-			// A hold blocks its turn and everything after it, so a message the
-			// owner has not finished changing cannot be overtaken.
-			if blocked >= 0 && i >= blocked {
+			// Only the head of the queue is ever started, so holding it holds
+			// everything behind it. Comparing against a turn already known to
+			// be queued also means a hold naming a started or cancelled turn
+			// blocks nothing.
+			if live := liveHold(v, now); live != nil && live.TurnID == t.ID {
 				return ErrChatHeld
 			}
 			t.Status = "running"
@@ -148,6 +149,7 @@ func (s *Service) CancelChat(ctx context.Context, id string) (ChatTurn, error) {
 			}
 			now := s.now().UTC()
 			t.Status = "cancelled"
+			v.ChatQueueRevision++
 			t.FinishedAt = &now
 			out = *t
 			return nil
