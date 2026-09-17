@@ -126,6 +126,7 @@ export interface ChatTurn {
   loading_phrase?: string;
   model_status?: string;
   retry_at?: string;
+  revision?: number;
   events: ChatToolEvent[];
 }
 export interface Memory {

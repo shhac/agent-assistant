@@ -1,0 +1,196 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// The owner can revise a queued message and change the order messages will run
+// in. The guarantee those operations protect is narrow: the queue the owner is
+// looking at is the queue that runs. Nothing here assumes queued messages
+// depend on each other — that is the owner's judgment — only that an order
+// they never saw must not execute.
+//
+// A hold names a queued turn and blocks starting it and everything after it.
+// Turns ahead of it keep running. Its expiry is what stops a closed browser
+// from wedging the queue: the client refreshes the lease while an editor or a
+// drag is open, and the queue resumes on its own once that stops.
+//
+// The daemon never holds unsaved text. An edit is a save, and a turn's message
+// only enters the conversation when the turn starts, so a lapsed lease simply
+// resumes the queue with the last saved text.
+type ChatHold struct {
+	TurnID    string    `json:"turn_id"`
+	Reason    string    `json:"reason"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// MaxChatHold bounds a lease so a client that stops refreshing cannot hold the
+// queue for longer than an owner would plausibly be mid-edit.
+const MaxChatHold = 2 * time.Minute
+
+var ErrChatHeld = errors.New("the queue is held while a message is being changed")
+
+func validHoldReason(reason string) bool {
+	return reason == "editing" || reason == "reordering"
+}
+
+// Active reports whether a hold still blocks the queue at the given time.
+func (h *ChatHold) Active(now time.Time) bool {
+	return h != nil && h.TurnID != "" && now.Before(h.ExpiresAt)
+}
+
+// heldFrom reports the first queue index a hold blocks, or -1 when nothing is
+// blocked. A hold on a turn that has since started or been cancelled blocks
+// nothing, so a stale marker cannot strand the queue.
+func heldFrom(v *Snapshot, now time.Time) int {
+	if !v.ChatHold.Active(now) {
+		return -1
+	}
+	for i := range v.ChatTurns {
+		if v.ChatTurns[i].ID == v.ChatHold.TurnID {
+			if v.ChatTurns[i].Status != "queued" {
+				return -1
+			}
+			return i
+		}
+	}
+	return -1
+}
+
+func queuedTurn(v *Snapshot, id string) (int, *ChatTurn, error) {
+	for i := range v.ChatTurns {
+		if v.ChatTurns[i].ID != id {
+			continue
+		}
+		if v.ChatTurns[i].Status != "queued" {
+			return 0, nil, fmt.Errorf("this message already started: %w", ErrConflict)
+		}
+		return i, &v.ChatTurns[i], nil
+	}
+	return 0, nil, ErrNotFound
+}
+
+// HoldChat takes or refreshes the lease on a queued turn. Taking a hold on a
+// different turn while one is live is refused rather than silently stealing it,
+// so two editors cannot each believe they have the queue.
+func (s *Service) HoldChat(ctx context.Context, id, reason string, ttl time.Duration) (ChatHold, error) {
+	if !validHoldReason(reason) {
+		return ChatHold{}, fmt.Errorf("hold reason must be editing or reordering: %w", ErrChatValidation)
+	}
+	if ttl <= 0 || ttl > MaxChatHold {
+		ttl = MaxChatHold
+	}
+	var out ChatHold
+	err := s.store.update(ctx, func(v *Snapshot) error {
+		now := s.now().UTC()
+		if _, _, err := queuedTurn(v, id); err != nil {
+			return err
+		}
+		if v.ChatHold.Active(now) && v.ChatHold.TurnID != id {
+			return fmt.Errorf("another message is being changed: %w", ErrConflict)
+		}
+		out = ChatHold{TurnID: id, Reason: reason, ExpiresAt: now.Add(ttl)}
+		v.ChatHold = &out
+		return nil
+	})
+	return out, err
+}
+
+// ReleaseChatHold ends a lease early. Releasing a lease that already lapsed or
+// belongs to another turn is not an error: the caller's intent is satisfied.
+func (s *Service) ReleaseChatHold(ctx context.Context, id string) error {
+	return s.store.update(ctx, func(v *Snapshot) error {
+		if v.ChatHold != nil && v.ChatHold.TurnID == id {
+			v.ChatHold = nil
+		}
+		return nil
+	})
+}
+
+// EditChatMessage replaces the text of a queued turn. The revision the editor
+// was opened against is required, so an edit that lost a race with the daemon
+// starting the turn is refused rather than applied to a running turn. The turn
+// keeps its identity, so the key that protects against duplicate delivery still
+// holds; its revision moves, so text the daemon already read cannot start.
+func (s *Service) EditChatMessage(ctx context.Context, id, message string, revision int) (ChatTurn, error) {
+	if strings.TrimSpace(message) == "" || len(message) > 24000 {
+		return ChatTurn{}, fmt.Errorf("message must contain 1–24000 characters: %w", ErrChatValidation)
+	}
+	var out ChatTurn
+	err := s.store.update(ctx, func(v *Snapshot) error {
+		_, turn, err := queuedTurn(v, id)
+		if err != nil {
+			return err
+		}
+		if turn.Revision != revision {
+			return fmt.Errorf("this message changed since you opened it: %w", ErrConflict)
+		}
+		turn.Message = strings.TrimSpace(message)
+		turn.Revision++
+		out = *turn
+		return nil
+	})
+	return out, err
+}
+
+// ReorderChat sets the order queued turns will run in. The caller names the
+// whole intended order and the queue revision it was decided against, so a
+// queue that changed underneath is refused rather than merged. Turns that have
+// started keep their place ahead of everything queued.
+func (s *Service) ReorderChat(ctx context.Context, ids []string, revision int) ([]ChatTurn, error) {
+	var out []ChatTurn
+	err := s.store.update(ctx, func(v *Snapshot) error {
+		if v.ChatQueueRevision != revision {
+			return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
+		}
+		queued := map[string]*ChatTurn{}
+		order := []string{}
+		for i := range v.ChatTurns {
+			if v.ChatTurns[i].Status == "queued" {
+				queued[v.ChatTurns[i].ID] = &v.ChatTurns[i]
+				order = append(order, v.ChatTurns[i].ID)
+			}
+		}
+		if len(ids) != len(order) {
+			return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
+		}
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if queued[id] == nil || seen[id] {
+				return fmt.Errorf("the queue changed since you saw it: %w", ErrConflict)
+			}
+			seen[id] = true
+		}
+		// Rebuild in place: started turns keep their position, and the queued
+		// slots they leave are filled in the requested order.
+		next, slot := make([]ChatTurn, 0, len(v.ChatTurns)), 0
+		for i := range v.ChatTurns {
+			if v.ChatTurns[i].Status != "queued" {
+				next = append(next, v.ChatTurns[i])
+				continue
+			}
+			next = append(next, *queued[ids[slot]])
+			slot++
+		}
+		v.ChatTurns = next
+		v.ChatQueueRevision++
+		out = append([]ChatTurn{}, v.ChatTurns...)
+		return nil
+	})
+	return out, err
+}
+
+// ChatQueueState reports a live hold and the queue revision. A lapsed hold is
+// reported as absent so the dashboard never shows a block that is not real.
+func (s *Service) ChatQueueState(ctx context.Context) (*ChatHold, int, error) {
+	v, err := s.store.Snapshot(ctx)
+	if !v.ChatHold.Active(s.now().UTC()) {
+		return nil, v.ChatQueueRevision, err
+	}
+	hold := *v.ChatHold
+	return &hold, v.ChatQueueRevision, err
+}

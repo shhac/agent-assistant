@@ -11,19 +11,22 @@ import (
 // ChatTurn is a durable owner message. Queued content is kept out of the model
 // conversation until its turn starts; the client ID makes acceptance retryable.
 type ChatTurn struct {
-	ModelStatus        string          `json:"model_status,omitempty"`
-	RetryAt            time.Time       `json:"retry_at,omitempty"`
-	ID                 string          `json:"id"`
-	Message            string          `json:"message"`
-	Status             string          `json:"status"`
-	CreatedAt          time.Time       `json:"created_at"`
-	StartedAt          *time.Time      `json:"started_at,omitempty"`
-	FinishedAt         *time.Time      `json:"finished_at,omitempty"`
-	UserMessageID      string          `json:"user_message_id,omitempty"`
-	AssistantMessageID string          `json:"assistant_message_id,omitempty"`
-	Error              string          `json:"error,omitempty"`
-	LoadingPhrase      string          `json:"loading_phrase,omitempty"`
-	Events             []ChatToolEvent `json:"events"`
+	ModelStatus        string     `json:"model_status,omitempty"`
+	RetryAt            time.Time  `json:"retry_at,omitempty"`
+	ID                 string     `json:"id"`
+	Message            string     `json:"message"`
+	Status             string     `json:"status"`
+	CreatedAt          time.Time  `json:"created_at"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	FinishedAt         *time.Time `json:"finished_at,omitempty"`
+	UserMessageID      string     `json:"user_message_id,omitempty"`
+	AssistantMessageID string     `json:"assistant_message_id,omitempty"`
+	Error              string     `json:"error,omitempty"`
+	LoadingPhrase      string     `json:"loading_phrase,omitempty"`
+	// Revision moves when the owner edits a queued message, so an edit that
+	// lost a race with the daemon starting the turn can be refused.
+	Revision int             `json:"revision"`
+	Events   []ChatToolEvent `json:"events"`
 }
 
 // ChatToolEvent contains application-owned labels only. Arguments, output and
@@ -79,6 +82,7 @@ func (s *Service) EnqueueChat(ctx context.Context, id, message string) (ChatTurn
 			return ErrChatQueueFull
 		}
 		v.ChatTurns = append(v.ChatTurns, out)
+		v.ChatQueueRevision++
 		return nil
 	})
 	return out, err
@@ -102,15 +106,22 @@ func (s *Service) StartNextChat(ctx context.Context) (ChatTurn, error) {
 				return ErrConflict
 			}
 		}
+		now := s.now().UTC()
+		blocked := heldFrom(v, now)
 		for i := range v.ChatTurns {
 			t := &v.ChatTurns[i]
 			if t.Status != "queued" {
 				continue
 			}
-			now := s.now().UTC()
+			// A hold blocks its turn and everything after it, so a message the
+			// owner has not finished changing cannot be overtaken.
+			if blocked >= 0 && i >= blocked {
+				return ErrChatHeld
+			}
 			t.Status = "running"
 			t.StartedAt = &now
 			t.UserMessageID = uid()
+			v.ChatQueueRevision++
 			v.Messages = append(v.Messages, Message{ID: t.UserMessageID, Role: "user", Content: t.Message, CreatedAt: now})
 			out = *t
 			return nil

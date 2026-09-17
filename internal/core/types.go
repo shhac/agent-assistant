@@ -134,6 +134,8 @@ type Snapshot struct {
 	Steering             []SteeringMessage        `json:"steering"`
 	SteeringReceipts     []SteeringReceipt        `json:"steering_receipts"`
 	ChatTurns            []ChatTurn               `json:"-"`
+	ChatHold             *ChatHold                `json:"-"`
+	ChatQueueRevision    int                      `json:"-"`
 	PendingOperations    []PendingOperation       `json:"pending_operations"`
 	Events               map[string]bool          `json:"-"`
 	Assistant            Assistant                `json:"assistant"`

@@ -105,11 +105,16 @@ func TestOpenArtifactRefusesAnythingItDidNotMint(t *testing.T) {
 		t.Fatalf("served the wrong content: %q %d %q", name, size, body)
 	}
 
+	// Flipping the final character must actually change it, whatever it is.
+	flipped := "0"
+	if strings.HasSuffix(good, "0") {
+		flipped = "1"
+	}
 	for _, bad := range []string{
 		"",
 		"not-a-token",
 		strings.Repeat("a", 64),
-		good[:len(good)-1] + "0",
+		good[:len(good)-1] + flipped,
 	} {
 		if _, _, _, err := a.OpenArtifact(state, bad); err == nil {
 			t.Fatalf("served a file for token %q", bad)

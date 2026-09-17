@@ -106,9 +106,11 @@ describe("conversation", () => {
     typeAndSend("Another thought");
     await tick(0);
     expect(server.posts()).toHaveLength(2);
-    expect(
-      screen.getByText("Queued · will follow the current reply"),
-    ).toBeTruthy();
+    // A queued message now waits in the queue, where its position is its
+    // status and it can be changed before it runs.
+    const queue = screen.getByRole("region", { name: "Queued messages" });
+    expect(within(queue).getByText("Another thought")).toBeTruthy();
+    expect(within(queue).getByText(/1 message queued/)).toBeTruthy();
     state.messages = server.turns.map((t) => ({
       id: t.user_message_id!,
       role: "user",
@@ -332,7 +334,7 @@ describe("conversation", () => {
     });
     expect(screen.getByText("Cancelled before starting")).toBeTruthy();
     expect(
-      screen.queryByText("Queued · will follow the current reply"),
+      screen.queryByRole("region", { name: "Queued messages" }),
     ).toBeNull();
   });
   it("keeps uncertain original delivery uncertain when its explicit retry is rejected", async () => {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,5 +90,96 @@ func TestChatQueueRoutesAuthenticateValidateAndRetryIdempotently(t *testing.T) {
 	}
 	if w := call("POST", "/api/chat/messages", `{"id":"uncertain","message":"Hello"}`, true, true); w.Code != 500 {
 		t.Fatal("storage failure must not look definitely rejected", w.Code, w.Body.String())
+	}
+}
+
+// The queue routes exist so the owner can change what runs before it runs.
+// They must refuse a stale intent rather than merging it.
+func TestChatQueueHoldEditAndReorder(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	store, err := core.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := core.NewService(store, cfg)
+	a := app.New(s, cfg, filepath.Join(dir, "config.json"), false)
+	auth, err := NewAuth(dir, "http://127.0.0.1:8340", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(a, auth)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://127.0.0.1:8340"+path, strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:4321"
+		r.Header.Set("Authorization", "Bearer "+auth.admin)
+		r.Header.Set("X-Requested-With", "agent-assistant")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	for _, id := range []string{"one", "two", "three"} {
+		if got := call("POST", "/api/chat/messages", `{"id":"`+id+`","message":"text `+id+`"}`); got.Code != 202 {
+			t.Fatal(got.Body.String())
+		}
+	}
+
+	// Decoded fresh each time: an absent "hold" key leaves a reused struct's
+	// pointer untouched, which would hide a hold that was never released.
+	type queueView struct {
+		Turns    []core.ChatTurn `json:"turns"`
+		Hold     *core.ChatHold  `json:"hold"`
+		Revision int             `json:"revision"`
+	}
+	read := func() queueView {
+		var out queueView
+		if err := json.Unmarshal(call("GET", "/api/chat/turns", "").Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if read().Hold != nil {
+		t.Fatal("a fresh queue reported a hold")
+	}
+
+	if got := call("POST", "/api/chat/messages/two/hold", `{"reason":"editing"}`); got.Code != 200 {
+		t.Fatal(got.Body.String())
+	}
+	if hold := read().Hold; hold == nil || hold.TurnID != "two" {
+		t.Fatalf("the hold is not reported: %+v", hold)
+	}
+
+	// An edit against the wrong revision is refused.
+	if got := call("PATCH", "/api/chat/messages/two", `{"message":"corrected","revision":99}`); got.Code != 409 {
+		t.Fatalf("a stale edit returned %d, want 409", got.Code)
+	}
+	if got := call("PATCH", "/api/chat/messages/two", `{"message":"corrected","revision":0}`); got.Code != 200 {
+		t.Fatal(got.Body.String())
+	}
+	// An empty edit is a validation failure, not a silent no-op.
+	if got := call("PATCH", "/api/chat/messages/two", `{"message":"  ","revision":1}`); got.Code != 400 {
+		t.Fatalf("an empty edit returned %d, want 400", got.Code)
+	}
+
+	if got := call("PUT", "/api/chat/queue", `{"order":["three","one","two"],"revision":999}`); got.Code != 409 {
+		t.Fatalf("a stale reorder returned %d, want 409", got.Code)
+	}
+	if got := call("PUT", "/api/chat/queue", `{"order":["three","one","two"],"revision":`+strconv.Itoa(read().Revision)+`}`); got.Code != 200 {
+		t.Fatal(got.Body.String())
+	}
+	after := read()
+	if after.Turns[0].ID != "three" || after.Turns[2].ID != "two" {
+		t.Fatalf("order = %s %s %s", after.Turns[0].ID, after.Turns[1].ID, after.Turns[2].ID)
+	}
+	if after.Turns[2].Message != "corrected" {
+		t.Fatalf("the edit was lost: %q", after.Turns[2].Message)
+	}
+
+	if got := call("DELETE", "/api/chat/messages/two/hold", ""); got.Code != 200 {
+		t.Fatal(got.Body.String())
+	}
+	if read().Hold != nil {
+		t.Fatal("the hold survived its release")
 	}
 }

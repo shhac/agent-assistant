@@ -12,6 +12,7 @@ import {
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { dateLabel, Icon } from "./ui";
 import { isHeldUp } from "./states";
+import { ChatQueue, type QueueHold } from "./ChatQueue";
 import { fullDateLabel } from "./ui";
 import "./chat.css";
 type VisibleTurn = Omit<ChatTurn, "status"> & {
@@ -282,6 +283,10 @@ export function ChatPanel({
   const [turns, setTurns] = useState<VisibleTurn[]>([]);
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
+  const [queue, setQueue] = useState<{
+    hold?: QueueHold | null;
+    revision: number;
+  }>({ revision: 0 });
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -298,7 +303,11 @@ export function ChatPanel({
   const messages = [
     ...state.messages,
     ...turns
-      .filter((t) => !t.user_message_id || !messageIDs.has(t.user_message_id))
+      .filter(
+        (t) =>
+          t.status !== "queued" &&
+          (!t.user_message_id || !messageIDs.has(t.user_message_id)),
+      )
       .map((t) => ({
         id: t.user_message_id || t.id,
         role: "user",
@@ -330,8 +339,13 @@ export function ChatPanel({
     let previousSignature = "";
     async function poll() {
       try {
-        const result = await api<{ turns: ChatTurn[] }>("/api/chat/turns");
+        const result = await api<{
+          turns: ChatTurn[];
+          hold?: QueueHold | null;
+          revision?: number;
+        }>("/api/chat/turns");
         if (stopped) return;
+        setQueue({ hold: result.hold ?? null, revision: result.revision ?? 0 });
         const incoming = result.turns || [];
         incoming.forEach((t) => confirmed.current.add(t.id));
         if (
@@ -645,14 +659,28 @@ export function ChatPanel({
               messages. Keep this page open.
             </p>
           )}
-        {(running || queueCount > 0) && (
+        {running && queueCount === 0 && (
           <p className="chat-queue-summary">
-            {queueCount
-              ? `${queueCount} ${queueCount === 1 ? "message" : "messages"} queued`
-              : "You can keep writing"}{" "}
-            · Each message gets its own reply.
+            You can keep writing · Each message gets its own reply.
           </p>
         )}
+        <ChatQueue
+          turns={turns
+            .filter((t) => t.status === "queued")
+            .map((t) => ({
+              id: t.id,
+              message: t.message,
+              revision: t.revision ?? 0,
+            }))}
+          revision={queue.revision}
+          hold={queue.hold}
+          cancelling={cancelling}
+          onCancel={(id) => {
+            const turn = turns.find((t) => t.id === id);
+            if (turn) void cancel(turn);
+          }}
+          onChanged={() => refreshRef.current()}
+        />
         <form className="chat-composer" onSubmit={send}>
           <label className="sr-only" htmlFor="chat-message">
             Message {name}

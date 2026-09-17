@@ -166,6 +166,10 @@ func (a *App) processNextChat(ctx context.Context, standalone bool) (bool, error
 		return false, err
 	}
 	turn, err := a.Core.StartNextChat(ctx)
+	if errors.Is(err, core.ErrChatHeld) {
+		// The owner is changing the queue. Nothing is wrong and nothing starts.
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -238,4 +242,10 @@ func (a *App) runChatTurn(ctx context.Context, turn core.ChatTurn) (engine.Resul
 		return engine.Result{}, err
 	}
 	return e.Chat(ctx, req)
+}
+
+// ChatQueueState reports the current hold and the revision a reorder must be
+// decided against, so the dashboard can show one and submit the other.
+func (a *App) ChatQueueState(ctx context.Context) (*core.ChatHold, int, error) {
+	return a.Core.ChatQueueState(ctx)
 }

@@ -1,0 +1,137 @@
+// @vitest-environment jsdom
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChatQueue } from "./ChatQueue";
+
+const turns = [
+  { id: "a", message: "Do the first thing", revision: 0 },
+  { id: "b", message: "Then the second", revision: 0 },
+  { id: "c", message: "Then the third", revision: 0 },
+];
+
+function mount(calls: { path: string; options?: RequestInit }[] = []) {
+  const fetch = vi.fn(async (path: string, options?: RequestInit) => {
+    calls.push({ path, options });
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+  vi.stubGlobal("fetch", fetch);
+  const onChanged = vi.fn(async () => {});
+  render(<ChatQueue turns={turns} revision={7} onChanged={onChanged} />);
+  return { calls, onChanged };
+}
+
+const body = (c: { options?: RequestInit }) =>
+  JSON.parse(String(c.options?.body ?? "{}"));
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe("queued messages", () => {
+  it("shows each message with the position it will run in", () => {
+    mount();
+    const list = screen.getAllByRole("listitem");
+    expect(list).toHaveLength(3);
+    expect(within(list[0]).getByText("Do the first thing")).toBeTruthy();
+    expect(within(list[2]).getByText("Then the third")).toBeTruthy();
+  });
+
+  // The queue must be reorderable without a pointer.
+  it("moves a message from the keyboard and submits the whole order", async () => {
+    const { calls } = mount();
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Move message 3 earlier" }),
+      );
+    });
+    const reorder = calls.find((c) => c.path === "/api/chat/queue");
+    expect(reorder?.options?.method).toBe("PUT");
+    // The whole intended order, against the revision it was decided on.
+    expect(body(reorder!)).toEqual({ order: ["a", "c", "b"], revision: 7 });
+  });
+
+  it("cannot move the ends off the queue", () => {
+    mount();
+    expect(
+      screen.getByRole("button", { name: "Move message 1 earlier" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      screen.getByRole("button", { name: "Move message 3 later" }),
+    ).toHaveProperty("disabled", true);
+  });
+
+  // Opening an editor holds the queue, so nothing behind it can overtake.
+  it("holds the queue while editing and releases it afterwards", async () => {
+    const { calls } = mount();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit message 2" }));
+    });
+    const held = calls.find(
+      (c) =>
+        c.path === "/api/chat/messages/b/hold" && c.options?.method === "POST",
+    );
+    expect(held).toBeTruthy();
+    expect(body(held!)).toEqual({ reason: "editing" });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+    expect(
+      calls.some(
+        (c) =>
+          c.path === "/api/chat/messages/b/hold" &&
+          c.options?.method === "DELETE",
+      ),
+    ).toBe(true);
+  });
+
+  it("saves an edit against the revision it was opened on", async () => {
+    const { calls } = mount();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit message 1" }));
+    });
+    fireEvent.change(screen.getByLabelText("Edit queued message"), {
+      target: { value: "Do the first thing, carefully" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    const edit = calls.find(
+      (c) => c.path === "/api/chat/messages/a" && c.options?.method === "PATCH",
+    );
+    expect(body(edit!)).toEqual({
+      message: "Do the first thing, carefully",
+      revision: 0,
+    });
+  });
+
+  it("says the queue is paused while a change is open", () => {
+    render(
+      <ChatQueue
+        turns={turns}
+        revision={7}
+        hold={{ turn_id: "b", reason: "editing", expires_at: "" }}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(/queue is paused while you change it/),
+    ).toBeTruthy();
+    expect(screen.getByText(/resumes on its own/)).toBeTruthy();
+  });
+
+  it("renders nothing when no message is waiting", () => {
+    const { container } = render(
+      <ChatQueue turns={[]} revision={0} onChanged={vi.fn()} />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+});

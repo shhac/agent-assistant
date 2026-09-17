@@ -221,3 +221,83 @@
   font-size: 11px;
   color: var(--text-soft);
 }
+
+/* The queue of messages waiting to run, and the controls for changing it. */
+.chat-queue {
+  margin-bottom: 10px;
+}
+.chat-queue-held {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--orange);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--text-soft);
+}
+.chat-queue-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  counter-reset: queued;
+}
+.chat-queue-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.chat-queue-item[draggable="true"] {
+  cursor: grab;
+}
+.chat-queue-position {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-queue-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  grid-column: 2;
+}
+.chat-queue-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.chat-queue-actions button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.chat-queue-editor {
+  grid-column: 2;
+}
+.chat-queue-editor label {
+  font-size: 11px;
+}
