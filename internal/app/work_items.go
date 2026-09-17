@@ -139,7 +139,7 @@ func (a *App) deliverSteering(ctx context.Context) error {
 		raw, _ := json.Marshal(pending)
 		key := fmt.Sprintf("steering:%s:%x", ag.ID, sha256.Sum256(raw))
 		if err := a.once(ctx, key, func() error {
-			_, err := a.sendInstruction(ctx, ag, key, "The owner has provided new work-item direction. Consider the attached durable steering before continuing.")
+			err := a.sendInstruction(ctx, ag, key, "The owner has provided new work-item direction. Consider the attached durable steering before continuing.")
 			return err
 		}); err != nil && !errors.Is(err, errWorkerUsageHeld) {
 			failures = append(failures, fmt.Errorf("steering delivery: %w", err))

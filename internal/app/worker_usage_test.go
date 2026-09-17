@@ -235,7 +235,7 @@ func TestUsageDoesNotBlockObservationButHoldsResumeAndInstructions(t *testing.T)
 		t.Fatal("manual instruction bypassed gate")
 	}
 	key := "retryable-instruction"
-	err := a.once(ctx, key, func() error { _, err := a.sendInstruction(ctx, current, key, "Continue"); return err })
+	err := a.once(ctx, key, func() error { err := a.sendInstruction(ctx, current, key, "Continue"); return err })
 	if err == nil {
 		t.Fatal("automatic instruction bypassed gate")
 	}

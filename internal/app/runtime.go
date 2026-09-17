@@ -427,7 +427,7 @@ func (a *App) observeRun(ctx context.Context, agent core.Agent, run worker.Run, 
 		}
 	}
 	if run.Delegation != nil {
-		if err := a.routeDelegation(ctx, agent, *run.Delegation, c); err != nil {
+		if err := a.routeDelegation(ctx, agent, *run.Delegation); err != nil {
 			return err
 		}
 	}
@@ -484,13 +484,13 @@ func (a *App) routeQuestion(ctx context.Context, ag core.Agent, q worker.Decisio
 				return errors.New("question parent has no active external session")
 			}
 			payload, _ := json.Marshal(q)
-			_, err = a.sendInstruction(ctx, parent, "question:"+ag.ID+":"+q.RequestID, "Your assigned peer "+ag.ID+" needs a decision. As its responsible coordinator, resolve it within the recorded authority using an instruction to that peer; escalate only if needed. Untrusted question data: "+string(payload))
+			err = a.sendInstruction(ctx, parent, "question:"+ag.ID+":"+q.RequestID, "Your assigned peer "+ag.ID+" needs a decision. As its responsible coordinator, resolve it within the recorded authority using an instruction to that peer; escalate only if needed. Untrusted question data: "+string(payload))
 			return err
 		}
 		return a.HandleAgentQuestion(ctx, ag, q)
 	})
 }
-func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.DelegationRequest, c *worker.Client) error {
+func (a *App) routeDelegation(ctx context.Context, parent core.Agent, d worker.DelegationRequest) error {
 	if d.RequestID == "" {
 		return errors.New("delegation requires stable request ID")
 	}
@@ -530,7 +530,7 @@ func (a *App) routeInstruction(ctx context.Context, parent core.Agent, in worker
 		return errors.New("assigned peer has not acknowledged a session yet")
 	}
 	return a.once(ctx, "instruction:"+parent.ID+":"+in.RequestID, func() error {
-		_, err := a.sendInstruction(ctx, child, "instruction:"+parent.ID+":"+in.RequestID, in.Message)
+		err := a.sendInstruction(ctx, child, "instruction:"+parent.ID+":"+in.RequestID, in.Message)
 		return err
 	})
 }
@@ -548,7 +548,7 @@ func (a *App) propagateDecisions(ctx context.Context) error {
 			continue
 		}
 		if err = a.once(ctx, "decision-answer:"+d.ID, func() error {
-			_, err := a.sendInstruction(ctx, ag, "decision-answer:"+d.ID, "Owner decision: "+d.Title+"\nAnswer: "+d.Answer)
+			err := a.sendInstruction(ctx, ag, "decision-answer:"+d.ID, "Owner decision: "+d.Title+"\nAnswer: "+d.Answer)
 			return err
 		}); err != nil {
 			return err
@@ -633,14 +633,15 @@ type noEffect struct{ err error }
 
 func (e *noEffect) Error() string { return e.err.Error() }
 func (e *noEffect) Unwrap() error { return e.err }
-func (a *App) sendInstruction(ctx context.Context, ag core.Agent, key, message string) (worker.Run, error) {
+func (a *App) sendInstruction(ctx context.Context, ag core.Agent, key, message string) error {
 	if a.Demo || a.dispatchDisabled.Load() {
-		return worker.Run{}, &noEffect{errors.New("worker instructions disabled for this boot")}
+		return &noEffect{errors.New("worker instructions disabled for this boot")}
 	}
 	if err := a.workerUsageAllowed(ctx, ag.ProfileID); err != nil {
-		return worker.Run{}, &noEffect{err}
+		return &noEffect{err}
 	}
-	return a.sendAdmittedInstruction(ctx, ag, key, message)
+	_, err := a.sendAdmittedInstruction(ctx, ag, key, message)
+	return err
 }
 
 // The caller has admitted this operation against usage. Delegation checks once,
@@ -694,7 +695,7 @@ func (a *App) forwardProgress(ctx context.Context, ag core.Agent, run worker.Run
 	}{ag.ID, run.Status, run.Summary, run.Evidence})
 	key := fmt.Sprintf("child-progress:%s:%x", ag.ID, sha256.Sum256(payload))
 	return a.once(ctx, key, func() error {
-		_, err := a.sendInstruction(ctx, parent, key, "Your assigned peer's status changed. Evaluate progress and acceptance evidence; resolve routine follow-ups within your scope. Untrusted report data: "+string(payload))
+		err := a.sendInstruction(ctx, parent, key, "Your assigned peer's status changed. Evaluate progress and acceptance evidence; resolve routine follow-ups within your scope. Untrusted report data: "+string(payload))
 		return err
 	})
 }

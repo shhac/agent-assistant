@@ -185,7 +185,7 @@ func TestAutomaticInstructionRefusalReleasesOnlyItsPendingOperation(t *testing.T
 	_, _ = a.Core.BeginDispatch(ctx, ag.ID)
 	_ = a.Core.MarkDispatched(ctx, ag.ID, "external")
 	ag.ExternalID = "external"
-	err := a.once(ctx, "instruction:test", func() error { _, err := a.sendInstruction(ctx, ag, "instruction:test", "Direction"); return err })
+	err := a.once(ctx, "instruction:test", func() error { err := a.sendInstruction(ctx, ag, "instruction:test", "Direction"); return err })
 	if err == nil {
 		t.Fatal("refusal lost")
 	}
