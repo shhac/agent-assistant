@@ -57,16 +57,13 @@ func New(cfg Config) (*Broker, error) {
 	if cfg.AuthToken == "" && (cfg.TokenEnv == "" || os.Getenv(cfg.TokenEnv) == "") {
 		return nil, errors.New("worker broker authentication token environment variable is required")
 	}
-	if cfg.MaxTurns == 0 {
-		cfg.MaxTurns = 16
-	}
 	if cfg.MaxOutputTokens == 0 {
 		cfg.MaxOutputTokens = 4096
 	}
 	if cfg.MaxConcurrent == 0 {
 		cfg.MaxConcurrent = 1
 	}
-	if cfg.MaxTurns < 1 || cfg.MaxTurns > 64 || cfg.MaxOutputTokens < 128 || cfg.MaxOutputTokens > 32768 || cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 8 {
+	if cfg.MaxOutputTokens < 128 || cfg.MaxOutputTokens > 32768 || cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 8 {
 		return nil, errors.New("invalid worker model or concurrency bounds")
 	}
 	cfg.StateDir, err = filepath.Abs(cfg.StateDir)
@@ -139,6 +136,7 @@ func New(cfg Config) (*Broker, error) {
 		if r.Request.ProjectID != cfg.ProjectID {
 			return fail(errors.New("broker state belongs to another configured project"))
 		}
+		reconcileUsage(r, b.tokenBudget())
 		if r.Run.Status == "running" || r.Run.Status == "queued" {
 			if r.Container != "" {
 				cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
@@ -163,8 +161,10 @@ func New(cfg Config) (*Broker, error) {
 				}
 				r.PendingStatus = ""
 				r.PendingSummary = ""
-			} else if r.PendingStatus == "retry_wait" {
-				r.Run.Status = "retry_wait"
+			} else if r.PendingStatus == "retry_wait" || r.PendingStatus == "usage_wait" {
+				// A resource wait is still a resource wait after cleanup. Restart
+				// is not extra allowance, and it is not a failed attempt either.
+				r.Run.Status = r.PendingStatus
 				r.Run.Summary = r.PendingSummary
 				r.PendingStatus, r.PendingSummary = "", ""
 			} else if r.PendingStatus == "blocked" {

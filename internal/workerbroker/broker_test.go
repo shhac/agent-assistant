@@ -325,46 +325,6 @@ func TestReviewWorkspaceIsReadOnly(t *testing.T) {
 		t.Fatal("review-only worker received writable source mount")
 	}
 }
-func TestCumulativeModelAllowanceSurvivesResume(t *testing.T) {
-	calls := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		call := toolCall{ID: "test", Type: "function"}
-		call.Function.Name = "run_command"
-		call.Function.Arguments = `{"command":"synthetic-check"}`
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}}}})
-	}))
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	b.cfg.MaxTurns = 1
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	w := request(t, b, "/runs", "dispatch-one", startRequest())
-	var run worker.Run
-	_ = json.Unmarshal(w.Body.Bytes(), &run)
-	waitBlocked := func() {
-		t.Helper()
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			r, _ := b.snapshot(run.ID)
-			if r.Run.Status == "blocked" {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		t.Fatal("worker did not reach bound")
-	}
-	waitBlocked()
-	if request(t, b, "/runs/"+run.ID+"/resume", "resume-one", map[string]string{"instruction": "Continue"}).Code != 200 {
-		t.Fatal("resume request not accepted")
-	}
-	waitBlocked()
-	if calls != 1 {
-		t.Fatalf("resume reset cumulative allowance: %d calls", calls)
-	}
-}
 func TestCleanupRequiresProvenContainerIdentity(t *testing.T) {
 	r := storedRun{Run: worker.Run{ID: "fixture"}, Container: "agent-assistant-fixture"}
 	for _, tc := range []struct {

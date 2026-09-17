@@ -79,7 +79,7 @@ func TestProceedCanCommissionPreparedWorkerDespiteOldRefusal(t *testing.T) {
 	}
 	a.managed = quotaManaged{client}
 	a.workerPreflight = func(context.Context, config.Model) error { return nil }
-	a.workerUsage.inspect = func(context.Context, session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(context.Context, session.Options) (session.Inspection, error) {
 		return session.Inspection{Quota: quotaFixture(10)}, nil
 	}
 	dir, err := filepath.EvalSymlinks(t.TempDir())

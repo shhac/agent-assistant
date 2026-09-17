@@ -144,23 +144,28 @@ func TestWorkerSummaryFailureAndPausePreserveArchiveAndCountAttempt(t *testing.T
 		})
 	}
 }
-func TestContextSummaryRespectsCumulativeBudget(t *testing.T) {
-	remote := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("exhausted allowance contacted provider") }))
+// A summary is billable, so it passes the same gate as an ordinary turn. A
+// held summary must leave the original context exactly as it was.
+func TestContextSummaryPassesResourceAdmission(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("held admission contacted provider") }))
 	defer remote.Close()
 	b, _ := newFixture(t, remote.URL, &fakeDocker{})
 	defer b.Close()
+	held := worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Account allowance consumed"}
+	b.cfg.Admit = func(context.Context) error { return &worker.HoldError{Hold: held} }
 	id := contextRun(t, b)
-	if err := b.update(id, func(run *storedRun) error { run.ModelCalls = b.cfg.MaxTurns; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.prepareContext(context.Background(), id); !errors.Is(err, errWorkerModelAllowance) {
+	if _, err := b.prepareContext(context.Background(), id); !errors.Is(err, worker.ErrResourceHold) {
 		t.Fatal(err)
 	}
 	saved, _ := b.snapshot(id)
-	if len(saved.WorkingContext) != 0 {
-		t.Fatal("unpaid summary used")
+	if len(saved.WorkingContext) != 0 || saved.ModelCalls != 0 || saved.PendingUsage != nil {
+		t.Fatal("held summary changed context or accounting", saved.ModelCalls, saved.PendingUsage)
+	}
+	if saved.PendingStatus != "usage_wait" || saved.Run.ResourceHold == nil || saved.Run.ResourceHold.Kind != worker.HoldSubscriptionQuota {
+		t.Fatal("summary hold not recorded as a resource wait", saved.PendingStatus, saved.Run.ResourceHold)
 	}
 }
+
 func TestRepairedPrefixInvalidatesContextCursor(t *testing.T) {
 	run := storedRun{Request: startRequest(), Transcript: []modelMessage{{Role: "user", Content: "Original"}}, WorkingContext: []modelMessage{{Role: "assistant", Content: "Stale checkpoint"}}, ContextThrough: 1}
 	run.ContextDigest = transcriptDigest(run.Transcript)

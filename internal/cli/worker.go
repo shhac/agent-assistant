@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -13,9 +14,33 @@ import (
 
 	"github.com/shhac/agent-assistant/internal/config"
 	"github.com/shhac/agent-assistant/internal/diagnostics"
+	"github.com/shhac/agent-assistant/internal/integrations/worker"
+	"github.com/shhac/agent-assistant/internal/quota"
 	"github.com/shhac/agent-assistant/internal/workerbroker"
 	"github.com/spf13/cobra"
 )
+
+// standaloneAdmission gives a separately operated broker the same subscription
+// headroom policy the daemon applies, from the same shared meter, so one
+// account is not measured by two different sets of rules. Its configuration is
+// the process's own: a standalone broker has no live daemon settings feed.
+func standaloneAdmission(cfg config.Config, profile config.Model, meter *quota.Meter) func(context.Context) error {
+	return func(ctx context.Context) error {
+		policy := cfg.Limits.WorkerUsage
+		threshold, supported := quota.Threshold(policy, profile.Engine)
+		if !supported || threshold == 0 {
+			return nil
+		}
+		verdict := quota.Evaluate(meter.Read(ctx, profile), profile, threshold, time.Now())
+		if verdict.Held {
+			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Worker paused: " + verdict.Detail, ResetsAt: verdict.ResetsAt, NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}}
+		}
+		if !verdict.Known && policy.OnUnavailable == "pause" {
+			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, OwnerAction: true, Reason: "Worker paused: fresh subscription usage is unavailable for " + profile.Engine + " and the configured policy is to pause when it cannot be measured"}}
+		}
+		return nil
+	}
+}
 
 func registerWorker(root *cobra.Command, o *options) {
 	var workspace, project, image, socket, state, addr, tokenEnv, model, engineName, effort string
@@ -55,7 +80,16 @@ func registerWorker(root *cobra.Command, o *options) {
 			return err
 		}
 		defer listener.Close()
-		broker, err := workerbroker.New(workerbroker.Config{Diagnostics: diagnostics.New(cmd.ErrOrStderr()), StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, Engine: profile.Engine, Effort: profile.Effort, CodexBin: profile.CodexBin, CodexHome: profile.CodexHome, ClaudeBin: profile.ClaudeBin, ClaudeHome: profile.ClaudeHome, ModelEndpoint: strings.TrimRight(profile.BaseURL, "/") + "/chat/completions", Model: profile.Model, APIKeyEnv: profile.APIKeyEnv, TokenEnv: tokenEnv, MaxTurns: turns, MaxOutputTokens: profile.MaxTokens, MaxConcurrent: concurrency})
+		if cmd.Flags().Changed("max-turns") {
+			// Never leave a retired option quietly enforcing a cap. Say what
+			// replaced it, then run under the configured resource policy.
+			fmt.Fprintln(cmd.ErrOrStderr(), "--max-turns no longer limits a worker: a cumulative model-call ceiling stopped long assignments that were doing useful work. Worker limits are now resource limits, in limits.worker_usage (subscription headroom, default 90%) and limits.worker_token_budget (per-assignment tokens, 0 disables). This broker is starting with those settings; the supplied value is ignored.")
+		}
+		meter := &quota.Meter{}
+		broker, err := workerbroker.New(workerbroker.Config{Diagnostics: diagnostics.New(cmd.ErrOrStderr()), StateDir: state, Workspace: workspace, ProjectID: project, Image: image, DockerSocket: socket, Engine: profile.Engine, Effort: profile.Effort, CodexBin: profile.CodexBin, CodexHome: profile.CodexHome, ClaudeBin: profile.ClaudeBin, ClaudeHome: profile.ClaudeHome, ModelEndpoint: strings.TrimRight(profile.BaseURL, "/") + "/chat/completions", Model: profile.Model, APIKeyEnv: profile.APIKeyEnv, TokenEnv: tokenEnv, MaxOutputTokens: profile.MaxTokens, MaxConcurrent: concurrency,
+			Admit:       standaloneAdmission(cfg, profile, meter),
+			TokenBudget: func() int64 { return cfg.Limits.WorkerTokenBudget },
+		})
 		if err != nil {
 			return err
 		}
@@ -109,7 +143,8 @@ func registerWorker(root *cobra.Command, o *options) {
 	cmd.Flags().StringVar(&model, "model", "", "Worker model (defaults to worker_model.model)")
 	cmd.Flags().StringVar(&engineName, "engine", "", "Worker engine (defaults to worker_model.engine)")
 	cmd.Flags().StringVar(&effort, "effort", "", "Reasoning effort (defaults to worker_model.effort)")
-	cmd.Flags().IntVar(&turns, "max-turns", 24, "Maximum cumulative model calls per worker session, including resumes")
+	cmd.Flags().IntVar(&turns, "max-turns", 0, "Retired: worker work is limited by subscription headroom and the optional token budget")
+	_ = cmd.Flags().MarkDeprecated("max-turns", "worker limits are resource limits; configure limits.worker_usage and limits.worker_token_budget instead")
 	cmd.Flags().IntVar(&tokens, "max-output-tokens", 4096, "Maximum output tokens per worker model request (otherwise worker_model.max_tokens)")
 	cmd.Flags().IntVar(&concurrency, "max-concurrent", 1, "Maximum simultaneously executing local workers")
 	_ = cmd.MarkFlagRequired("workspace")

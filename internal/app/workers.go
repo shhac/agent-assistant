@@ -29,6 +29,8 @@ func (a *App) managedWorkers() (managedWorkerService, error) {
 			return nil, err
 		}
 		manager.Diagnostics = a.Diagnostics
+		manager.Admit = a.workerInferenceAdmission
+		manager.TokenBudget = func() int64 { return a.Config().Limits.WorkerTokenBudget }
 		a.managed = manager
 	}
 	return a.managed, nil

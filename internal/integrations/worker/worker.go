@@ -83,9 +83,57 @@ type PeerMessage struct {
 	Message       string `json:"message"`
 }
 
+// ResourceHold explains why a broker stopped asking for inference while its
+// work is preserved. It is deliberately distinct from a provider failure: no
+// request was rejected, nothing is being retried, and no recovery allowance is
+// spent. OwnerAction separates a wait that clears by itself, such as a known
+// subscription reset, from one that needs the owner to change policy.
+type ResourceHold struct {
+	Kind        string    `json:"kind"`
+	Reason      string    `json:"reason"`
+	OwnerAction bool      `json:"owner_action,omitempty"`
+	NextCheckAt time.Time `json:"next_check_at,omitempty"`
+	ResetsAt    time.Time `json:"resets_at,omitempty"`
+}
+
+// Hold kinds. SubscriptionQuota clears on its own; the other two need an owner
+// decision about the configured budget or about unestablished consumption.
+const (
+	HoldSubscriptionQuota = "subscription_quota"
+	HoldTokenBudget       = "token_budget"
+	HoldUsageUnknown      = "usage_unknown"
+)
+
+// ErrResourceHold identifies a refused-before-billing decision anywhere in a
+// wrapped error chain. Completion transports wrap admission errors in their own
+// opaque type, so identity has to survive without unwrapping to the concrete
+// hold; the broker already recorded the details before refusing.
+var ErrResourceHold = errors.New("worker inference held by a resource policy")
+
+// HoldError refuses one inference before it is made. It is returned by the
+// admission callback the daemon injects into a broker, so both in-process and
+// standalone brokers describe a hold identically.
+type HoldError struct{ Hold ResourceHold }
+
+func (e *HoldError) Error() string { return e.Hold.Reason }
+func (e *HoldError) Unwrap() error { return ErrResourceHold }
+
+// Usage is what a worker has actually consumed, as reported by the provider.
+// UnknownCalls counts invocations whose consumption could not be established,
+// including history recorded before this ledger existed; they are never
+// counted as zero.
+type Usage struct {
+	InputTokens  int64 `json:"input_tokens,omitempty"`
+	OutputTokens int64 `json:"output_tokens,omitempty"`
+	UnknownCalls int   `json:"unknown_calls,omitempty"`
+	TokenBudget  int64 `json:"token_budget,omitempty"`
+}
+
 type Run struct {
 	ContextCompactions       int                `json:"context_compactions,omitempty"`
 	ContextBytes             int                `json:"context_bytes,omitempty"`
+	Usage                    Usage              `json:"usage,omitzero"`
+	ResourceHold             *ResourceHold      `json:"resource_hold,omitempty"`
 	RetryAt                  time.Time          `json:"retry_at,omitempty"`
 	ProviderFailures         int                `json:"provider_failures,omitempty"`
 	ProviderFailureKind      string             `json:"provider_failure_kind,omitempty"`
@@ -292,7 +340,7 @@ func (c *Client) call(ctx context.Context, method, path, key string, in any) (Ru
 		return Run{}, errors.New("worker returned no run ID")
 	}
 	switch result.Status {
-	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled", "paused", "retry_wait":
+	case "queued", "running", "waiting", "blocked", "interrupted", "completed", "failed", "cancelled", "paused", "retry_wait", "usage_wait":
 	default:
 		if method != http.MethodGet {
 			return Run{}, ErrUncertain

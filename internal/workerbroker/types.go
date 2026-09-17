@@ -41,10 +41,17 @@ type Config struct {
 	APIKeyEnv       string
 	TokenEnv        string
 	AuthToken       string `json:"-"` // In-process managed brokers never export credentials.
-	MaxTurns        int
 	MaxOutputTokens int
 	MaxConcurrent   int
-	HTTPClient      *http.Client
+	// Admit runs before every billable inference, including context summaries
+	// and recovery attempts. Returning a *worker.HoldError preserves the run's
+	// work and waits; any other error stops the attempt. A nil callback permits
+	// every request, which is what a broker with no configured policy does.
+	Admit func(context.Context) error `json:"-"`
+	// TokenBudget is read immediately before each request so a live policy
+	// change applies without restarting the broker. Zero disables the budget.
+	TokenBudget func() int64 `json:"-"`
+	HTTPClient  *http.Client
 	// Command is injectable for tests. Production uses exec.CommandContext with a
 	// clean environment; it never invokes a host shell.
 	Command Commander
@@ -76,7 +83,28 @@ type storedRun struct {
 	Messages           []string                   `json:"messages"`
 	Transcript         []modelMessage             `json:"transcript"`
 	Commands           []commandRecord            `json:"commands"`
-	ModelCalls         int                        `json:"model_calls"`
+	// ModelCalls is diagnostic history. It was once a work allowance; it is not
+	// one now, and a resume never resets it.
+	ModelCalls int `json:"model_calls"`
+	// PendingUsage is written after admission and before the request leaves, so
+	// a crash cannot turn a possibly-billed call into free work. It is settled
+	// by request ID, which makes a late or duplicate settlement a no-op.
+	PendingUsage *pendingUsage `json:"pending_usage,omitempty"`
+	// UsageLedger marks that consumption has been accounted since this run
+	// started recording it. A run persisted before the ledger existed converts
+	// its historical calls into unknown consumption exactly once.
+	UsageLedger       bool  `json:"usage_ledger,omitempty"`
+	UsageInputTokens  int64 `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens int64 `json:"usage_output_tokens,omitempty"`
+	UsageUnknownCalls int   `json:"usage_unknown_calls,omitempty"`
+	// FailingTurns counts consecutive turns in which every requested operation
+	// failed. That is observable absence of progress, not a call ceiling.
+	FailingTurns int `json:"failing_turns,omitempty"`
+}
+type pendingUsage struct {
+	RequestID string    `json:"request_id"`
+	Stage     string    `json:"stage"`
+	StartedAt time.Time `json:"started_at"`
 }
 type commandRecord struct {
 	Command string `json:"command"`

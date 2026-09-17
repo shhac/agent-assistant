@@ -46,13 +46,18 @@ func (b *Broker) prepareContext(ctx context.Context, id string) ([]modelMessage,
 	messages := workingMessages(run)
 	toolBytes, _ := json.Marshal(workerTools())
 	maxBytes := 128*1024 - len(toolBytes) - 2048
+	// A summary is a billable request like any other: it is admitted through the
+	// same gate and its consumption is recorded against the same ledger.
 	checkpoint, _, err := engine.CompactContext(ctx, messages, engine.ContextOptions{MaxBytes: maxBytes}, func(ctx context.Context, input []engine.Message) (engine.Message, engine.Usage, error) {
-		cfg := b.modelConfig(id)
+		request := ""
+		cfg := b.modelConfig(id, stageSummary, &request)
 		cfg.MaxOutputTokens = min(cfg.MaxOutputTokens, 2048)
-		return engine.Complete(ctx, cfg, input, nil)
+		reply, usage, summaryErr := engine.Complete(ctx, cfg, input, nil)
+		b.settleUsage(id, request, usage)
+		return reply, usage, summaryErr
 	})
 	if err != nil {
-		return nil, workerModelDiagnostic(err)
+		return nil, err
 	}
 	if !checkpoint.Compacted {
 		raw, _ := json.Marshal(messages)

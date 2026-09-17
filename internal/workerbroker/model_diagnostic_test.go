@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shhac/agent-assistant/internal/integrations/worker"
 	"github.com/shhac/lib-agent-harness/completion"
 )
 
@@ -46,7 +47,7 @@ func TestInvalidWorkerToolCallHasSafeNonretryableDiagnostic(t *testing.T) {
 				requests++
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(payload)))}, nil
 			})}}}
-			reply, err := b.complete(context.Background(), nil)
+			reply, err := b.completeForRun(context.Background(), "", nil)
 			var failure *completion.RequestError
 			var safe interface{ SafeDiagnostic() string }
 			if !errors.As(err, &failure) || failure.Code != "invalid_worker_tool_call" || failure.Phase != completion.PhaseResponse || failure.Retryable() {
@@ -62,17 +63,21 @@ func TestInvalidWorkerToolCallHasSafeNonretryableDiagnostic(t *testing.T) {
 	}
 }
 
-func TestWorkerAllowanceDiagnosticsSurviveAdmissionWithoutRetry(t *testing.T) {
+// A resource hold is not a provider failure. It must stop before the transport,
+// leave accounting and context untouched, and never be classified as something
+// worth retrying.
+func TestResourceHoldStopsBeforeTransportWithoutFailureClassification(t *testing.T) {
 	for _, summary := range []bool{false, true} {
 		t.Run(map[bool]string{false: "completion", true: "summary"}[summary], func(t *testing.T) {
 			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 			defer b.Close()
 			b.cfg.HTTPClient = &http.Client{Transport: diagnosticTransport(func(*http.Request) (*http.Response, error) {
-				t.Fatal("exhausted allowance reached transport")
+				t.Fatal("held admission reached transport")
 				return nil, nil
 			})}
+			b.cfg.TokenBudget = func() int64 { return 5000 }
 			id := contextRun(t, b)
-			if err := b.update(id, func(r *storedRun) error { r.ModelCalls = b.cfg.MaxTurns; return nil }); err != nil {
+			if err := b.update(id, func(r *storedRun) error { r.UsageInputTokens = 5000; return nil }); err != nil {
 				t.Fatal(err)
 			}
 			before, _ := b.snapshot(id)
@@ -82,13 +87,22 @@ func TestWorkerAllowanceDiagnosticsSurviveAdmissionWithoutRetry(t *testing.T) {
 			} else {
 				_, err = b.completeForRun(context.Background(), id, nil)
 			}
+			if !errors.Is(err, worker.ErrResourceHold) {
+				t.Fatalf("lost resource-hold identity: %v", err)
+			}
 			var failure *completion.RequestError
-			if !errors.Is(err, errWorkerModelAllowance) || !errors.As(err, &failure) || failure.Code != "worker_model_allowance" || failure.Phase != completion.PhasePreflight || failure.Retryable() {
-				t.Fatalf("lost allowance diagnostic or sentinel: %v", err)
+			if errors.As(err, &failure) {
+				t.Fatalf("hold carried a provider classification: %+v", failure)
 			}
 			after, _ := b.snapshot(id)
-			if before.ModelCalls != after.ModelCalls || !reflect.DeepEqual(before.Transcript, after.Transcript) || len(after.ContextCheckpoints) != 0 {
-				t.Fatal("allowance failure changed accounting or context")
+			if before.ModelCalls != after.ModelCalls || !reflect.DeepEqual(before.Transcript, after.Transcript) || len(after.ContextCheckpoints) != 0 || after.PendingUsage != nil {
+				t.Fatal("hold changed accounting or context")
+			}
+			if after.Run.ResourceHold == nil || after.Run.ResourceHold.Kind != worker.HoldTokenBudget || !after.Run.ResourceHold.OwnerAction {
+				t.Fatalf("budget hold not recorded as an owner decision: %+v", after.Run.ResourceHold)
+			}
+			if after.Run.ProviderFailures != 0 || !after.Run.RetryAt.IsZero() {
+				t.Fatal("hold spent provider recovery allowance")
 			}
 		})
 	}

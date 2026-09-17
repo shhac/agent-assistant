@@ -113,26 +113,30 @@ func TestProviderRecoveryRefusesUnknownExhaustedAndOwnerHeldFailures(t *testing.
 			}
 		})
 	}
-	for _, budget := range []string{"provider", "inference"} {
-		t.Run(budget, func(t *testing.T) {
-			b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
-			defer b.Close()
-			id := providerRun(t, b)
-			b.update(id, func(r *storedRun) error {
-				if budget == "provider" {
-					r.Run.ProviderFailures = maxProviderFailures - 1
-				} else {
-					r.ModelCalls = b.cfg.MaxTurns
-				}
-				return nil
-			})
-			b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorUnavailable})
-			r, _ := b.snapshot(id)
-			if r.PendingStatus != "blocked" || !r.Run.RetryAt.IsZero() {
-				t.Fatal("exhausted recovery scheduled more work")
-			}
-		})
-	}
+	t.Run("provider recovery exhausted", func(t *testing.T) {
+		b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+		defer b.Close()
+		id := providerRun(t, b)
+		b.update(id, func(r *storedRun) error { r.Run.ProviderFailures = maxProviderFailures - 1; return nil })
+		b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorUnavailable})
+		r, _ := b.snapshot(id)
+		if r.PendingStatus != "blocked" || !r.Run.RetryAt.IsZero() {
+			t.Fatal("exhausted recovery scheduled more work")
+		}
+	})
+	// A long history of successful calls is diagnostic only. It must not shorten
+	// the recovery a genuine provider outage is entitled to.
+	t.Run("long history keeps recovery", func(t *testing.T) {
+		b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
+		defer b.Close()
+		id := providerRun(t, b)
+		b.update(id, func(r *storedRun) error { r.ModelCalls = 512; return nil })
+		b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorUnavailable})
+		r, _ := b.snapshot(id)
+		if r.PendingStatus != "retry_wait" || r.Run.RetryAt.IsZero() {
+			t.Fatal("call history was treated as a spent allowance", r.PendingStatus)
+		}
+	})
 }
 func awaitProviderStatus(t *testing.T, b *Broker, id, status string) storedRun {
 	t.Helper()

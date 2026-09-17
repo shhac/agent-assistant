@@ -57,7 +57,13 @@ type running struct {
 
 type Manager struct {
 	// Diagnostics is set before the manager is used; nil writes to stderr.
-	Diagnostics  *diagnostics.Logger
+	Diagnostics *diagnostics.Logger
+	// Admit and TokenBudget carry the daemon's live resource policy into every
+	// broker it opens. They are read per request, so an owner changing a limit
+	// does not require restarting a worker to apply it. Both are set before the
+	// manager is used; nil leaves a broker with no configured resource policy.
+	Admit        func(context.Context, string) error
+	TokenBudget  func() int64
 	root         string
 	mu           sync.Mutex
 	ctx          context.Context
@@ -188,13 +194,17 @@ func (m *Manager) client(ctx context.Context, projectID, workspace string, model
 		return nil, errors.New("cannot create private worker authentication")
 	}
 	token := hex.EncodeToString(key[:])
+	var admit func(context.Context) error
+	if m.Admit != nil {
+		admit = func(ctx context.Context) error { return m.Admit(ctx, projectID) }
+	}
 	var command workerbroker.Commander
 	if local, ok := m.runtime.(*localRuntime); ok {
 		command = workerbroker.CommandFunc(func(ctx context.Context, args []string, input []byte) ([]byte, error) {
 			return local.docker(ctx, m.root, saved.Environment.Socket, args, input)
 		})
 	}
-	b, err := m.open(workerbroker.Config{Diagnostics: m.Diagnostics, Command: command, Dependencies: mounts, StateDir: brokerDir, Workspace: canonical, ProjectID: projectID, Image: saved.Environment.Image, DockerSocket: saved.Environment.Socket, AuthToken: token, Engine: model.Engine, Model: model.Model, Effort: model.Effort, CodexBin: model.CodexBin, CodexHome: model.CodexHome, ClaudeBin: model.ClaudeBin, ClaudeHome: model.ClaudeHome, ModelEndpoint: strings.TrimRight(model.BaseURL, "/") + "/chat/completions", APIKeyEnv: model.APIKeyEnv, MaxOutputTokens: model.MaxTokens})
+	b, err := m.open(workerbroker.Config{Diagnostics: m.Diagnostics, Command: command, Dependencies: mounts, StateDir: brokerDir, Workspace: canonical, ProjectID: projectID, Image: saved.Environment.Image, DockerSocket: saved.Environment.Socket, AuthToken: token, Engine: model.Engine, Model: model.Model, Effort: model.Effort, CodexBin: model.CodexBin, CodexHome: model.CodexHome, ClaudeBin: model.ClaudeBin, ClaudeHome: model.ClaudeHome, ModelEndpoint: strings.TrimRight(model.BaseURL, "/") + "/chat/completions", APIKeyEnv: model.APIKeyEnv, MaxOutputTokens: model.MaxTokens, Admit: admit, TokenBudget: m.TokenBudget})
 	if err != nil {
 		return nil, fmt.Errorf("prepare project worker: %w", err)
 	}

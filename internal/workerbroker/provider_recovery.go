@@ -101,7 +101,7 @@ func (b *Broker) scheduleProviderRetry(id string, failure *completion.RequestErr
 		r.Run.ProviderFailureKind = string(failure.Kind)
 		setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
 		r.Run.ModelFailureEvidence = evidenceTyped
-		if r.Run.ProviderFailures >= maxProviderFailures || r.ModelCalls >= b.cfg.MaxTurns {
+		if r.Run.ProviderFailures >= maxProviderFailures {
 			r.Run.RetryAt = time.Time{}
 			r.PendingStatus = "blocked"
 			r.PendingSummary = "Provider recovery allowance exhausted; progress is preserved. Resume explicitly after the provider recovers."

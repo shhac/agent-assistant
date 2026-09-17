@@ -37,7 +37,7 @@ func TestWorkerModelProfileKeepsItsEffortAndIsolatedTools(t *testing.T) {
 	}))
 	defer remote.Close()
 	b := &Broker{cfg: Config{Engine: "openai-compatible", Model: "worker-fixture", Effort: "low", ModelEndpoint: remote.URL, MaxOutputTokens: 4096}}
-	response, err := b.complete(context.Background(), []modelMessage{{Role: "user", Content: "Verify fixture"}})
+	response, err := b.completeForRun(context.Background(), "", []modelMessage{{Role: "user", Content: "Verify fixture"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestWorkerRejectsDuplicateActionIDsBeforeExecutingBatch(t *testing.T) {
 	}))
 	defer remote.Close()
 	b := &Broker{cfg: Config{Engine: "openai-compatible", Model: "fixture", ModelEndpoint: remote.URL}}
-	response, err := b.complete(context.Background(), []modelMessage{{Role: "user", Content: "Check"}})
+	response, err := b.completeForRun(context.Background(), "", []modelMessage{{Role: "user", Content: "Check"}})
 	if err == nil || len(response.ToolCalls) != 0 {
 		t.Fatalf("corrupt batch accepted: %+v %v", response, err)
 	}

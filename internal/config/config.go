@@ -104,13 +104,20 @@ type Linear struct {
 	TeamIDs           []string `json:"team_ids"`
 }
 type Limits struct {
-	WorkerUsage         WorkerUsage `json:"worker_usage"`
-	MaxModelCallsPerDay int         `json:"max_model_calls_per_day"`
-	MaxModelTurns       int         `json:"max_model_turns"`
-	MaxAgents           int         `json:"max_agents"`
-	MaxDepth            int         `json:"max_depth"`
-	MaxRecoveries       int         `json:"max_recoveries"`
-	CheckInMinutes      int         `json:"check_in_minutes"`
+	WorkerUsage WorkerUsage `json:"worker_usage"`
+	// WorkerTokenBudget caps the tokens one worker assignment may consume,
+	// counted from the provider's own reported usage across its whole life,
+	// including context summaries and resumes. Zero disables it. This is a
+	// per-assignment budget, not the shared-account headroom in WorkerUsage.
+	WorkerTokenBudget   int64 `json:"worker_token_budget"`
+	MaxModelCallsPerDay int   `json:"max_model_calls_per_day"`
+	// MaxModelTurns and MaxModelCallsPerDay bound the assistant's own
+	// conversation and tool loop. They are not worker lifetime budgets.
+	MaxModelTurns  int `json:"max_model_turns"`
+	MaxAgents      int `json:"max_agents"`
+	MaxDepth       int `json:"max_depth"`
+	MaxRecoveries  int `json:"max_recoveries"`
+	CheckInMinutes int `json:"check_in_minutes"`
 }
 
 // WorkerUsage controls admission of new work against native CLI subscription quotas.
@@ -356,6 +363,9 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.MaxModelTurns < 1 || c.Limits.MaxModelTurns > 32 {
 		return errors.New("limits.max_model_turns must be between 1 and 32")
+	}
+	if c.Limits.WorkerTokenBudget < 0 || (c.Limits.WorkerTokenBudget > 0 && c.Limits.WorkerTokenBudget < 1000) || c.Limits.WorkerTokenBudget > 1_000_000_000_000 {
+		return errors.New("worker token budget must be 0 to disable it, or at least 1000 tokens")
 	}
 	if c.Limits.MaxAgents < 1 || c.Limits.MaxAgents > 64 {
 		return errors.New("limits.max_agents must be between 1 and 64")

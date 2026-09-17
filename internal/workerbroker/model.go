@@ -3,20 +3,21 @@ package workerbroker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/lib-agent-harness/completion"
 )
 
-func (b *Broker) complete(ctx context.Context, messages []modelMessage) (modelMessage, error) {
-	return b.completeForRun(ctx, "", messages)
-}
 func (b *Broker) completeForRun(ctx context.Context, id string, messages []modelMessage) (modelMessage, error) {
-	message, _, err := engine.Complete(ctx, b.modelConfig(id), messages, workerTools())
+	request := ""
+	cfg := b.modelConfig(id, stageTurn, &request)
+	message, usage, err := engine.Complete(ctx, cfg, messages, workerTools())
+	// A rejection can still report what it consumed. Settle whatever the
+	// provider established, and record an unmeasured attempt as unknown.
+	b.settleUsage(id, request, usage)
 	if err != nil {
-		return modelMessage{}, workerModelDiagnostic(err)
+		return modelMessage{}, err
 	}
 	seen, allowed := map[string]bool{}, map[string]bool{}
 	for _, tool := range workerTools() {
@@ -44,16 +45,10 @@ func workerCompletionDiagnostic(message string, phase completion.ErrorPhase, cod
 	return &modelDiagnostic{message: message, failure: &completion.RequestError{Kind: completion.ErrorUnknown, Phase: phase, Code: code}}
 }
 
-// Admission deliberately hides provider classifications to prevent retries.
-// Restore diagnostics only for this known local allowance sentinel.
-func workerModelDiagnostic(err error) error {
-	if errors.Is(err, errWorkerModelAllowance) {
-		return errors.Join(errWorkerModelAllowance, workerCompletionDiagnostic("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing", completion.PhasePreflight, "worker_model_allowance"))
-	}
-	return err
-}
-
-func (b *Broker) modelConfig(id string) engine.Config {
+// modelConfig binds one invocation to its run. Every request a run makes,
+// including a context summary, passes the same admission and accounting; a
+// runless config exists only for configuration validation and makes no call.
+func (b *Broker) modelConfig(id, stage string, request *string) engine.Config {
 	cfg := engine.Config{
 		WorkDirRoot: b.cfg.StateDir, Engine: b.cfg.Engine, Effort: b.cfg.Effort, CodexBin: b.cfg.CodexBin, CodexHome: b.cfg.CodexHome, ClaudeBin: b.cfg.ClaudeBin, ClaudeHome: b.cfg.ClaudeHome,
 		Endpoint: b.cfg.ModelEndpoint, Model: b.cfg.Model, APIKeyEnv: b.cfg.APIKeyEnv,
@@ -61,27 +56,9 @@ func (b *Broker) modelConfig(id string) engine.Config {
 		Retry: &engine.RetryPolicy{MaxRetries: 0},
 	}
 	if id != "" {
-		cfg.BeforeRequest = func(ctx context.Context) error { return b.reserveWorkerModelCall(ctx, id) }
+		cfg.BeforeRequest = func(ctx context.Context) error { return b.reserveWorkerModelCall(ctx, id, stage, request) }
 	}
 	return cfg
-}
-
-var errWorkerModelAllowance = errors.New("cumulative worker model allowance exhausted; the owner must explicitly raise max-turns before continuing")
-
-func (b *Broker) reserveWorkerModelCall(ctx context.Context, id string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return b.update(id, func(run *storedRun) error {
-		if run.Run.Status != "running" || run.PendingStatus == "paused" || run.PendingStatus == "cancelled" {
-			return errInterrupted
-		}
-		if run.ModelCalls >= b.cfg.MaxTurns {
-			return errWorkerModelAllowance
-		}
-		run.ModelCalls++
-		return nil
-	})
 }
 
 func workerTools() []engine.Tool {

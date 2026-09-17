@@ -17,12 +17,13 @@ import (
 	"github.com/shhac/agent-assistant/internal/diagnostics"
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/connections"
+	"github.com/shhac/agent-assistant/internal/quota"
 )
 
 type App struct {
 	Diagnostics      *diagnostics.Logger // Set before starting the daemon.
 	workerDiscover   func(context.Context, engine.Config) ([]engine.ModelOption, error)
-	workerUsage      workerUsageMeter
+	workerUsage      quota.Meter
 	loadingComplete  func(context.Context, engine.Config, []engine.Message, []engine.Tool) (engine.Message, engine.Usage, error)
 	loadingDiscover  func(context.Context, engine.Config) ([]engine.ModelOption, error)
 	workerPreflight  func(context.Context, config.Model) error

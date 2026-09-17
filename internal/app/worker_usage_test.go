@@ -20,103 +20,6 @@ func quotaFixture(used float64) session.QuotaSnapshot {
 	observation := session.Observation{Quality: session.Measured, ObservedAt: time.Now()}
 	return session.QuotaSnapshot{Observation: observation, Complete: true, Windows: []session.QuotaWindow{{Observation: observation, ID: "codex/primary", Scope: "codex", UsedPercent: &used}}}
 }
-func TestQuotaDecision(t *testing.T) {
-	now := time.Now()
-	for _, tc := range []struct {
-		name string
-		used float64
-		held bool
-	}{{"below", 89.9, false}, {"exactly", 90, true}, {"over", 110, true}, {"zero", 0, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			held, known, _ := quotaDecision(quotaFixture(tc.used), config.Model{Engine: "codex"}, 90, now)
-			if held != tc.held || !known {
-				t.Fatalf("held=%v known=%v", held, known)
-			}
-		})
-	}
-	for _, tc := range []string{"absent", "stale", "invalidated", "nil percentage", "expired reset", "partial", "unrelated"} {
-		t.Run(tc, func(t *testing.T) {
-			q := quotaFixture(20)
-			switch tc {
-			case "absent":
-				q = session.QuotaSnapshot{}
-			case "stale":
-				q.ObservedAt = now.Add(-3 * time.Minute)
-			case "invalidated":
-				q.Invalidated = true
-			case "nil percentage":
-				q.Windows[0].UsedPercent = nil
-			case "expired reset":
-				expired := now.Add(-time.Second)
-				q.Windows[0].ResetsAt = &expired
-			case "partial":
-				q.Complete = false
-			case "unrelated":
-				q.Windows[0].Scope = "code-review"
-			}
-			held, known, _ := quotaDecision(q, config.Model{Engine: "codex"}, 90, now)
-			if held || known {
-				t.Fatalf("held=%v known=%v", held, known)
-			}
-		})
-	}
-	q := quotaFixture(10)
-	high := quotaFixture(95).Windows[0]
-	high.ID = "codex/secondary"
-	q.Windows = append(q.Windows, high)
-	if held, _, _ := quotaDecision(q, config.Model{Engine: "codex"}, 90, now); !held {
-		t.Fatal("weekly allowance ignored")
-	}
-	q.Complete = false
-	if held, _, _ := quotaDecision(q, config.Model{Engine: "codex"}, 90, now); !held {
-		t.Fatal("known exhausted window lost in partial snapshot")
-	}
-}
-func TestQuotaModelScopes(t *testing.T) {
-	for _, tc := range []struct {
-		engine, model, scope, id string
-		applies                  bool
-	}{
-		{"codex", "gpt-6-astra", "codex", "codex/primary", true},
-		{"codex", "gpt-6-astra", "gpt-6-astra", "model/primary", true},
-		{"codex", "gpt-6-astra", "code-review", "review/primary", false},
-		{"claude", "claude-opus-5", "five_hour", "five_hour", true},
-		{"claude", "claude-opus-5", "seven_day_opus", "seven_day_opus", true},
-		{"claude", "claude-opus-5", "seven_day_sonnet", "seven_day_sonnet", false},
-		{"claude", "claude-opus-5", "Opus 5", "model:Opus 5", true},
-		{"claude", "claude-opus-5", "Sonnet", "model:Sonnet", false},
-	} {
-		if got := quotaApplies(session.QuotaWindow{ID: tc.id, Scope: tc.scope}, config.Model{Engine: tc.engine, Model: tc.model}); got != tc.applies {
-			t.Errorf("%+v got %v", tc, got)
-		}
-	}
-}
-func TestUsageCacheUsesEngineBinaryAndHomeNotModel(t *testing.T) {
-	var options []session.Options
-	meter := workerUsageMeter{inspect: func(_ context.Context, o session.Options) (session.Inspection, error) {
-		options = append(options, o)
-		return session.Inspection{Quota: quotaFixture(90)}, errors.New("account unavailable but quota succeeded")
-	}}
-	m := config.Default().WorkerModel
-	for i := 0; i < 2; i++ {
-		if !meter.read(context.Background(), m).Known() {
-			t.Fatal("partial inspection discarded quota")
-		}
-	}
-	m.Model = "different-model"
-	meter.read(context.Background(), m)
-	m.CodexHome = "/synthetic/another-home"
-	meter.read(context.Background(), m)
-	m.CodexBin = "another-codex"
-	meter.read(context.Background(), m)
-	m.Engine = "claude"
-	m.ClaudeBin = "synthetic-claude"
-	m.ClaudeHome = "/synthetic/claude-home"
-	meter.read(context.Background(), m)
-	if len(options) != 4 || options[3].Engine != session.Claude || options[3].Binary != m.ClaudeBin || options[3].Home != m.ClaudeHome {
-		t.Fatalf("wrong identities: %+v", options)
-	}
-}
 
 type quotaManaged struct{ client *worker.Client }
 
@@ -153,15 +56,13 @@ func usageRuntimeFixture(t *testing.T, handler http.HandlerFunc) (*App, core.Age
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.workerUsage.inspect = func(context.Context, session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(context.Context, session.Options) (session.Inspection, error) {
 		return session.Inspection{Quota: quotaFixture(90)}, nil
 	}
 	return a, ag
 }
 func clearQuotaCache(a *App) {
-	a.workerUsage.mu.Lock()
-	a.workerUsage.entries = nil
-	a.workerUsage.mu.Unlock()
+	a.workerUsage.Forget()
 }
 
 func TestQuotaHoldLeavesDispatchQueuedAndAutomaticallyRecovers(t *testing.T) {
@@ -194,7 +95,7 @@ func TestQuotaHoldLeavesDispatchQueuedAndAutomaticallyRecovers(t *testing.T) {
 	if !visible {
 		t.Fatal("hold missing from dashboard/model state", snap.Integrations)
 	}
-	a.workerUsage.inspect = func(context.Context, session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(context.Context, session.Options) (session.Inspection, error) {
 		return session.Inspection{Quota: quotaFixture(10)}, nil
 	}
 	clearQuotaCache(a)
@@ -246,7 +147,7 @@ func TestUsageDoesNotBlockObservationButHoldsResumeAndInstructions(t *testing.T)
 }
 func TestUnavailableAndDisabledWorkerUsagePolicies(t *testing.T) {
 	a, _ := usageRuntimeFixture(t, func(http.ResponseWriter, *http.Request) { t.Fatal("unexpected broker call") })
-	a.workerUsage.inspect = func(context.Context, session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(context.Context, session.Options) (session.Inspection, error) {
 		return session.Inspection{}, errors.New("unavailable")
 	}
 	ctx := context.Background()
@@ -265,7 +166,7 @@ func TestUnavailableAndDisabledWorkerUsagePolicies(t *testing.T) {
 	if err := a.UpdateConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	a.workerUsage.inspect = func(context.Context, session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(context.Context, session.Options) (session.Inspection, error) {
 		t.Fatal("disabled limit inspected CLI")
 		return session.Inspection{}, nil
 	}
@@ -274,7 +175,7 @@ func TestUnavailableAndDisabledWorkerUsagePolicies(t *testing.T) {
 		t.Fatal("disabled limit blocked", err)
 	}
 	external, _ := runtimeFixture(t, func(http.ResponseWriter, *http.Request) { t.Fatal("unexpected broker call") })
-	external.workerUsage.inspect = a.workerUsage.inspect
+	external.workerUsage.Inspect = a.workerUsage.Inspect
 	cfg = external.Config()
 	cfg.Limits.WorkerUsage.OnUnavailable = "pause"
 	if err := external.UpdateConfig(cfg); err != nil {
@@ -297,7 +198,7 @@ func TestWorkerUsageUsesProfileEngineAndThreshold(t *testing.T) {
 	if err := a.UpdateConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	a.workerUsage.inspect = func(_ context.Context, o session.Options) (session.Inspection, error) {
+	a.workerUsage.Inspect = func(_ context.Context, o session.Options) (session.Inspection, error) {
 		if o.Engine != session.Claude || o.Home != override.ClaudeHome {
 			t.Fatalf("wrong worker login: %+v", o)
 		}
@@ -308,28 +209,6 @@ func TestWorkerUsageUsesProfileEngineAndThreshold(t *testing.T) {
 	}
 	if err := a.workerUsageAllowed(context.Background(), "fake"); err == nil {
 		t.Fatal("Claude-specific limit ignored")
-	}
-}
-
-func TestWorkerUsageRefreshDoesNotRetainFailedTelemetry(t *testing.T) {
-	calls := 0
-	meter := workerUsageMeter{inspect: func(context.Context, session.Options) (session.Inspection, error) {
-		calls++
-		if calls == 1 {
-			return session.Inspection{Quota: quotaFixture(5)}, nil
-		}
-		return session.Inspection{}, errors.New("failed refresh")
-	}}
-	model := config.Default().WorkerModel
-	if !meter.read(context.Background(), model).Known() {
-		t.Fatal("initial quota absent")
-	}
-	for key, entry := range meter.entries {
-		entry.fetched = time.Now().Add(-2 * quotaCacheAge)
-		meter.entries[key] = entry
-	}
-	if meter.read(context.Background(), model).Known() || calls != 2 {
-		t.Fatal("failed refresh presented stale quota as current")
 	}
 }
 
