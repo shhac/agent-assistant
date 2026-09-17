@@ -3,7 +3,7 @@ import { ProjectLink } from "./ProjectLink";
 import { AttentionSummary } from "./AttentionSummary";
 import { DecisionCard } from "./DecisionCard";
 import { groupActivity } from "./activity";
-import { isHeldUp, stateLabel } from "./states";
+import { attentionHeldUp, stateLabel } from "./states";
 import { dateLabel, Empty, humanStatus, Icon, PageHeading, Status } from "./ui";
 import { pendingDecisions, type Project, type State } from "./api";
 import type { Page } from "./navigation";
@@ -145,7 +145,7 @@ export function ProjectRow({
   // Lifecycle and execution health are separate facts: an active project can
   // hold blocked work, and only the second is a reason to look now.
   const health = state.attention.find((a) => a.project_id === project.id);
-  const heldUp = health && isHeldUp(health.execution);
+  const heldUp = health && attentionHeldUp(health);
   return (
     <button className="project-row" onClick={onSelect}>
       <span className="project-symbol">

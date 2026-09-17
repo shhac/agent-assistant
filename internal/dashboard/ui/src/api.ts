@@ -55,6 +55,13 @@ export interface SteeringReceipt {
 }
 export interface Agent {
   retry_at?: string;
+  resource_hold_kind?: string;
+  resource_hold_owner_action?: boolean;
+  resource_hold_resets_at?: string;
+  usage_input_tokens?: number;
+  usage_output_tokens?: number;
+  usage_unknown_calls?: number;
+  token_budget?: number;
   provider_failures?: number;
   provider_failure_kind?: string;
   model_failure_engine?: string;

@@ -23,6 +23,7 @@ const labels: Record<string, string> = {
   "agent.running": "Worker running",
   "agent.started": "Worker started",
   "agent.stop_requested": "Stop requested",
+  "agent.usage_wait": "Waiting for worker resources",
   "agent.waiting": "Worker waiting",
   "assistant.review": "Assistant review",
   "assistant.theme": "Workspace palette changed",

@@ -10,7 +10,7 @@ import {
 } from "./api";
 import { ConversationMarkdown } from "./ConversationMarkdown";
 import { dateLabel, Icon } from "./ui";
-import { isHeldUp } from "./states";
+import { attentionHeldUp } from "./states";
 import { ChatQueue, type QueueHold } from "./ChatQueue";
 import { ToolActivity } from "./ToolActivity";
 import { fullDateLabel } from "./ui";
@@ -232,7 +232,7 @@ export function ChatPanel({
   const turnsByMessage = new Map(
     turns.map((t) => [t.user_message_id || t.id, t]),
   );
-  const heldUp = state.attention.filter((a) => isHeldUp(a.execution));
+  const heldUp = state.attention.filter(attentionHeldUp);
   const running = turns.find((t) => t.status === "running");
   const eventSignature = turns
     .map(

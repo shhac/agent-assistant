@@ -184,3 +184,39 @@ describe("attention summary", () => {
     expect(screen.getByText("1 decision and 1 outcome need you")).toBeTruthy();
   });
 });
+
+// The daemon decides whether a wait clears by itself. A row it reports as held
+// belongs in the owner's queue whatever its state is called; one it reports as
+// scheduled does not.
+describe("attention resource waits", () => {
+  it("keeps a self-clearing resource wait out of the owner's queue", () => {
+    show([
+      {
+        ...blocked,
+        execution: "usage_wait",
+        next_action: "worker",
+        recovery: "scheduled",
+        reason: "codex five_hour is 92.0% consumed; resets soon",
+      },
+    ]);
+    expect(
+      screen.queryByRole("region", { name: "Work needing attention" }),
+    ).toBeNull();
+  });
+
+  it("surfaces a resource wait the owner has to resolve", () => {
+    show([
+      {
+        ...blocked,
+        execution: "usage_wait",
+        next_action: "owner",
+        recovery: "held",
+        reason: "Worker token budget reached",
+      },
+    ]);
+    expect(
+      screen.getByRole("region", { name: "Work needing attention" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/Worker token budget reached/)).toBeTruthy();
+  });
+});

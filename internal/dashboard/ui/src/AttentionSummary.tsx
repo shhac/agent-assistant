@@ -1,5 +1,5 @@
 import { Icon, sinceLabel, Status } from "./ui";
-import { actorLabel, isHeldUp, stateLabel } from "./states";
+import { actorLabel, attentionHeldUp, stateLabel } from "./states";
 import type { Project, ProjectAttention } from "./api";
 
 const recoveryLabels: Record<string, string> = {
@@ -9,7 +9,7 @@ const recoveryLabels: Record<string, string> = {
 };
 
 function attentionTone(item: ProjectAttention): string {
-  if (item.next_action === "owner" && isHeldUp(item.execution)) return "amber";
+  if (item.next_action === "owner" && attentionHeldUp(item)) return "amber";
   if (item.execution === "review") return "amber";
   return "";
 }
@@ -35,7 +35,7 @@ export function AttentionSummary({
   hasProjects: boolean;
 }) {
   const heldUp = attention.filter(
-    (a) => isHeldUp(a.execution) || a.execution === "review",
+    (a) => attentionHeldUp(a) || a.execution === "review",
   );
   const needsOwner = heldUp.filter((a) => a.next_action === "owner");
 

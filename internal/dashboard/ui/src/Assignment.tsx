@@ -1,12 +1,17 @@
 import { WorkerConversation } from "./WorkerConversation";
 import { WorkerFailureCard } from "./WorkerFailureCard";
 import { sinceLabel, Status } from "./ui";
-import { needsAttention as attentionState, stateDetail } from "./states";
+import {
+  awaitsOwnerResources,
+  needsAttention as attentionState,
+  stateDetail,
+  usageLabel,
+} from "./states";
 import { explainFailure } from "./failure";
 import type { Agent } from "./api";
 
 export function needsAttention(agent: Agent): boolean {
-  return attentionState(agent.status);
+  return attentionState(agent.status, awaitsOwnerResources(agent));
 }
 
 /**
@@ -32,6 +37,10 @@ export function Assignment({
   // anything it cannot explain still shows its recorded summary.
   const explained = explainFailure(agent) !== null;
   const progress = sinceLabel(agent.last_progress_at || agent.last_update);
+  const usage = usageLabel(agent);
+  const resumesAt = agent.resource_hold_resets_at
+    ? new Date(agent.resource_hold_resets_at).toLocaleString()
+    : "";
   return (
     <article
       className={`assignment ${attention ? "needs-attention" : ""}`}
@@ -52,7 +61,17 @@ export function Assignment({
         {agent.recoveries
           ? ` · ${agent.recoveries} recovery attempts recorded`
           : ""}
+        {usage ? ` · ${usage}` : ""}
       </p>
+      {agent.status === "usage_wait" && (
+        <p className="assignment-meta">
+          {agent.resource_hold_owner_action
+            ? "Waiting for your decision about worker resources. Saved work and conversation are preserved."
+            : resumesAt
+              ? `Waiting for the account allowance to reset at ${resumesAt}. Work continues by itself; nothing failed.`
+              : "Waiting for worker resources. Work continues by itself once they are available; nothing failed."}
+        </p>
+      )}
 
       {explained ? (
         <WorkerFailureCard agent={agent} onInvestigate={onInvestigate} />

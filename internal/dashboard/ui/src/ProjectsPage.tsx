@@ -4,7 +4,7 @@ import { WorkerPreparation } from "./WorkerPreparation";
 import { ProjectWorkers } from "./ProjectWorkers";
 import { ProjectWork } from "./ProjectWork";
 import { ActivityList, ProjectRow, WorkerUsageHold } from "./OverviewPage";
-import { isHeldUp, stateLabel } from "./states";
+import { attentionHeldUp, stateLabel } from "./states";
 import {
   CriteriaList,
   Empty,
@@ -56,7 +56,7 @@ export function Projects({
                 const health = state.attention.find(
                   (a) => a.project_id === project.id,
                 );
-                return health && isHeldUp(health.execution) ? (
+                return health && attentionHeldUp(health) ? (
                   <Status tone="amber">{stateLabel(health.execution)}</Status>
                 ) : null;
               })()}
