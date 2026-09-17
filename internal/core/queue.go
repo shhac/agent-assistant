@@ -189,6 +189,9 @@ func deriveWorkItemStatus(v *Snapshot, w *WorkItem) (string, string) {
 	if statuses["retry_wait"] > 0 {
 		return "waiting", nonemptyStatusReason(reason["retry_wait"], "Waiting for the model provider; retry is scheduled")
 	}
+	if statuses["usage_wait"] > 0 {
+		return "waiting", nonemptyStatusReason(reason["usage_wait"], "Waiting for worker resources to become available")
+	}
 	if statuses["reconciling"] > 0 {
 		return "waiting", "Checking worker state before any retry"
 	}

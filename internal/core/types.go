@@ -26,42 +26,52 @@ type Project struct {
 // ParentID retains the stored/wire name for its authority and escalation link;
 // it is not subprocess ownership or a restriction on peer communication.
 type Agent struct {
-	ContextCompactions   int       `json:"context_compactions,omitempty"`
-	ContextBytes         int       `json:"context_bytes,omitempty"`
-	RetryAt              time.Time `json:"retry_at,omitempty"`
-	ProviderFailures     int       `json:"provider_failures,omitempty"`
-	ProviderFailureKind  string    `json:"provider_failure_kind,omitempty"`
-	ModelFailureEngine   string    `json:"model_failure_engine,omitempty"`
-	ModelFailurePhase    string    `json:"model_failure_phase,omitempty"`
-	ModelFailureCode     string    `json:"model_failure_code,omitempty"`
-	ModelFailureEvidence string    `json:"model_failure_evidence,omitempty"`
-	ModelExitCode        *int      `json:"model_exit_code,omitempty"`
-	OwnerControl         string    `json:"owner_control,omitempty"`
-	ControlKey           string    `json:"control_key,omitempty"`
-	ControlCapabilities  []string  `json:"control_capabilities,omitempty"`
-	WorkItemID           string    `json:"work_item_id,omitempty"`
-	LastProgressAt       time.Time `json:"last_progress_at,omitempty"`
-	ProgressFingerprint  string    `json:"progress_fingerprint,omitempty"`
-	BrokerUpdatedAt      time.Time `json:"broker_updated_at,omitempty"`
-	ResumeKey            string    `json:"resume_key,omitempty"`
-	ID                   string    `json:"id"`
-	ProjectID            string    `json:"project_id"`
-	ParentID             string    `json:"parent_id,omitempty"`
-	ProfileID            string    `json:"profile_id"`
-	Name                 string    `json:"name"`
-	Role                 string    `json:"role"`
-	Status               string    `json:"status"`
-	Task                 string    `json:"task"`
-	AcceptanceCriteria   string    `json:"acceptance_criteria"`
-	Capabilities         []string  `json:"capabilities"`
-	ExternalID           string    `json:"external_id,omitempty"`
-	DispatchKey          string    `json:"dispatch_key"`
-	Depth                int       `json:"depth"`
-	Recoveries           int       `json:"recoveries"`
-	LastUpdate           time.Time `json:"last_update"`
-	NextCheckIn          time.Time `json:"next_check_in"`
-	Summary              string    `json:"summary"`
-	Evidence             []string  `json:"evidence"`
+	ContextCompactions int `json:"context_compactions,omitempty"`
+	ContextBytes       int `json:"context_bytes,omitempty"`
+	// Resource-hold fields describe work waiting on a budget or an account
+	// allowance. OwnerAction separates a wait that clears by itself from one
+	// that needs a policy decision. None of this is a failure classification.
+	ResourceHoldKind        string    `json:"resource_hold_kind,omitempty"`
+	ResourceHoldOwnerAction bool      `json:"resource_hold_owner_action,omitempty"`
+	ResourceHoldResetsAt    time.Time `json:"resource_hold_resets_at,omitempty"`
+	UsageInputTokens        int64     `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens       int64     `json:"usage_output_tokens,omitempty"`
+	UsageUnknownCalls       int       `json:"usage_unknown_calls,omitempty"`
+	TokenBudget             int64     `json:"token_budget,omitempty"`
+	RetryAt                 time.Time `json:"retry_at,omitempty"`
+	ProviderFailures        int       `json:"provider_failures,omitempty"`
+	ProviderFailureKind     string    `json:"provider_failure_kind,omitempty"`
+	ModelFailureEngine      string    `json:"model_failure_engine,omitempty"`
+	ModelFailurePhase       string    `json:"model_failure_phase,omitempty"`
+	ModelFailureCode        string    `json:"model_failure_code,omitempty"`
+	ModelFailureEvidence    string    `json:"model_failure_evidence,omitempty"`
+	ModelExitCode           *int      `json:"model_exit_code,omitempty"`
+	OwnerControl            string    `json:"owner_control,omitempty"`
+	ControlKey              string    `json:"control_key,omitempty"`
+	ControlCapabilities     []string  `json:"control_capabilities,omitempty"`
+	WorkItemID              string    `json:"work_item_id,omitempty"`
+	LastProgressAt          time.Time `json:"last_progress_at,omitempty"`
+	ProgressFingerprint     string    `json:"progress_fingerprint,omitempty"`
+	BrokerUpdatedAt         time.Time `json:"broker_updated_at,omitempty"`
+	ResumeKey               string    `json:"resume_key,omitempty"`
+	ID                      string    `json:"id"`
+	ProjectID               string    `json:"project_id"`
+	ParentID                string    `json:"parent_id,omitempty"`
+	ProfileID               string    `json:"profile_id"`
+	Name                    string    `json:"name"`
+	Role                    string    `json:"role"`
+	Status                  string    `json:"status"`
+	Task                    string    `json:"task"`
+	AcceptanceCriteria      string    `json:"acceptance_criteria"`
+	Capabilities            []string  `json:"capabilities"`
+	ExternalID              string    `json:"external_id,omitempty"`
+	DispatchKey             string    `json:"dispatch_key"`
+	Depth                   int       `json:"depth"`
+	Recoveries              int       `json:"recoveries"`
+	LastUpdate              time.Time `json:"last_update"`
+	NextCheckIn             time.Time `json:"next_check_in"`
+	Summary                 string    `json:"summary"`
+	Evidence                []string  `json:"evidence"`
 }
 type Decision struct {
 	Disposition      string     `json:"disposition,omitempty"`
@@ -173,21 +183,28 @@ type DelegateInput struct {
 	Capabilities             []string `json:"capabilities"`
 }
 type AgentUpdate struct {
-	ContextCompactions   int       `json:"context_compactions,omitempty"`
-	ContextBytes         int       `json:"context_bytes,omitempty"`
-	RetryAt              time.Time `json:"retry_at,omitempty"`
-	ProviderFailures     int       `json:"provider_failures,omitempty"`
-	ProviderFailureKind  string    `json:"provider_failure_kind,omitempty"`
-	ModelFailureEngine   string    `json:"model_failure_engine,omitempty"`
-	ModelFailurePhase    string    `json:"model_failure_phase,omitempty"`
-	ModelFailureCode     string    `json:"model_failure_code,omitempty"`
-	ModelFailureEvidence string    `json:"model_failure_evidence,omitempty"`
-	ModelExitCode        *int      `json:"model_exit_code,omitempty"`
-	UpdatedAt            time.Time `json:"updated_at,omitempty"`
-	Status               string    `json:"status"`
-	Summary              string    `json:"summary"`
-	Evidence             []string  `json:"evidence"`
-	ExternalID           string    `json:"external_id,omitempty"`
+	ContextCompactions      int       `json:"context_compactions,omitempty"`
+	ContextBytes            int       `json:"context_bytes,omitempty"`
+	ResourceHoldKind        string    `json:"resource_hold_kind,omitempty"`
+	ResourceHoldOwnerAction bool      `json:"resource_hold_owner_action,omitempty"`
+	ResourceHoldResetsAt    time.Time `json:"resource_hold_resets_at,omitempty"`
+	UsageInputTokens        int64     `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens       int64     `json:"usage_output_tokens,omitempty"`
+	UsageUnknownCalls       int       `json:"usage_unknown_calls,omitempty"`
+	TokenBudget             int64     `json:"token_budget,omitempty"`
+	RetryAt                 time.Time `json:"retry_at,omitempty"`
+	ProviderFailures        int       `json:"provider_failures,omitempty"`
+	ProviderFailureKind     string    `json:"provider_failure_kind,omitempty"`
+	ModelFailureEngine      string    `json:"model_failure_engine,omitempty"`
+	ModelFailurePhase       string    `json:"model_failure_phase,omitempty"`
+	ModelFailureCode        string    `json:"model_failure_code,omitempty"`
+	ModelFailureEvidence    string    `json:"model_failure_evidence,omitempty"`
+	ModelExitCode           *int      `json:"model_exit_code,omitempty"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
+	Status                  string    `json:"status"`
+	Summary                 string    `json:"summary"`
+	Evidence                []string  `json:"evidence"`
+	ExternalID              string    `json:"external_id,omitempty"`
 }
 type DecisionInput struct {
 	WorkItemID     string   `json:"work_item_id,omitempty"`

@@ -36,7 +36,41 @@ func (s ownerChatExecutor) Execute(ctx context.Context, name string, raw json.Ra
 type AgentInspection struct {
 	Agent        core.Agent                 `json:"agent"`
 	Controls     AgentControls              `json:"controls"`
+	Resources    AgentResources             `json:"resources"`
 	Conversation core.AgentConversationPage `json:"conversation"`
+}
+
+// AgentResources states an assignment's consumption in one place so it is not
+// reassembled from separate fields, and so unmeasured calls are visible rather
+// than silently counted as nothing.
+type AgentResources struct {
+	UsedTokens       int64  `json:"used_tokens"`
+	UnknownCalls     int    `json:"calls_with_unknown_usage"`
+	TokenBudget      int64  `json:"token_budget"`
+	BudgetConfigured bool   `json:"token_budget_configured"`
+	WaitingOn        string `json:"waiting_on,omitempty"`
+	Explanation      string `json:"explanation"`
+}
+
+func agentResources(agent core.Agent) AgentResources {
+	out := AgentResources{UsedTokens: agent.UsageInputTokens + agent.UsageOutputTokens, UnknownCalls: agent.UsageUnknownCalls, TokenBudget: agent.TokenBudget, BudgetConfigured: agent.TokenBudget > 0}
+	out.Explanation = "Input tokens include cached input, as the provider reports it. Worker limits are resource limits: shared subscription headroom, and an optional per-assignment token budget. There is no limit on turns, tools or how long an assignment may run."
+	if out.UnknownCalls > 0 {
+		out.Explanation += " Some calls reported no usage, so used_tokens is a lower bound, not the total."
+	}
+	if agent.Status == "usage_wait" {
+		switch agent.ResourceHoldKind {
+		case worker.HoldSubscriptionQuota:
+			out.WaitingOn = "subscription_headroom"
+		case worker.HoldTokenBudget:
+			out.WaitingOn = "token_budget"
+		case worker.HoldUsageUnknown:
+			out.WaitingOn = "unestablished_usage"
+		default:
+			out.WaitingOn = "worker_resources"
+		}
+	}
+	return out
 }
 
 func (a *App) InspectAgent(ctx context.Context, id string) (AgentInspection, error) {
@@ -56,7 +90,7 @@ func (a *App) InspectAgent(ctx context.Context, id string) (AgentInspection, err
 	if err != nil {
 		return AgentInspection{}, err
 	}
-	return AgentInspection{Agent: agent, Controls: controls, Conversation: conversation}, nil
+	return AgentInspection{Agent: agent, Controls: controls, Resources: agentResources(agent), Conversation: conversation}, nil
 }
 
 // An admission reservation is not evidence the worker is running. A refusal
