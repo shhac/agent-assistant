@@ -31,6 +31,35 @@ type Conversation = {
   history_limited?: boolean;
   controls: Controls;
 };
+/**
+ * The technical account of what an assignment consumed, kept behind a summary
+ * because most of the time the headline number is enough. Calls the provider
+ * reported no usage for are named rather than folded into the total: a total
+ * that is a lower bound must not read as a complete one.
+ */
+function resourceDetail(agent: Agent): string {
+  const input = agent.usage_input_tokens ?? 0;
+  const output = agent.usage_output_tokens ?? 0;
+  const unknown = agent.usage_unknown_calls ?? 0;
+  const budget = agent.token_budget ?? 0;
+  if (!input && !output && !unknown) return "";
+  const parts = [
+    `${input.toLocaleString()} input tokens (including cached input, as the provider reports it)`,
+    `${output.toLocaleString()} output tokens`,
+  ];
+  if (budget > 0) {
+    parts.push(`budget ${budget.toLocaleString()} tokens for this assignment`);
+  } else {
+    parts.push("no token budget configured");
+  }
+  if (unknown > 0) {
+    parts.push(
+      `${unknown} call${unknown === 1 ? "" : "s"} reported no usage, so the total above is a lower bound`,
+    );
+  }
+  return `${parts.join(" · ")}. Tokens, not money; no cost is estimated.`;
+}
+
 export function WorkerConversation({
   agent,
   refresh,
@@ -280,6 +309,7 @@ function WorkerConversationPanel({
     "stop_requested",
     "resuming",
   ].includes(status);
+  const usageDetail = resourceDetail(agent);
   const uncertain = pendingControl.current || pendingMessage.current;
   return (
     <section
@@ -300,6 +330,21 @@ function WorkerConversationPanel({
           Next provider retry after {fullDateLabel(agent.retry_at)}. Saved work
           is preserved.
         </p>
+      )}
+      {agent.status === "usage_wait" && (
+        <p role="status" className="field-hint">
+          {agent.resource_hold_owner_action
+            ? "Waiting for your decision about worker resources. Saved work and conversation are preserved; nothing failed."
+            : fullDateLabel(agent.resource_hold_resets_at)
+              ? `Waiting for the account allowance to reset after ${fullDateLabel(agent.resource_hold_resets_at)}. Work continues by itself; saved work is preserved.`
+              : "Waiting for worker resources. Work continues by itself once they are available; saved work is preserved."}
+        </p>
+      )}
+      {usageDetail && (
+        <details className="field-hint">
+          <summary>Resource use</summary>
+          <p>{usageDetail}</p>
+        </details>
       )}
       {!!agent.context_compactions && (
         <p className="field-hint">

@@ -381,3 +381,41 @@ it("renders worker-authored output literally so shell text is not reformatted", 
   expect(literal.textContent).toBe(shell);
   expect(screen.getByText("keyboard access").tagName).toBe("STRONG");
 });
+
+// The headline is a token count; the account of what that count includes, and
+// of what it leaves out, belongs behind a summary rather than in the flow.
+it("names unmeasured calls instead of folding them into the total", async () => {
+  mock(() => ({ body: page }));
+  render(
+    <WorkerConversation
+      agent={{
+        ...agent,
+        status: "usage_wait",
+        resource_hold_kind: "token_budget",
+        resource_hold_owner_action: true,
+        usage_input_tokens: 90000,
+        usage_output_tokens: 10000,
+        usage_unknown_calls: 3,
+        token_budget: 100000,
+      }}
+      demo={false}
+      refresh={vi.fn()}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  );
+  expect(
+    await screen.findByText(/Waiting for your decision about worker resources/),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByText("Resource use"));
+  const detail = screen.getByText(/90,000 input tokens/);
+  expect(detail.textContent).toContain("including cached input");
+  expect(detail.textContent).toContain("budget 100,000 tokens");
+  expect(detail.textContent).toContain(
+    "3 calls reported no usage, so the total above is a lower bound",
+  );
+  expect(detail.textContent).toContain("Tokens, not money");
+});
