@@ -77,9 +77,10 @@ func (a *App) workerHeadroom(ctx context.Context, profile config.Worker, report 
 		if policy.OnUnavailable != "pause" {
 			return nil, nil
 		}
-		// A fail-closed hold on unavailable telemetry has no known reset: the
-		// owner decides whether to wait for the CLI or relax the policy.
-		return &worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: detail, OwnerAction: true}, nil
+		// A telemetry outage is a measurement problem, not a decision. It has no
+		// known reset, but it can end on its own, so the daemon keeps looking and
+		// recovers by itself when readings return or the owner relaxes the policy.
+		return &worker.ResourceHold{Kind: worker.HoldTelemetryUnavailable, Reason: detail, NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}, nil
 	}
 	if !profile.Managed {
 		return unavailable("The external broker's CLI account cannot be inspected locally")

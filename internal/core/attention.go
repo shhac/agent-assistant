@@ -43,9 +43,12 @@ func attentionRank(state string) int {
 		return 60
 	case "retry_wait":
 		return 50
-	// A resource wait is ordinary waiting that happens to have a named cause.
-	// It ranks above plain waiting because the cause is worth reading, and below
-	// a provider failure because nothing went wrong.
+	// A resource wait the owner has to resolve outranks a provider failure the
+	// daemon is already handling: nothing moves until they decide.
+	case "usage_decision":
+		return 55
+	// An ordinary resource wait has a named cause worth reading, but nothing
+	// went wrong and nobody has to act, so it sits below a provider failure.
 	case "usage_wait":
 		return 40
 	case "waiting":
@@ -64,6 +67,8 @@ func attentionNextAction(state string) string {
 		return "owner"
 	case "reconciling":
 		return "assistant"
+	case "usage_decision":
+		return "owner"
 	case "retry_wait", "usage_wait", "running", "active", "resuming", "dispatching":
 		return "worker"
 	}
@@ -74,6 +79,8 @@ func attentionRecovery(state string) string {
 	switch state {
 	case "retry_wait", "usage_wait":
 		return "scheduled"
+	case "usage_decision":
+		return "held"
 	case "reconciling":
 		return "checking"
 	case "blocked", "interrupted":
@@ -83,11 +90,17 @@ func attentionRecovery(state string) string {
 }
 
 // agentAttentionState normalizes a worker status into the shared vocabulary.
-func agentAttentionState(status string) string {
-	if terminal(status) {
+// A resource wait the owner has to resolve is ranked separately from one that
+// clears by itself, so a peer waiting on a reset cannot take the row from a
+// sibling that is waiting on a decision only the owner can make.
+func agentAttentionState(a Agent) string {
+	if terminal(a.Status) {
 		return ""
 	}
-	return status
+	if a.Status == "usage_wait" && a.ResourceHoldOwnerAction {
+		return "usage_decision"
+	}
+	return a.Status
 }
 
 // attentionIndex accumulates one row per open project while the snapshot is
@@ -96,13 +109,10 @@ func agentAttentionState(status string) string {
 type attentionIndex struct {
 	rows map[string]*ProjectAttention
 	rank map[string]int
-	// owner marks rows whose claiming assignment is waiting on a decision only
-	// the owner can make, such as a budget that has to be raised.
-	owner map[string]bool
 }
 
 func openProjects(v Snapshot) attentionIndex {
-	index := attentionIndex{rows: map[string]*ProjectAttention{}, rank: map[string]int{}, owner: map[string]bool{}}
+	index := attentionIndex{rows: map[string]*ProjectAttention{}, rank: map[string]int{}}
 	for _, p := range v.Projects {
 		if p.Status == "completed" || p.Status == "cancelled" || p.Status == "archived" {
 			continue
@@ -134,7 +144,7 @@ func (index attentionIndex) applyWorkItems(v Snapshot) {
 func (index attentionIndex) applyAgents(v Snapshot) {
 	for _, a := range v.Agents {
 		row := index.rows[a.ProjectID]
-		state := agentAttentionState(a.Status)
+		state := agentAttentionState(a)
 		if row == nil || state == "" {
 			continue
 		}
@@ -153,19 +163,15 @@ func (index attentionIndex) applyAgents(v Snapshot) {
 			row.WorkItemID = a.WorkItemID
 		}
 		row.RecoveryAt = nil
-		index.owner[a.ProjectID] = false
 		if !a.RetryAt.IsZero() && state == "retry_wait" {
 			retry := a.RetryAt
 			row.RecoveryAt = &retry
 		}
-		if state == "usage_wait" {
-			// A known reset is when this clears by itself. An owner-action hold
-			// has none, and waiting for it is the owner's move, not the worker's.
-			if !a.ResourceHoldResetsAt.IsZero() {
-				resets := a.ResourceHoldResetsAt
-				row.RecoveryAt = &resets
-			}
-			index.owner[a.ProjectID] = a.ResourceHoldOwnerAction
+		// A reported reset is when the provider expects its window to roll over.
+		// It is when to look, not a promise, and an owner decision has none.
+		if state == "usage_wait" && !a.ResourceHoldResetsAt.IsZero() {
+			resets := a.ResourceHoldResetsAt
+			row.RecoveryAt = &resets
 		}
 	}
 }
@@ -206,11 +212,8 @@ func (index attentionIndex) finalize() []ProjectAttention {
 		row.Recovery = attentionRecovery(row.Execution)
 		// An open question or an uninspected interruption is the owner's turn
 		// whatever the workers are doing.
-		if row.OpenDecisions > 0 || row.PendingOperations > 0 || index.owner[row.ProjectID] {
+		if row.OpenDecisions > 0 || row.PendingOperations > 0 {
 			row.NextAction = "owner"
-		}
-		if index.owner[row.ProjectID] && row.Execution == "usage_wait" {
-			row.Recovery = "held"
 		}
 		if row.Execution == "" && row.OpenDecisions == 0 && row.PendingOperations == 0 {
 			continue

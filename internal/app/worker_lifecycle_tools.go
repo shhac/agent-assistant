@@ -62,6 +62,8 @@ func agentResources(agent core.Agent) AgentResources {
 		switch agent.ResourceHoldKind {
 		case worker.HoldSubscriptionQuota:
 			out.WaitingOn = "subscription_headroom"
+		case worker.HoldTelemetryUnavailable:
+			out.WaitingOn = "subscription_usage_unreadable"
 		case worker.HoldTokenBudget:
 			out.WaitingOn = "token_budget"
 		case worker.HoldUsageUnknown:

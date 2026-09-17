@@ -349,21 +349,18 @@ func continuable(run worker.Run) bool {
 		return !run.RetryAt.IsZero() && !time.Now().Before(run.RetryAt)
 	}
 	if run.Status == "usage_wait" {
-		if run.ResourceHold == nil {
-			return true
-		}
-		if run.ResourceHold.OwnerAction {
+		// A report with no hold, an unrecognized kind, or no stated next check
+		// is not a schedule this daemon may invent one for. Those wait for the
+		// owner, who can resume by hand at any point.
+		hold := run.ResourceHold
+		if hold == nil || !hold.Recheckable() || hold.NextCheckAt.IsZero() {
 			return false
 		}
-		// Continuing before the allowance can have recovered would start and
-		// stop a container for nothing. Wait for whichever the broker named
-		// later: its own next check, or the reset the provider reported. The
-		// owner can still resume by hand at any point.
-		next := run.ResourceHold.NextCheckAt
-		if run.ResourceHold.ResetsAt.After(next) {
-			next = run.ResourceHold.ResetsAt
-		}
-		return next.IsZero() || !time.Now().Before(next)
+		// The broker's own next check is what governs. A published reset is when
+		// the provider expects its window to roll over, not the earliest moment
+		// work can continue: the owner may raise or disable the threshold, and
+		// admission re-reads both policy and account before anything restarts.
+		return !time.Now().Before(hold.NextCheckAt)
 	}
 	return false
 }

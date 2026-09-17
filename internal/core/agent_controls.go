@@ -33,8 +33,11 @@ func (s *Service) PrepareOwnerControl(ctx context.Context, id, action, key strin
 			if v.Paused {
 				return errors.New("coordination is paused")
 			}
-			if a.Status != "paused" && a.Status != "interrupted" && !(a.Status == "blocked" && a.ProviderFailureKind != "") {
-				return errors.New("resume requires a confirmed paused or interrupted worker")
+			// A worker waiting on resources is preserved and idle, exactly like a
+			// paused one. Continuing it is the owner's decision to make whenever
+			// they have changed the budget or the policy it is waiting on.
+			if a.Status != "paused" && a.Status != "interrupted" && a.Status != "usage_wait" && !(a.Status == "blocked" && a.ProviderFailureKind != "") {
+				return errors.New("resume requires a confirmed paused, interrupted or resource-held worker")
 			}
 			if !a.RetryAt.IsZero() && s.now().Before(a.RetryAt) {
 				return errors.New("provider retry is not due")

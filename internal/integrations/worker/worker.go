@@ -96,13 +96,26 @@ type ResourceHold struct {
 	ResetsAt    time.Time `json:"resets_at,omitempty"`
 }
 
-// Hold kinds. SubscriptionQuota clears on its own; the other two need an owner
-// decision about the configured budget or about unestablished consumption.
+// Hold kinds. The first two describe a measurement problem that can resolve on
+// its own, so a daemon may look again; the last two are decisions only the
+// owner can make, about a configured budget or about consumption that was never
+// established.
 const (
-	HoldSubscriptionQuota = "subscription_quota"
-	HoldTokenBudget       = "token_budget"
-	HoldUsageUnknown      = "usage_unknown"
+	HoldSubscriptionQuota    = "subscription_quota"
+	HoldTelemetryUnavailable = "telemetry_unavailable"
+	HoldTokenBudget          = "token_budget"
+	HoldUsageUnknown         = "usage_unknown"
 )
+
+// Recheckable reports whether a daemon may look again by itself. A hold of an
+// unrecognized kind is not: an external broker's vocabulary is not permission
+// to restart its work on a schedule this daemon invented.
+func (h ResourceHold) Recheckable() bool {
+	if h.OwnerAction {
+		return false
+	}
+	return h.Kind == HoldSubscriptionQuota || h.Kind == HoldTelemetryUnavailable
+}
 
 // ErrResourceHold identifies a refused-before-billing decision anywhere in a
 // wrapped error chain. Completion transports wrap admission errors in their own

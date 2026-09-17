@@ -29,12 +29,13 @@ func TestStandaloneBrokerHonoursTheConfiguredHeadroomPolicy(t *testing.T) {
 		onMissing   string
 		threshold   int
 		held        bool
+		kind        string
 	}{
-		{"headroom", 10, false, "allow", 90, false},
-		{"consumed", 95, false, "allow", 90, true},
-		{"disabled", 95, false, "allow", 0, false},
-		{"unavailable allows by default", 0, true, "allow", 90, false},
-		{"unavailable pauses when asked", 0, true, "pause", 90, true},
+		{"headroom", 10, false, "allow", 90, false, ""},
+		{"consumed", 95, false, "allow", 90, true, worker.HoldSubscriptionQuota},
+		{"disabled", 95, false, "allow", 0, false, ""},
+		{"unavailable allows by default", 0, true, "allow", 90, false, ""},
+		{"unavailable pauses when asked", 0, true, "pause", 90, true, worker.HoldTelemetryUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := cfg
@@ -56,8 +57,13 @@ func TestStandaloneBrokerHonoursTheConfiguredHeadroomPolicy(t *testing.T) {
 			if tc.threshold == 0 && inspected != 0 {
 				t.Fatal("a disabled gate inspected the CLI login")
 			}
-			if tc.held && held.Hold.Kind != worker.HoldSubscriptionQuota {
+			if tc.held && held.Hold.Kind != tc.kind {
 				t.Fatalf("wrong hold kind %q", held.Hold.Kind)
+			}
+			// An account that can still be read later is looked at again; only a
+			// decision the owner owns stops on its own.
+			if tc.held && (!held.Hold.Recheckable() || held.Hold.NextCheckAt.IsZero()) {
+				t.Fatalf("a measurement hold was not left recheckable: %+v", held.Hold)
 			}
 		})
 	}
@@ -80,7 +86,30 @@ func TestStandaloneBrokerTreatsUninspectableEnginesAsUnmeasured(t *testing.T) {
 	cfg.Limits.WorkerUsage.OnUnavailable = "pause"
 	err := standaloneAdmission(cfg, profile, meter)(context.Background())
 	var held *worker.HoldError
-	if !errors.As(err, &held) || !held.Hold.OwnerAction {
+	if !errors.As(err, &held) || held.Hold.Kind != worker.HoldTelemetryUnavailable {
 		t.Fatalf("pause policy let an unmeasured engine run: %v", err)
+	}
+	if !held.Hold.Recheckable() {
+		t.Fatal("flipping the policy back would never be noticed")
+	}
+}
+
+// Cancelling supervision is cancellation, not an unreadable account: a shutdown
+// must not be recorded as a resource condition for the owner to resolve.
+func TestStandaloneAdmissionPropagatesCancellation(t *testing.T) {
+	cfg := config.Default()
+	cfg.Limits.WorkerUsage.OnUnavailable = "pause"
+	meter := &quota.Meter{Inspect: func(ctx context.Context, _ session.Options) (session.Inspection, error) {
+		return session.Inspection{}, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := standaloneAdmission(cfg, cfg.WorkerModel, meter)(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation became a resource decision: %v", err)
+	}
+	var held *worker.HoldError
+	if errors.As(err, &held) {
+		t.Fatal("cancellation was reported as a hold the owner must resolve")
 	}
 }

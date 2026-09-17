@@ -34,7 +34,9 @@ func standaloneAdmission(cfg config.Config, profile config.Model, meter *quota.M
 			if policy.OnUnavailable != "pause" {
 				return nil
 			}
-			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, OwnerAction: true, Reason: "Worker paused: " + reason + ", and the configured policy is to pause when usage cannot be measured"}}
+			// A measurement problem can end on its own, so this stays recheckable
+			// and names when to look again rather than demanding a decision.
+			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldTelemetryUnavailable, Reason: "Worker paused: " + reason + ", and the configured policy is to pause when usage cannot be measured", NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}}
 		}
 		threshold, supported := quota.Threshold(policy, profile.Engine)
 		if !supported {
@@ -43,7 +45,12 @@ func standaloneAdmission(cfg config.Config, profile config.Model, meter *quota.M
 		if threshold == 0 {
 			return nil
 		}
-		verdict := quota.Evaluate(meter.Read(ctx, profile), profile, threshold, time.Now())
+		snapshot := meter.Read(ctx, profile)
+		// A cancelled inspection is cancellation, not an unreadable account.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		verdict := quota.Evaluate(snapshot, profile, threshold, time.Now())
 		if verdict.Held {
 			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Worker paused: " + verdict.Detail, ResetsAt: verdict.ResetsAt, NextCheckAt: time.Now().Add(quota.CacheAge).UTC()}}
 		}

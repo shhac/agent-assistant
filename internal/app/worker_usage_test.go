@@ -259,3 +259,10 @@ func TestUsageHeldDelegationRetriesWithoutOrphaningOrDuplicatingChild(t *testing
 		t.Fatalf("delegation failed recovery or duplicated: agents=%d messages=%d", len(snap.Agents), messages)
 	}
 }
+
+func failingInspection(context.Context, session.Options) (session.Inspection, error) {
+	return session.Inspection{}, errors.New("CLI login could not be inspected")
+}
+func lowUsageInspection(context.Context, session.Options) (session.Inspection, error) {
+	return session.Inspection{Quota: quotaFixture(5)}, nil
+}
