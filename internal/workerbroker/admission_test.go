@@ -475,7 +475,7 @@ func TestUnusableUsageIsRecordedAsUnknownNotRepaired(t *testing.T) {
 		{"unknown", engine.Usage{InputTokens: 5, OutputTokens: 5}, 0},
 		{"negative input", engine.Usage{InputTokens: -5, OutputTokens: 5, Known: true}, 0},
 		{"negative output", engine.Usage{InputTokens: 5, OutputTokens: -5, Known: true}, 0},
-		{"overflowing total", engine.Usage{InputTokens: math.MaxInt64 / 2, OutputTokens: 1, Known: true}, math.MaxInt64 - 10},
+		{"overflowing one column", engine.Usage{InputTokens: math.MaxInt64 / 2, OutputTokens: 1, Known: true}, math.MaxInt64 - 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
@@ -500,6 +500,103 @@ func TestUnusableUsageIsRecordedAsUnknownNotRepaired(t *testing.T) {
 			}
 			if r.PendingUsage != nil {
 				t.Fatal("the reservation was left open after an unknown settlement")
+			}
+		})
+	}
+}
+
+// Two columns that are each representable can still overflow the total the
+// budget and the owner's view are computed from.
+func TestCombinedTotalOverflowIsUnknownNotWrapped(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := contextRun(t, b)
+	half := int64(math.MaxInt64/2 + 1)
+	if err := b.update(id, func(r *storedRun) error {
+		r.UsageInputTokens, r.UsageOutputTokens = half, half-1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := ""
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.settleUsage(id, request, engineUsage(1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := b.snapshot(id)
+	if r.UsageInputTokens+r.UsageOutputTokens < 0 {
+		t.Fatalf("the combined total wrapped negative: %d + %d", r.UsageInputTokens, r.UsageOutputTokens)
+	}
+	if r.UsageUnknownCalls != 1 {
+		t.Fatalf("a total that cannot be represented was accepted: unknown=%d", r.UsageUnknownCalls)
+	}
+	if r.UsageInputTokens != half || r.UsageOutputTokens != half-1 {
+		t.Fatalf("the ledger changed anyway: %d/%d", r.UsageInputTokens, r.UsageOutputTokens)
+	}
+}
+
+// A reservation whose settlement never persisted must not make every resume
+// hold against the same unresolved record. The explicit resume closes it once,
+// as unknown consumption — which a configured budget then rightly stops on,
+// and a disabled one rightly continues past.
+func TestResumeAfterRepairedStorageResolvesTheStaleReservation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		budget   int64
+		proceeds bool
+	}{
+		{"budget enabled holds on the unknown", 100000, false},
+		{"budget disabled continues", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int64
+			provider := toolProvider(t, &calls, 10, 5)
+			defer provider.Close()
+			b, _ := newFixture(t, provider.URL, &fakeDocker{})
+			b.cfg.TokenBudget = func() int64 { return tc.budget }
+			id := contextRun(t, b)
+			// The state a transient write failure leaves behind: a reservation
+			// recorded, its settlement lost, and the run stopped for the owner.
+			if err := b.update(id, func(r *storedRun) error {
+				r.Run.Status = "usage_wait"
+				r.Run.Summary = "A previous model request's consumption was never recorded"
+				r.PendingUsage = &pendingUsage{RequestID: "lost-settlement", Stage: stageTurn, StartedAt: now()}
+				r.Run.ResourceHold = &worker.ResourceHold{Kind: worker.HoldUsageUnknown, OwnerAction: true, Reason: "unresolved accounting"}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- b.Run(ctx) }()
+			defer func() { cancel(); <-done; _ = b.Close() }()
+
+			if code := request(t, b, "/runs/"+id+"/resume", "owner-resume", map[string]string{"instruction": "Continue"}).Code; code != 200 {
+				t.Fatal("the supported recovery path refused an explicit resume", code)
+			}
+			settled, _ := b.snapshot(id)
+			if settled.PendingUsage != nil {
+				t.Fatal("the stale reservation survived an explicit resume")
+			}
+			if settled.UsageUnknownCalls != 1 {
+				t.Fatalf("a possibly-billed request was written off as free: unknown=%d", settled.UsageUnknownCalls)
+			}
+
+			if !tc.proceeds {
+				held := awaitRun(t, b, id, func(r storedRun) bool { return r.Run.Status == "usage_wait" })
+				if held.Run.ResourceHold == nil || held.Run.ResourceHold.Kind != worker.HoldUsageUnknown {
+					t.Fatalf("unknown consumption under a budget did not hold: %+v", held.Run.ResourceHold)
+				}
+				if calls.Load() != 0 {
+					t.Fatalf("a held worker still contacted the provider: %d", calls.Load())
+				}
+				return
+			}
+			working := awaitRun(t, b, id, func(r storedRun) bool { return r.ModelCalls > 0 })
+			if working.UsageUnknownCalls != 1 {
+				t.Fatal("continuing erased the recorded uncertainty", working.UsageUnknownCalls)
 			}
 		})
 	}

@@ -241,6 +241,17 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 			run.Run.ResourceHold = nil
 			run.PendingStatus = ""
 			run.PendingSummary = ""
+			// A reservation whose settlement never persisted would otherwise hold
+			// every resume against the same unresolved record, forever. This run
+			// is not executing, so no request can still be in flight against it:
+			// close it once, as unknown consumption. That is the honest reading —
+			// it may have been billed — and it is a state the owner can act on,
+			// through the budget, instead of an unbreakable loop.
+			if run.PendingUsage != nil && run.Run.Status != "running" {
+				run.PendingUsage = nil
+				run.UsageUnknownCalls++
+				publishUsage(run, b.tokenBudget())
+			}
 		}
 		run.Messages = append(run.Messages, message)
 		if run.Run.Status == "retry_wait" || run.Run.Status == "usage_wait" || run.Run.Status == "paused" || run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {

@@ -193,10 +193,16 @@ func countable(usage engine.Usage) (input, output int64, ok bool) {
 	return int64(usage.InputTokens), int64(usage.OutputTokens), true
 }
 
-// addable rejects a total that would wrap. An assignment whose accounting has
-// grown past what can be represented is unknown, not zero and not negative.
+// addable rejects a total that would wrap. Each column has to stay
+// representable, and so does their sum: the budget and everything shown to the
+// owner add them together, so two individually-valid columns that overflow
+// combined are just as unusable. An assignment whose accounting has grown past
+// what can be represented is unknown, not zero and not negative.
 func addable(run *storedRun, input, output int64) bool {
-	return input <= math.MaxInt64-run.UsageInputTokens && output <= math.MaxInt64-run.UsageOutputTokens
+	if input > math.MaxInt64-run.UsageInputTokens || output > math.MaxInt64-run.UsageOutputTokens {
+		return false
+	}
+	return run.UsageInputTokens+input <= math.MaxInt64-(run.UsageOutputTokens+output)
 }
 
 // publishUsage keeps the reported ledger identical to the persisted one. The
