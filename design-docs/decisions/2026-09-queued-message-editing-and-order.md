@@ -114,3 +114,36 @@ and no edit can produce a second delivery.
 Whether a lapsed lease should also close the editor, or leave the draft in
 place for the owner to resubmit against the current revision. Leaving it is
 kinder and costs nothing, since the draft was never the daemon's concern.
+
+## What the review found after it was built
+
+A seven-lens structural pass ran over the implementation. Three of its findings
+were defects in the interlock this document specifies, all from the same cause:
+the lease was keyed on things that change for unrelated reasons.
+
+The effect holding the lease depended on the queue array, which the poll
+rebuilds every second or so. An open editor therefore released and retook its
+hold on every tick — two unordered requests, so the release could land after the
+acquire and leave the queue unheld precisely while a message was being changed.
+Keying on what is held rather than on the array fixed it. A lease acquired after
+its effect had been torn down was also left to expire on its own, stalling the
+queue for the full term.
+
+Only work that spans time needs a lease at all. Moving a message with the
+buttons commits immediately against the revision, so the revision check already
+guarantees the order the owner saw; a drag, which spans seconds, does need one.
+
+Cancelling the message being changed left a hold standing. The banner then said
+the queue was paused while turns visibly ran, and every other change was refused
+until the lease lapsed. A hold whose message has left the queue is now spent.
+Cancelling also failed to move the revision, so an order decided before it was
+not refused — the field did not mean what its name said.
+
+One refinement to the contract above: an order that does not name exactly the
+queued messages is a malformed request, not a stale one. Refreshing would never
+make it work, so it is reported as invalid rather than as a conflict.
+
+Deliberately still not done: extracting the at-most-once delivery machine from
+the chat panel. The review confirmed it remains load-bearing and distinct from
+the server's queue — at-most-once is the daemon's guarantee, intended order is
+the client's — and that the risk of moving it outweighs the readability gain.

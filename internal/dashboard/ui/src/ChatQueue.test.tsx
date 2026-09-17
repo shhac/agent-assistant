@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatQueue } from "./ChatQueue";
+import { ChatQueue, moveItem } from "./ChatQueue";
 
 const turns = [
   { id: "a", message: "Do the first thing", revision: 0 },
@@ -221,5 +221,23 @@ describe("queued messages", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "another message is being changed",
     );
+  });
+
+  // The reorder maths, without a drag gesture to simulate.
+  it("moves one entry and leaves an impossible move alone", () => {
+    const ids = ["a", "b", "c"];
+    expect(moveItem(ids, 2, 0)).toEqual(["c", "a", "b"]);
+    expect(moveItem(ids, 0, 2)).toEqual(["b", "c", "a"]);
+    expect(moveItem(ids, 1, 1)).toBe(ids);
+    for (const [from, to] of [
+      [0, -1],
+      [-1, 0],
+      [0, 3],
+      [3, 0],
+    ]) {
+      expect(moveItem(ids, from, to)).toBe(ids);
+    }
+    // The input is never mutated.
+    expect(ids).toEqual(["a", "b", "c"]);
   });
 });

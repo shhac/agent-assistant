@@ -3,7 +3,7 @@ import { api, errorText, type ChatTurn } from "./api";
 import { Icon } from "./ui";
 
 /** Only the fields the queue works with, taken from the turn itself. */
-export type QueuedTurn = Pick<ChatTurn, "id" | "message" | "revision">;
+type QueuedTurn = Pick<ChatTurn, "id" | "message" | "revision">;
 
 export interface QueueHold {
   turn_id: string;
