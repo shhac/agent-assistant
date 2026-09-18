@@ -38,7 +38,11 @@ func TestContextSummaryDiagnosticsPreserveArchiveAndUsage(t *testing.T) {
 			if !errors.As(err, &safe) || !strings.Contains(safe.SafeDiagnostic(), tt.reason) || strings.Contains(err.Error(), secret) {
 				t.Fatalf("unsafe or unhelpful diagnostic: %v", err)
 			}
-			if calls != 1 || usage.TotalTokens != 7 || !usage.Known || cp.Compacted || !reflect.DeepEqual(cp.Messages, input) {
+			wantCalls := 1
+			if tt.name == "oversized" {
+				wantCalls = 2
+			}
+			if calls != wantCalls || usage.TotalTokens != 7*wantCalls || !usage.Known || cp.Compacted || !reflect.DeepEqual(cp.Messages, input) {
 				t.Fatal("failure changed archive, accounting, or call count")
 			}
 		})

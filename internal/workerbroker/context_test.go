@@ -144,6 +144,7 @@ func TestWorkerSummaryFailureAndPausePreserveArchiveAndCountAttempt(t *testing.T
 		})
 	}
 }
+
 // A summary is billable, so it passes the same gate as an ordinary turn. A
 // held summary must leave the original context exactly as it was.
 func TestContextSummaryPassesResourceAdmission(t *testing.T) {
@@ -173,5 +174,50 @@ func TestRepairedPrefixInvalidatesContextCursor(t *testing.T) {
 	got := workingMessages(run)
 	if len(got) != 2 || got[1].Content != "Repaired authority" {
 		t.Fatal("changed archive prefix skipped", got)
+	}
+}
+
+func TestSummaryLengthCorrectionIsMeteredAndCanBeHeld(t *testing.T) {
+	for _, holdCorrection := range []bool{false, true} {
+		t.Run(map[bool]string{false: "corrected", true: "held"}[holdCorrection], func(t *testing.T) {
+			calls := 0
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				content := "Short checkpoint; tests have not passed."
+				if calls == 1 {
+					content = strings.Repeat("x", 9000)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": content}}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5}})
+			}))
+			defer remote.Close()
+			b, _ := newFixture(t, remote.URL, &fakeDocker{})
+			defer b.Close()
+			admissions := 0
+			b.cfg.Admit = func(context.Context) error {
+				admissions++
+				if holdCorrection && admissions == 2 {
+					return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Quota reached"}}
+				}
+				return nil
+			}
+			id := contextRun(t, b)
+			original, _ := b.snapshot(id)
+			_, err := b.prepareContext(context.Background(), id)
+			saved, _ := b.snapshot(id)
+			expected := 2
+			if holdCorrection {
+				expected = 1
+			}
+			if calls != expected || saved.ModelCalls != expected || saved.UsageInputTokens != int64(expected*10) || saved.UsageOutputTokens != int64(expected*5) || !reflect.DeepEqual(saved.Transcript, original.Transcript) {
+				t.Fatalf("calls=%d saved=%d usage=%d/%d", calls, saved.ModelCalls, saved.UsageInputTokens, saved.UsageOutputTokens)
+			}
+			if holdCorrection {
+				if !errors.Is(err, worker.ErrResourceHold) || len(saved.WorkingContext) != 0 {
+					t.Fatal("held correction changed context", err)
+				}
+			} else if err != nil || saved.Run.ContextCompactions != 1 {
+				t.Fatal("correction failed", err)
+			}
+		})
 	}
 }

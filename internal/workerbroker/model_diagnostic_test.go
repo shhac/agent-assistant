@@ -126,8 +126,8 @@ func TestWorkerSummaryDiagnosticIsPreservedInBlockedRun(t *testing.T) {
 	}
 	b.modelFailure(id, err)
 	after, _ := b.snapshot(id)
-	if requests != 1 || after.ModelCalls != before.ModelCalls+1 || !reflect.DeepEqual(before.Transcript, after.Transcript) || len(after.ContextCheckpoints) != 0 {
-		t.Fatal("failed summary changed context, retried, or lost accounting")
+	if requests != 2 || after.ModelCalls != before.ModelCalls+2 || !reflect.DeepEqual(before.Transcript, after.Transcript) || len(after.ContextCheckpoints) != 0 {
+		t.Fatal("failed summary changed context, exceeded its correction allowance, or lost accounting")
 	}
 	if after.PendingStatus != "blocked" || after.Run.ModelFailurePhase != "response" || after.Run.ModelFailureCode != "context_summary_too_large" || !after.Run.RetryAt.IsZero() {
 		t.Fatal("lost durable nonretryable summary diagnostic")
