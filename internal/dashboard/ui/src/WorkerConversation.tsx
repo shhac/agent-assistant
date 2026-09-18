@@ -44,7 +44,7 @@ function resourceDetail(agent: Agent): string {
   const budget = agent.token_budget ?? 0;
   if (!input && !output && !unknown) return "";
   const parts = [
-    `${input.toLocaleString()} input tokens (including cached input, as the provider reports it)`,
+    `${input.toLocaleString()} input tokens (cached reads and cache creation included, as the provider reports them)`,
     `${output.toLocaleString()} output tokens`,
   ];
   if (budget > 0) {
@@ -58,6 +58,75 @@ function resourceDetail(agent: Agent): string {
     );
   }
   return `${parts.join(" · ")}. Tokens, not money; no cost is estimated.`;
+}
+
+/**
+ * What the worker has been doing, newest last.
+ *
+ * A native worker can spend a long time inside one turn, so a single status
+ * line cannot tell working from stuck. This is the difference. It is deliberately
+ * a record of activity and not of results: a tool ran, a turn ended, direction
+ * was delivered. Whether any of it was any good is decided from the patch and
+ * the command log, which is a separate question and a separate screen.
+ */
+function WorkerActivity({ agent }: { agent: Agent }) {
+  const work = agent.work ?? [];
+  if (!work.length) return null;
+  return (
+    <details className="field-hint">
+      <summary>What this worker has been doing ({work.length})</summary>
+      {work[0]?.truncated && (
+        <p>
+          Earlier activity is not shown here; this picks up partway through the
+          assignment.
+        </p>
+      )}
+      <ol className="worker-activity">
+        {work.map((entry, index) => (
+          <li key={`${entry.at}-${index}`}>
+            <span className="worker-activity-when">
+              {fullDateLabel(entry.at)}
+            </span>{" "}
+            <span className="worker-activity-what">
+              {entry.tool || entry.kind.replaceAll("_", " ")}
+            </span>
+            {entry.status ? ` · ${entry.status.replaceAll("_", " ")}` : ""}
+            {entry.detail ? <p>{entry.detail}</p> : null}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/**
+ * How the worker is running: which coding CLI, whether this is a continuation,
+ * and how full its conversation has become. Occupancy is not consumption, and
+ * an estimate is labelled as one rather than shown as a measurement.
+ */
+function sessionDetail(agent: Agent): string {
+  if (!agent.session_engine) return "";
+  const parts = [
+    agent.session_resumed
+      ? `continuing a saved ${agent.session_engine} coding session`
+      : `a new ${agent.session_engine} coding session`,
+  ];
+  if (agent.context_used_percent !== undefined) {
+    const quality =
+      agent.context_quality === "measured"
+        ? "as the provider reports it"
+        : "estimated locally";
+    parts.push(
+      `conversation ${Math.round(agent.context_used_percent)}% full (${quality})`,
+    );
+  }
+  const observed = agent.observed_input_tokens ?? 0;
+  if (observed > 0) {
+    parts.push(
+      `${observed.toLocaleString()} input tokens observed in progress, which is evidence of activity rather than a settled figure`,
+    );
+  }
+  return `${parts.join(" · ")}.`;
 }
 
 export function WorkerConversation({
@@ -310,6 +379,7 @@ function WorkerConversationPanel({
     "resuming",
   ].includes(status);
   const usageDetail = resourceDetail(agent);
+  const sessionLine = sessionDetail(agent);
   const uncertain = pendingControl.current || pendingMessage.current;
   return (
     <section
@@ -340,17 +410,19 @@ function WorkerConversationPanel({
               : "Waiting for worker resources. Work continues by itself once they are available; saved work is preserved."}
         </p>
       )}
-      {usageDetail && (
+      {(usageDetail || sessionLine) && (
         <details className="field-hint">
           <summary>Resource use</summary>
-          <p>{usageDetail}</p>
+          {sessionLine && <p>{sessionLine}</p>}
+          {usageDetail && <p>{usageDetail}</p>}
         </details>
       )}
+      <WorkerActivity agent={agent} />
       {!!agent.context_compactions && (
         <p className="field-hint">
-          {agent.context_compactions} context checkpoint
-          {agent.context_compactions === 1 ? "" : "s"} saved. The full worker
-          transcript is retained.
+          Conversation compacted {agent.context_compactions} time
+          {agent.context_compactions === 1 ? "" : "s"}. Earlier messages were
+          summarized so work could continue.
         </p>
       )}
       {agent.provider_failure_kind && (

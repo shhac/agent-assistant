@@ -521,3 +521,27 @@
   font-size: 11px;
   color: var(--accent);
 }
+
+/* The worker activity feed. Long assignments make this long, so it scrolls
+   rather than pushing the controls below it off the screen. */
+.worker-activity {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+.worker-activity li {
+  margin-bottom: 4px;
+}
+.worker-activity p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.worker-activity-when {
+  color: var(--muted);
+}
+.worker-activity-what {
+  font-weight: 600;
+}

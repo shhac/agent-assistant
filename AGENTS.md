@@ -11,27 +11,45 @@ Go CLI and daemon for personal-assistant coordination. Dashboard is dark-mode-fi
 - The PA never writes project code or runs a general shell. Approved workers may implement within an isolated environment. No deployment, production-data access, or purchases, including through descendants.
 - All adapters must be testable using injected dependencies. Tests must not contact real Slack/Linear, start real agents, mutate Tailscale routes, or use live owner data.
 - Authority is scoped and inherited; retries are idempotent and uncertain external effects are reconciled before repeating. Unknown costs are not free.
-- Local CLI mechanics and model discovery live in `lib-agent-harness/completion`.
-  Keep its fail-closed native-tool probes and shared process containment; the daemon
-  owns action authorization, tool execution, and orchestration; the PA proposes
-  coordination actions. Native harness
-  sessions are a different execution contract and must not silently replace
-  constrained completion. Depend on published library versions, not local replaces.
+- The PA proposes coordination actions through `lib-agent-harness/completion`, with
+  its built-in tools disabled and fail-closed probes intact. Implementation workers
+  use `lib-agent-harness/session` instead: a persistent native Claude Code or Codex
+  session that owns its own agent loop, conversation and compaction. These are two
+  different execution contracts and neither may silently become the other. Depend on
+  published library versions, not local replaces.
+- A worker's own tools are removed and replaced by the daemon's, verified against
+  that exact installed binary and configuration before a credentialed process
+  starts. If the installed CLI cannot be restricted, fail closed and say which
+  tools were the problem. Never ship a worker with a shell, and never weaken the
+  boundary because a sandbox setting looks equivalent — a read-only sandbox is not
+  a read restriction. A worker runs from a private durable home the library owns,
+  sharing only the operator's login; credentials never reach a workspace, a model,
+  a tool result, a log or an error.
 - Worker limits are resource limits: shared subscription headroom and an optional
-  per-assignment token budget, both admitted before every model invocation
-  including context summaries. Never reintroduce a cumulative turn, call, command
-  or wall-clock cap as work authority, and do not add no-progress heuristics that
-  cannot distinguish repeated red tests from stuck work. A resource hold is a
-  wait, not a failure: it preserves work, spends no recovery allowance, carries no
-  provider classification and releases execution capacity. Usage that cannot be
-  established is never counted as zero, and unresolved accounting blocks further
-  requests rather than being assumed free.
-- Completion retries cover only explicit transient provider rejections, never whole
-  turns or tools. Workers persist provider cooldown and re-enter through daemon
-  admission; unknown/authentication/context failures remain blocked across restart.
-  Native CLI session compaction is distinct from application-owned working context.
-  Archive original context before summarizing; retain immutable instructions and
-  unresolved operations exactly. Checkpoint byte counts are not token-window usage.
+  per-assignment token budget, both admitted before every turn, and headroom
+  re-read on a clock while a long turn runs. Never reintroduce a cumulative turn,
+  call, command or wall-clock cap as work authority, and do not add no-progress
+  heuristics that cannot distinguish repeated red tests from stuck work. A resource
+  hold is a wait, not a failure: it preserves work, keeps its own kind, spends no
+  recovery allowance, carries no provider classification and releases execution
+  capacity. Count every disjoint token class, cache creation included. Usage that
+  cannot be established is never counted as zero, and unresolved accounting blocks
+  further turns rather than being assumed free.
+- Nothing a worker does is retried automatically. A failed native turn may already
+  have edited files and run commands, so its diagnostic is preserved with the
+  harness's own code and a person decides. Keep typed library failures typed all
+  the way to the operator's log, inspect output and dashboard; never re-derive a
+  classification the library already made, and never parse its prose.
+- Stopping a turn is not stopping its tools. Close tool admission as part of every
+  interrupt, checkpoint and terminal transition, then wait for handlers to return
+  before describing a workspace or starting anything new. Cancelling a container
+  command does not stop the process inside it: hold further changes until confirmed
+  cleanup proves nothing is still writing, and keep the command's outcome recorded
+  as unestablished afterwards.
+- Direction is recorded as handed over before it is handed over, for both the
+  prompt that opens a turn and a steer into a running one. A missing
+  acknowledgement is not proof of non-delivery; replay only what this process saw
+  refused before it was sent, and stop for an owner otherwise.
 - Use lib-agent-cli/lib-agent-output conventions and the family Tailscale helpers when appropriate. Embedded dashboard bundle is built and committed. No separate frontend server needed at runtime.
 - Keep names, account IDs, project IDs, prompts, endpoints, and credentials configurable. Synthetic fixtures only. Secrets never appear in logs, config exports, or the UI.
 

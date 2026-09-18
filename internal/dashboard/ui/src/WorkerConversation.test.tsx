@@ -312,7 +312,7 @@ it("shows provider cooldown separately from login failure and preserves worker c
   expect(screen.getByText(/Next provider retry after/)).toBeTruthy();
   expect(
     screen.getByText(
-      /1 context checkpoint saved. The full worker transcript is retained/,
+      /Conversation compacted 1 time\./,
     ),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Pause worker" })).toHaveProperty(
@@ -412,10 +412,69 @@ it("names unmeasured calls instead of folding them into the total", async () => 
   ).toBeTruthy();
   fireEvent.click(screen.getByText("Resource use"));
   const detail = screen.getByText(/90,000 input tokens/);
-  expect(detail.textContent).toContain("including cached input");
+  expect(detail.textContent).toContain("cache creation included");
   expect(detail.textContent).toContain("budget 100,000 tokens");
   expect(detail.textContent).toContain(
     "3 calls reported no usage, so the total above is a lower bound",
   );
   expect(detail.textContent).toContain("Tokens, not money");
+});
+
+// A native worker can spend a long time inside one turn, so a single status
+// line cannot tell working from stuck.
+it("shows what a long-running worker has been doing, and does not claim the daemon keeps its transcript", async () => {
+  mock(() => ({ body: page }));
+  render(
+    <WorkerConversation
+      agent={{
+        ...agent,
+        session_engine: "claude",
+        session_resumed: true,
+        context_used_percent: 42,
+        context_quality: "measured",
+        observed_input_tokens: 12345,
+        context_compactions: 2,
+        work: [
+          {
+            at: "2026-09-04T10:00:00Z",
+            kind: "turn",
+            status: "started",
+            truncated: true,
+          },
+          {
+            at: "2026-09-04T10:02:00Z",
+            kind: "tool",
+            tool: "run_command",
+            status: "failed",
+            detail: "go test ./...",
+          },
+        ],
+      }}
+      demo={false}
+      refresh={vi.fn()}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Conversation and controls for Garden builder",
+    }),
+  );
+  fireEvent.click(
+    await screen.findByText("What this worker has been doing (2)"),
+  );
+  expect(screen.getByText("run_command")).toBeTruthy();
+  expect(screen.getByText("go test ./...")).toBeTruthy();
+  // The feed starts partway through, and says so.
+  expect(
+    screen.getByText(/picks up partway through the assignment/),
+  ).toBeTruthy();
+  // Compaction is the CLI's, and the daemon does not claim to hold a transcript.
+  const compaction = screen.getByText(/Conversation compacted/);
+  expect(compaction.textContent).toContain("Earlier messages were summarized so work could continue");
+  // How it is running, kept beside what it consumed.
+  fireEvent.click(screen.getByText("Resource use"));
+  const session = screen.getByText(/continuing a saved claude coding session/);
+  expect(session.textContent).toContain("42% full");
+  expect(session.textContent).toContain("as the provider reports it");
+  expect(session.textContent).toContain("evidence of activity");
 });

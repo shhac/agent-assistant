@@ -53,6 +53,19 @@ export interface SteeringReceipt {
   agent_id: string;
   acknowledged_at: string;
 }
+/**
+ * One observation of what a worker did, as the daemon recorded it. None of it
+ * is a claim that the work was correct, and none of it is the evidence
+ * acceptance rests on — that is the patch and the command log.
+ */
+export interface AgentWork {
+  at: string;
+  kind: string;
+  tool?: string;
+  status?: string;
+  detail?: string;
+  truncated?: boolean;
+}
 export interface Agent {
   retry_at?: string;
   resource_hold_kind?: string;
@@ -70,7 +83,13 @@ export interface Agent {
   model_failure_evidence?: string;
   model_exit_code?: number;
   context_compactions?: number;
-  context_bytes?: number;
+  context_used_percent?: number;
+  context_quality?: string;
+  session_engine?: string;
+  session_resumed?: boolean;
+  observed_input_tokens?: number;
+  observed_output_tokens?: number;
+  work?: AgentWork[];
   recoveries?: number;
   work_item_id?: string;
   id: string;

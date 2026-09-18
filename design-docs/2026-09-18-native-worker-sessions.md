@@ -382,3 +382,64 @@ notice.
    accept anything by itself.
 9. Failures carry bounded sanitized diagnostics rather than collapsing to
    unknown.
+
+## As built
+
+Recorded 2026-09-18, after implementation. The design above is the plan; this is
+what the plan turned into, including the places it was wrong.
+
+**The restricted route.** Neither engine's documented switches were sufficient,
+and both had to be measured rather than trusted. Claude needs `--restricted`
+together with an empty `--tools=` and an explicit `--allowedTools=mcp__…`;
+`--safe-mode` looked right and silently disables explicit MCP configuration
+too, and `--bare` would have switched billing to API credentials. Codex ignores
+feature switches for this purpose — the load-bearing change is a restricted
+model catalog with `shell_type: "disabled"`, no apply-patch tool and an empty
+experimental tool list — and it defers MCP tools behind `tool_search`
+unconditionally, so a hosted surface has to be proven by the channel rather than
+by reading a request. It also denies every hosted call unless the server carries
+`default_tools_approval_mode="approve"`. The name `workspace` is reserved by
+Claude, which drops a server using it without saying so; the server is called
+`agent_workspace`.
+
+**The private home.** The first attempt refused to run against a home that
+declared any configuration of its own, which would have meant asking an operator
+to clean up and re-authenticate the CLI home they use for their own work. That
+is not a boundary, it is a demand. A worker now runs from a private durable home
+the library owns, with only the login shared across from the operator's, by
+digest authority in both directions: an unchanged source keeps a refreshed
+runtime login, a changed source wins, and a deleted source login is an owner
+logout that is never recreated.
+
+**Tool settlement, which took three passes.** Interrupting a native turn reaches
+the CLI's conversation and nothing else — measured on both installed CLIs, a
+terminal interrupted result arrived in milliseconds while a hosted call was
+still running and uncancelled. Cancelling the running call was not enough either,
+because the queue behind it then ran. Closing admission at the terminal *event*
+was still not enough, because a caller reacting to that event is always a little
+behind it. Admission now closes inside the turn's own end, and the next turn
+cannot start until the previous turn's handlers have actually returned.
+
+**No replacement turn.** Claude cannot steer a running turn; the library composes
+it as interrupt-and-continue. Letting the library start that replacement meant a
+turn ran before anything admitted it — a worker out of budget would have spent an
+unauthorized turn and only then been stopped. The daemon now stops the turn
+itself, keeps the direction, and lets the ordinary admitted loop say it.
+
+**Automatic retry is gone, not just unused.** With workers off the completion
+transport, nothing could produce a retryable provider rejection, and the
+machinery would have been a `retry_wait` state no worker could ever enter. It
+was removed rather than left to lie.
+
+### Limitations
+
+- No paid run against a real provider has been made. Every automated test uses a
+  synthetic CLI that speaks the real protocols through the real tool bridge, and
+  the restricted route is verified against the actually installed CLIs with a
+  disposable home, a dummy credential and a provider that refuses inference.
+- A harness that sends a tool call concurrently with its own terminal frame can
+  still have that call arrive before the frame it was sent alongside; the two
+  travel on different channels. What is guaranteed is that once the turn's end is
+  processed, nothing further is admitted until an admitted turn reopens it.
+- `retry_wait` remains in the state model and the dashboard for assignments saved
+  by earlier versions. Nothing creates one any more.
