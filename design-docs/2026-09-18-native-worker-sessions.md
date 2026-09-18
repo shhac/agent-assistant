@@ -60,11 +60,37 @@ decides which tool to call and when, calls it over MCP, receives a result and
 continues within one native turn, with native session persistence and native
 compaction. Nothing is a tool proposal serialized inside model JSON.
 
+Route B only holds if the CLI's *own* tools are actually gone. A host-resident
+CLI that keeps built-in file or shell tools can read the owner's credentials,
+keychain-backed material and production data and send them upstream as ordinary
+model input. That is a disclosure path, and no sandbox mode that merely forbids
+writes closes it. Neither does an empty working directory: a working directory
+scopes relative paths, not what a tool may open. This design therefore does not
+rely on either, and does not claim either as containment.
+
 ### Enforcement boundary
 
-The boundary that matters is unchanged and is not a prompt: **the only path from
-the model to project files is a daemon-owned tool that runs inside the offline
-container.** Specifically:
+Two boundaries, both mechanical:
+
+**1. Native tools are removed from the session, and that is verified before the
+credentialed process ever starts.** The shared library builds the restricted
+launch configuration for each engine and then proves it against a local,
+uncredentialed rejecting provider: it starts the CLI with a disposable home, a
+dummy credential and a loopback endpoint that refuses every request, drives one
+synthetic turn, and inspects the actual outbound request body. The request must
+carry exactly the daemon's MCP tools — no native tool, and none of ours missing —
+and no inherited instruction material. Only then is the real session launched
+with the owner's login. If the probe cannot establish this, the session is not
+launched at all and the run fails closed with a capability error naming what was
+wrong. A rejecting provider performs no inference, so no tool loop can run during
+the probe, and the probe process holds no credentials to disclose.
+
+After the real session starts, the same surface is cross-checked a second time
+against whatever the CLI itself advertises at initialization — still before the
+first prompt and therefore before any inference. A mismatch closes the session.
+
+**2. The only path from the model to project files is a daemon-owned tool that
+runs inside the offline container.** Specifically:
 
 - The container keeps every property it had: no network, no host sockets, no
   host home, no provider or cloud credentials, read-only root, dropped
@@ -77,38 +103,45 @@ container.** Specifically:
 - `deployment`, `production_data_access` and `purchases` remain immutable
   prohibitions, including for descendants.
 
-The CLI process itself is contained separately, because it is on the host:
+The CLI process on the host is configured as follows. None of this is offered as
+a substitute for boundary 1:
 
-- Its working directory is a **private empty scratch directory** for that
-  session, not the workspace copy. No project file is reachable from it, and no
-  `CLAUDE.md` or `AGENTS.md` from the copied project is auto-loaded into the
-  system prompt — repository content stays untrusted task data delivered through
-  tool results.
-- Host customization is disabled explicitly: no user/project settings sources,
-  no hooks, no inherited MCP servers, no slash commands. The only MCP server is
-  the daemon's, supplied inline.
+- Host customization is disabled explicitly: no user or project settings
+  sources, no hooks, no inherited MCP servers, no slash commands, no plugin,
+  browser, or subagent surfaces. The only MCP server is the daemon's, supplied
+  inline.
 - The environment is the harness's credential-stripped environment. The login is
-  the CLI's own; nothing is copied anywhere.
+  the CLI's own, resolved by the CLI; nothing is copied anywhere, and no API
+  credential is substituted for the subscription login.
+- The working directory is a private per-session scratch directory. This keeps
+  relative paths and project instruction files out of the session; it is *not*
+  claimed as a filesystem boundary.
 - No permission-bypass mode is used. Unhandled provider-originated permission,
   elicitation and approval requests continue to fail closed.
 
-Per-engine capability, stated plainly rather than implied:
+Both engines get a real restricted route, built from mechanics the library
+already had for constrained completion:
 
 | | Claude | Codex |
 | --- | --- | --- |
-| Native tools | disabled; the tool allowlist is the daemon's MCP tools only, and the CLI's advertised tool set is **verified at startup** against it — a mismatch closes the session | cannot be disabled by configuration |
-| Native tool containment | n/a | Codex's own sandbox, `read-only` with approval `never`: no writes, no network |
-| Residual host exposure | none beyond process and scratch directory | Codex's built-in read-only tools can read host files the daemon user can read |
-| Project mutation | daemon MCP tools only | daemon MCP tools only |
+| How native tools are removed | explicit tool allowlist containing only `mcp__<server>__*` | model-catalog restriction — `shell_type` disabled, `apply_patch_tool_type` null, empty experimental tool set — plus the feature switches that disable shell, exec, apps, plugins, hooks, subagents, browser and image surfaces |
+| Inherited configuration | no setting sources, hooks disabled, strict MCP config | user config and rules ignored, project docs suppressed, app-owned home validated to carry no global instructions |
+| Verified before launch | yes — uncredentialed outbound-request probe | yes — uncredentialed outbound-request probe |
+| Verified again at startup | yes — advertised tool set, pre-inference | yes where the protocol reports it; recorded as unverified rather than claimed otherwise |
 
-Codex's residual read exposure is recorded here rather than papered over. It is
-not a write path, not a network path, and not a path to project mutation or to
-credentials the harness already strips. If a future Codex release exposes a
-built-in-tool switch, the Claude-style verified allowlist applies there too.
+If either engine's installed build cannot be configured this way, the probe says
+so and the worker does not start: the run blocks with an actionable capability
+error naming the engine, the offending tool surface and what the operator can do
+about it. There is no mode that launches a worker with native host tools
+attached, and documenting a residual read path is not a way to ship one.
 
 "Native account networking must not imply arbitrary command network access"
 holds on both engines: the CLI talks to its provider, and `run_command` executes
 in a container with `--network none`.
+
+This restricted contract is **opt-in per session**. Existing callers that open
+ordinary native sessions are unaffected; the library does not change what a
+session does by default.
 
 ## Session model
 
@@ -119,6 +152,14 @@ One durable native session reference per assignment.
   workspace, baseline and evidence.
 - Continuation and restart **resume** that session. Resume is exact: the library
   refuses a reference whose recorded configuration no longer matches.
+- The configuration digest covers the *stable* contract — engine, binary, model,
+  effort, instructions, policy, and the tool surface by name and schema. It
+  deliberately excludes the tool channel's ephemeral material: the listener path
+  and the per-launch bridge credential change on every restart, and including
+  them would invalidate every stored reference each time the daemon started.
+  That credential lives in an owner-only file, is never written into the
+  reference, never appears in launch arguments, events, evidence or tool
+  results, and is not reachable by the model's tools.
 - A *new* task gets a *new* session, seeded with relevant project context, not
   the previous assignment's entire coding conversation.
 - The run record stores a session phase (`none`, `starting`, `open`,
@@ -127,6 +168,19 @@ One durable native session reference per assignment.
   reconciliation sees a recorded phase, verifies and stops any recorded
   container, and converts the run to an explicit recoverable state instead of
   starting again.
+- **Stopping the container does not establish that the CLI stopped.** The CLI is
+  a host process, and a daemon crash orphans it: it keeps its provider
+  connection and keeps spending. Reclaiming it is therefore part of recovery,
+  not an afterthought. The library launches the CLI in its own process group and
+  anchors liveness on the tool bridge, which is the daemon's own binary running
+  as a child of the CLI and holding an exclusive lock for exactly as long as the
+  CLI subtree lives. On restart, a still-held lock is proof that an orphaned
+  subtree exists; the lock file records the group that holds it, so recovery
+  terminates that group and then re-checks the lock before declaring the run
+  recoverable. A group that cannot be confirmed gone leaves the run reserved for
+  inspection rather than being reported as clean. Orphaned tool execution stops
+  independently the moment the daemon's listener goes away, because every tool
+  call has to reach the daemon to do anything.
 - Uncertain effects are reconciled, not repeated. A turn interrupted after tools
   ran is resumed in the same native session, where the model can see what it
   already did, rather than replayed.
@@ -162,6 +216,19 @@ the existing worker detail API, the dashboard conversation and the assistant's
 inspect tool. Private model reasoning, credentials and raw tool payload bodies
 are not exposed; tool *names*, *statuses* and bounded sanitized output excerpts
 are.
+
+Two accounting corrections come with this:
+
+- Usage is no longer observed only at the terminal result. Each model response
+  within a turn carries provider-reported figures, and those are emitted as
+  they arrive, marked as per-request observations rather than as the turn's
+  accounting. The terminal figure, when the provider supplies a usable one,
+  remains the turn's accounting.
+- A **failed or interrupted** turn no longer discards what it consumed. Its
+  observed per-request figures are retained as evidence. They are not promoted
+  to a measurement: a turn whose terminal accounting is absent, zero-valued
+  despite having streamed output, or otherwise unusable is recorded as an
+  *unknown* call, exactly as before. Unknown is never zero.
 
 Three things that were previously blurred stay distinct:
 
@@ -217,15 +284,23 @@ What is implemented:
 - **Admission before each turn.** The same `Admit` callback and token-budget
   check run before a turn is started or resumed, so no turn begins outside
   policy.
-- **Streamed monitoring during a turn.** Provider-reported usage and quota
-  events are applied to the ledger as they arrive. When a turn crosses the
-  configured budget or the subscription threshold mid-flight, the supervisor
-  requests a native interrupt and holds the run at a checkpoint instead of
-  waiting for the turn to end on its own.
+- **Streamed monitoring during a turn**, where the provider actually streams it.
+  Per-request usage observations and quota events are applied as they arrive,
+  and a turn that crosses the configured budget or the subscription threshold
+  mid-flight is interrupted and held at a checkpoint rather than left to finish.
+  This is monitoring, not enforcement, and the distinction is load-bearing: if
+  an engine reports usage only at the terminal result, mid-turn enforcement for
+  that engine does not exist and is not claimed. The capability is reported per
+  engine from what was actually observed, not from what the design hoped for.
 - **Explicitly documented granularity.** Overshoot within an in-flight turn is
   possible, bounded by how quickly the provider reports and the interrupt
-  settles. Neither gate is a pre-reserved guarantee or a currency limit. This
-  is stated in the operator documentation, not only here.
+  settles — and, on an engine with terminal-only reporting, bounded only by the
+  turn. Neither gate is a pre-reserved guarantee or a currency limit. This is
+  stated in the operator documentation, not only here.
+- **Quota rechecks are scoped to the run that made them.** A failed or stale
+  telemetry read holds that assignment under the configured unavailable-usage
+  policy. It does not become a daemon-wide stop, and it does not hold
+  assignments on other profiles or other accounts.
 - **Unavailable accounting stays unknown.** A turn that reports no usable usage
   figure increments unknown calls; it is never recorded as zero. A configured
   budget holds on unknown consumption for an owner decision. A reservation is
@@ -245,6 +320,15 @@ What is implemented:
 
 `ask_decision`, `send_message`, `acknowledge_steering` and `finish` remain
 daemon-mediated tools, now delivered over MCP inside the native session:
+
+A native turn can issue several tool calls at once, so "this tool ends the turn"
+has to be a latch, not a convention. `finish`, `ask_decision` and `send_message`
+close the session's tool channel **atomically, inside the call that invokes
+them**. Every later call in that same turn — including one already in flight
+concurrently — is refused with an explicit closed-channel result and executes
+nothing. The daemon then requests a native interrupt and checkpoints. No health
+event, turn status or quiet period is treated as a substitute: only an explicit
+tool call ends the work, and only collected evidence accepts it.
 
 - `ask_decision` checkpoints the turn and blocks the run with a prepared,
   durable pending decision; the PA or owner answers, and the answer is delivered
@@ -279,8 +363,11 @@ notice.
 1. A worker completes a multi-step read → edit → test → finish assignment inside
    a single native session, with no application-side summarization and no
    whole-turn deadline, and progresses past the old 5-minute boundary (shown
-   with controlled time in tests).
-2. Both engines have a working route; neither is a stub.
+   with controlled time in tests). The fix is the removal of the deadline and the
+   preservation of the native loop, not a larger number.
+2. Both engines have a working restricted route; neither is a stub, and neither
+   ships with native host tools attached. A build that cannot be restricted
+   fails closed with an actionable capability error before launch.
 3. Restart resumes the same native session; a crash mid-turn produces exactly
    one worker, not two, and an explicitly recoverable state.
 4. Pause checkpoints and resumes; stop contains the process tree and prevents
