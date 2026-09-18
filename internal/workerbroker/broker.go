@@ -137,6 +137,7 @@ func New(cfg Config) (*Broker, error) {
 			return fail(errors.New("broker state belongs to another configured project"))
 		}
 		reconcileUsage(r, b.tokenBudget())
+		reconcileDelivery(r)
 		if r.Run.Status == "running" || r.Run.Status == "queued" {
 			if r.Container != "" {
 				cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
@@ -145,6 +146,10 @@ func New(cfg Config) (*Broker, error) {
 				if removeErr != nil {
 					return fail(errors.New("cannot reconcile prior worker container; inspect it before restarting the broker"))
 				}
+				// Confirmed gone, so nothing from the previous attempt can still be
+				// writing. What those commands did stays unestablished in the
+				// evidence; what they are doing now is nothing.
+				r.UnsettledCommands = 0
 			}
 			if r.PendingStatus == "cancelled" {
 				r.Run.Status = "cancelled"
@@ -307,7 +312,6 @@ func (b *Broker) Run(ctx context.Context) error {
 				r := b.state.Runs[selected]
 				r.PendingStatus = ""
 				r.PendingSummary = ""
-				r.Transcript = repairTranscript(r.Transcript)
 				r.Run.Status = "running"
 				r.Run.Summary = "Preparing an isolated, offline workspace"
 				r.Run.UpdatedAt = now()
@@ -459,6 +463,32 @@ func reconcileContainer(ctx context.Context, command Commander, r storedRun) err
 	}
 	_, err = command.Run(ctx, []string{"rm", "--force", fields[0]}, nil)
 	return err
+}
+
+// settleContainerProcesses records that the workspace has stopped moving.
+//
+// A command whose client was cancelled left the question of whether it was still
+// running open, and that question held back every later write. Confirmed removal
+// of the container answers it: its processes are gone, whatever they were doing.
+// What they did remains uncertain and stays in the evidence as such — the
+// command records keep saying their outcome was never established — but the
+// workspace itself is now still, which is what the next attempt needs.
+func (b *Broker) settleContainerProcesses(id string) {
+	settled := 0
+	_ = b.update(id, func(r *storedRun) error {
+		settled = r.UnsettledCommands
+		if settled == 0 {
+			return nil
+		}
+		r.UnsettledCommands = 0
+		// Whatever those commands wrote is still unknown, and the next attempt has
+		// to establish it rather than inherit the assumption that it is fine.
+		r.Messages = append(r.Messages, fmt.Sprintf("Before continuing: %d command(s) in the previous attempt passed their time limit and were stopped without their outcome being established. The container has since been removed, so nothing is still writing, but what those commands left behind is unverified. Re-read the files they could have touched and re-run the checks they were meant to perform before relying on either.", settled))
+		return nil
+	})
+	if settled > 0 {
+		b.recordActivity(id, activityEntry{Kind: "recovery", Status: "settled", Detail: fmt.Sprintf("the container was confirmed removed, so %d command(s) of unknown outcome can no longer be changing the workspace; their results remain recorded as unestablished", settled)})
+	}
 }
 
 // cleanupUncertain keeps the execution reservation because the container may

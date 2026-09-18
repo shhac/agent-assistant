@@ -1,7 +1,6 @@
 package workerbroker
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,11 +8,8 @@ import (
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
 
-func peerToolCall() toolCall {
-	call := toolCall{ID: "fixture-peer-call", Type: "function"}
-	call.Function.Name = "send_message"
-	call.Function.Arguments = `{"target_agent_id":"peer-two","message":"The fixture contract is ready"}`
-	return call
+func peerArgs() map[string]string {
+	return map[string]string{"target_agent_id": "peer-two", "message": "The fixture contract is ready"}
 }
 
 func TestPeerOutboxSurvivesRestartBeforePublication(t *testing.T) {
@@ -21,16 +17,9 @@ func TestPeerOutboxSurvivesRestartBeforePublication(t *testing.T) {
 	response := request(t, b, "/runs", "dispatch-one", startRequest())
 	var run worker.Run
 	json.Unmarshal(response.Body.Bytes(), &run)
-	b.update(run.ID, func(r *storedRun) error {
-		r.Run.Status = "running"
-		// An old transcript remains valid after the new send_message tool appears.
-		r.Transcript = []modelMessage{{Role: "assistant", Content: "Inspecting the fixture"}}
-		return nil
-	})
-	stored, _ := b.snapshot(run.ID)
-	_, finished, err := b.tool(context.Background(), run.ID, stored, peerToolCall())
-	if err != nil || !finished {
-		t.Fatal(finished, err)
+	b.update(run.ID, func(r *storedRun) error { r.Run.Status = "running"; return nil })
+	if result := invoke(t, b, run.ID, "agent-one", "send_message", peerArgs()); result.IsError {
+		t.Fatal(result.Content)
 	}
 	pending, _ := b.snapshot(run.ID)
 	if pending.PendingMessage == nil || pending.Run.Message != nil {
@@ -47,19 +36,14 @@ func TestPeerOutboxSurvivesRestartBeforePublication(t *testing.T) {
 	if recovered.Run.Status != "waiting" || recovered.Run.Message == nil || recovered.Run.Message.RequestID != requestID || recovered.PendingMessage != nil {
 		t.Fatal("outbox lost during recovery", recovered)
 	}
-	tools := workerTools()
 	found := false
-	for _, tool := range tools {
-		if tool.Function.Name == "send_message" {
+	for _, definition := range workerToolDefinitions() {
+		if definition.Name == "send_message" {
 			found = true
 		}
 	}
 	if !found || !strings.Contains(workerPrompt(recovered.Request), "send_message") {
 		t.Fatal("peer tool unavailable to recovered worker")
-	}
-	repaired := repairTranscript(recovered.Transcript)
-	if len(repaired) != 1 || repaired[0].Content != "Inspecting the fixture" {
-		t.Fatal("old transcript changed", repaired)
 	}
 }
 
@@ -70,10 +54,8 @@ func TestPeerOutboxWaitsForMatchingAcknowledgement(t *testing.T) {
 	var run worker.Run
 	json.Unmarshal(response.Body.Bytes(), &run)
 	b.update(run.ID, func(r *storedRun) error { r.Run.Status = "running"; return nil })
-	stored, _ := b.snapshot(run.ID)
-	_, _, err := b.tool(context.Background(), run.ID, stored, peerToolCall())
-	if err != nil {
-		t.Fatal(err)
+	if result := invoke(t, b, run.ID, "agent-one", "send_message", peerArgs()); result.IsError {
+		t.Fatal(result.Content)
 	}
 	// Incoming information during cleanup must not wake the sender or discard
 	// its unpublished outbound request.
@@ -105,13 +87,20 @@ func TestPeerOutboxWaitsForMatchingAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestPeerToolDoesNotAcceptForgedSender(t *testing.T) {
+// A worker cannot claim to be someone else, or address itself. The sender is the
+// run's own agent, and the tool schema has no field for an alternative.
+func TestPeerToolDoesNotAcceptForgedSenderOrSelfDelivery(t *testing.T) {
 	b, _ := newFixture(t, "https://provider.test/v1", &fakeDocker{})
 	defer b.Close()
-	call := peerToolCall()
-	call.Function.Arguments = `{"target_agent_id":"peer-two","message":"fixture","sender_id":"owner"}`
-	if _, _, err := b.tool(context.Background(), "unused", storedRun{}, call); err == nil {
-		t.Fatal("forged sender accepted")
+	forged := rawInvoke(b, "unused", "agent-one", "send_message",
+		`{"target_agent_id":"peer-two","message":"fixture","sender_id":"owner"}`)
+	if !forged.IsError {
+		t.Fatal("forged sender accepted", forged.Content)
+	}
+	self := invoke(t, b, "unused", "agent-one", "send_message",
+		map[string]string{"target_agent_id": "agent-one", "message": "fixture"})
+	if !self.IsError {
+		t.Fatal("a worker addressed itself", self.Content)
 	}
 }
 
@@ -122,9 +111,8 @@ func TestArtifactFailurePreservesPeerOutboxThroughResume(t *testing.T) {
 	var run worker.Run
 	json.Unmarshal(response.Body.Bytes(), &run)
 	b.update(run.ID, func(r *storedRun) error { r.Run.Status = "running"; return nil })
-	stored, _ := b.snapshot(run.ID)
-	if _, _, err := b.tool(context.Background(), run.ID, stored, peerToolCall()); err != nil {
-		t.Fatal(err)
+	if result := invoke(t, b, run.ID, "agent-one", "send_message", peerArgs()); result.IsError {
+		t.Fatal(result.Content)
 	}
 	// Artifact failure happens after confirmed container cleanup.
 	b.finalize(run.ID, "interrupted", "Artifact collection failed", nil)

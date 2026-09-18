@@ -1,86 +1,82 @@
 package workerbroker
 
 import (
-	"errors"
-	"fmt"
-	"math/rand/v2"
 	"time"
 
-	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
-	"github.com/shhac/lib-agent-harness/completion"
+	"github.com/shhac/lib-agent-harness/session"
 )
 
-const maxProviderFailures = 6
+// What happens when a worker's coding session fails.
+//
+// Nothing is retried automatically. The previous contract drove workers through
+// a request-per-proposal transport, where repeating a refused HTTP request was a
+// safe no-op and automatic recovery was worth having. A native turn is not that:
+// by the time it fails, the worker may have edited files and run commands, and
+// starting it again would do all of that a second time against a workspace that
+// already carries the first attempt. So every failure stops the assignment with
+// its work preserved, and a person decides.
+//
+// What this file does care about is that the harness's own classification
+// survives to the owner. A coding CLI reports expired logins, lost processes and
+// refused capability checks in a fixed vocabulary; reducing all of that to
+// "something went wrong" is how an operator ends up with a diagnostic they
+// cannot act on.
 
-// classifiedFailure is what a failed completion establishes: how the provider
-// classified it, which evidence was available, and whether the daemon's own
-// preflight measurement is what stopped it.
+// classifiedFailure is what a failed attempt established.
 type classifiedFailure struct {
-	failure         *completion.RequestError
-	kind            completion.ErrorKind
-	evidence        string
-	contextPressure bool
-	message         string
+	// facts are the harness's own, when it supplied any.
+	facts session.Facts
+	known bool
+	// evidence names what was available to classify, never a reconstructed cause.
+	evidence string
+	// message is safe to persist and display: it comes from fixed vocabulary.
+	message string
 }
 
 func classifyModelFailure(err error) classifiedFailure {
-	var failure *completion.RequestError
-	errors.As(err, &failure)
-	kind := completion.ErrorUnknown
-	if failure != nil {
-		switch failure.Kind {
-		case completion.ErrorAuthentication, completion.ErrorContextLimit, completion.ErrorModelUnavailable, completion.ErrorStructuredOutputLimit, completion.ErrorPermissionDenied, completion.ErrorTimeout:
-			kind = failure.Kind
+	facts, known := session.ErrorFacts(err)
+	if !known {
+		// Something outside this library's vocabulary. Saying so is better than
+		// picking a category, because a category implies a remedy.
+		return classifiedFailure{
+			evidence: evidenceUntyped,
+			message:  "the worker's coding session failed for a reason the daemon could not classify",
 		}
 	}
-	out := classifiedFailure{failure: failure, kind: kind, evidence: failureEvidence(failure, kind), message: (&completion.RequestError{Kind: kind}).Error()}
-	if failure != nil {
-		out.message = failure.Error()
+	return classifiedFailure{
+		facts: facts, known: true,
+		evidence: nativeEvidence(facts.Kind),
+		// Every one of these errors is built from constants; no harness output,
+		// provider prose or path reaches one.
+		message: err.Error(),
 	}
-	var safe interface{ SafeDiagnostic() string }
-	if errors.As(err, &safe) {
-		out.message = safe.SafeDiagnostic()
-		if failure != nil && failure.Phase == completion.PhaseResponse {
-			out.evidence = evidenceApplication
-		}
-	}
-	if errors.Is(err, engine.ErrContextPressure) {
-		out.kind, out.evidence, out.contextPressure = completion.ErrorContextLimit, evidenceLocalPreflight, true
-	}
-	return out
 }
 
-// Only a definitive provider rejection may enter automatic recovery. The failed
-// completion never executed tools. Earlier acknowledged operations remain in
-// Transcript and must not be replayed. The daemon admits every retry.
-func (b *Broker) modelFailure(id string, err error) {
-	b.modelFailureAt(id, "model_completion", err)
+func nativeEvidence(kind string) string {
+	switch kind {
+	case session.FailureCapability:
+		return evidenceCapabilityCheck
+	case session.FailureProcess:
+		return evidenceLocalProcess
+	default:
+		return evidenceNativeHarness
+	}
 }
 
 func (b *Broker) modelFailureAt(id, stage string, err error) {
-	defer b.reportFailure(id, stage, err)
-	var failure *completion.RequestError
-	if errors.As(err, &failure) && failure.Retryable() {
-		b.scheduleProviderRetry(id, failure)
-		return
-	}
+	b.reportFailure(id, stage, err)
 	b.blockOnModelFailure(id, classifyModelFailure(err))
 }
 
-// blockOnModelFailure stops the run and preserves its work. No retry is
-// scheduled: the owner decides what happens next.
+// blockOnModelFailure stops the run and preserves its work.
 func (b *Broker) blockOnModelFailure(id string, cls classifiedFailure) {
 	_ = b.update(id, func(r *storedRun) error {
 		if r.Run.Status == "cancelled" || r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
 			return nil
 		}
-		r.Run.ProviderFailureKind = string(cls.kind)
-		setModelFailureDetails(&r.Run, b.cfg.Engine, cls.failure)
+		setFailureDetails(&r.Run, b.cfg.Engine, cls)
 		r.Run.ModelFailureEvidence = cls.evidence
-		if cls.contextPressure {
-			r.Run.ModelFailurePhase, r.Run.ModelFailureCode = "preflight", "working_context_budget"
-		}
 		r.Run.RetryAt = time.Time{}
 		r.PendingStatus = "blocked"
 		r.PendingSummary = cls.message + ". Inspect the preserved work and correct the problem before explicitly resuming; no automatic retry is scheduled."
@@ -90,52 +86,6 @@ func (b *Broker) blockOnModelFailure(id string, cls classifiedFailure) {
 	})
 }
 
-// scheduleProviderRetry backs off and lets the daemon re-admit the run. Once
-// the allowance is spent the run blocks instead, with its progress preserved.
-func (b *Broker) scheduleProviderRetry(id string, failure *completion.RequestError) {
-	_ = b.update(id, func(r *storedRun) error {
-		if r.PendingStatus == "paused" || r.PendingStatus == "cancelled" {
-			return nil
-		}
-		r.Run.ProviderFailures++
-		r.Run.ProviderFailureKind = string(failure.Kind)
-		setModelFailureDetails(&r.Run, b.cfg.Engine, failure)
-		r.Run.ModelFailureEvidence = evidenceTyped
-		if r.Run.ProviderFailures >= maxProviderFailures {
-			r.Run.RetryAt = time.Time{}
-			r.PendingStatus = "blocked"
-			r.PendingSummary = "Provider recovery allowance exhausted; progress is preserved. Resume explicitly after the provider recovers."
-			return nil
-		}
-		delay := providerDelay(r.Run.ProviderFailures, failure.RetryAfter)
-		r.Run.RetryAt = now().Add(delay)
-		r.PendingStatus = "retry_wait"
-		r.PendingSummary = fmt.Sprintf("Model provider temporarily unavailable (%s). Retry %d scheduled after %s; saved progress will continue without repeating tools.", failure.Kind, r.Run.ProviderFailures, r.Run.RetryAt.Format(time.RFC3339))
-		return nil
-	})
-}
-
-func providerDelay(failures int, retryAfter time.Duration) time.Duration {
-	step := failures - 1
-	if step < 0 {
-		step = 0
-	}
-	if step > 6 {
-		step = 6
-	}
-	base := 5 * time.Second * time.Duration(1<<step)
-	if base > 5*time.Minute {
-		base = 5 * time.Minute
-	}
-	delay := base + time.Duration(rand.Int64N(int64(base/4)+1))
-	if delay > 5*time.Minute {
-		delay = 5 * time.Minute
-	}
-	if retryAfter > delay {
-		delay = retryAfter
-	}
-	return delay
-}
 func (b *Broker) clearProviderFailure(id string) {
 	_ = b.update(id, func(r *storedRun) error {
 		r.Run.ProviderFailures = 0
@@ -148,52 +98,45 @@ func (b *Broker) clearProviderFailure(id string) {
 	})
 }
 
-func setModelFailureDetails(run *worker.Run, configuredEngine string, failure *completion.RequestError) {
+// setFailureDetails records the harness's own facts. These are the codes that
+// reach the owner's inspect output and dashboard, so losing them here is losing
+// them everywhere.
+func setFailureDetails(run *worker.Run, configuredEngine string, cls classifiedFailure) {
 	run.ModelFailureEngine = configuredEngine
 	run.ModelFailurePhase, run.ModelFailureCode = "", ""
 	run.ModelExitCode = nil
-	if failure == nil {
+	if !cls.known {
+		run.ProviderFailureKind = ""
 		return
 	}
-	if failure.Engine != "" {
-		run.ModelFailureEngine = failure.Engine
+	run.ProviderFailureKind = cls.facts.Kind
+	if cls.facts.Engine != "" {
+		run.ModelFailureEngine = cls.facts.Engine
 	}
-	run.ModelFailurePhase, run.ModelFailureCode = string(failure.Phase), failure.Code
-	if failure.ExitCode != nil {
-		code := *failure.ExitCode
+	run.ModelFailureCode = cls.facts.Code
+	// Not every failure has a phase; the family is what it happened during, and
+	// an empty field beside a code an owner is trying to place is unhelpful.
+	run.ModelFailurePhase = cls.facts.Phase
+	if run.ModelFailurePhase == "" {
+		run.ModelFailurePhase = cls.facts.Kind
+	}
+	if cls.facts.ExitCode != nil {
+		code := *cls.facts.ExitCode
 		run.ModelExitCode = &code
 	}
 }
 
-// Model-failure evidence names which provider evidence was available, never a
-// reconstructed cause. A retryable rejection always arrived as a typed
-// envelope; the other two values distinguish the two ways an attempt can end
-// up reported as "unknown", which are otherwise indistinguishable to an owner.
+// Failure evidence names what was available to classify with, never a
+// reconstructed cause. The distinction an owner needs is between a failure the
+// harness described and one that arrived as an opaque error, because only the
+// first tells them what to change.
 const (
-	evidenceTyped          = "typed_envelope"
-	evidenceUntyped        = "untyped_error"
-	evidenceUnclassified   = "unclassified_kind"
-	evidenceLocalPreflight = "local_preflight"
-	evidenceLocalProcess   = "local_process"
-	evidenceApplication    = "application_validation"
+	// evidenceNativeHarness: the coding harness classified it, from its own
+	// fixed vocabulary.
+	evidenceNativeHarness = "native_harness"
+	// evidenceLocalProcess: the harness process itself ended.
+	evidenceLocalProcess = "local_process"
+	// evidenceUntyped: nothing classified it. This is not a cause; it is the
+	// absence of one, and it is worth showing as such.
+	evidenceUntyped = "untyped_error"
 )
-
-func failureEvidence(failure *completion.RequestError, kind completion.ErrorKind) string {
-	if failure == nil {
-		return evidenceUntyped
-	}
-	if failure.Phase == completion.PhasePreflight {
-		return evidenceLocalPreflight
-	}
-	if failure.Phase == completion.PhaseProcess {
-		return evidenceLocalProcess
-	}
-	switch failure.Code {
-	case "unexpected_native_tool", "unexpected_native_tool_catalog", "unexpected_native_tool_call", "invalid_action_envelope", "malformed_event_json":
-		return evidenceApplication
-	}
-	if kind == completion.ErrorUnknown && failure.Kind != completion.ErrorUnknown {
-		return evidenceUnclassified
-	}
-	return evidenceTyped
-}

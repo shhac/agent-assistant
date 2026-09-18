@@ -135,16 +135,61 @@ func (e *HoldError) Unwrap() error { return ErrResourceHold }
 // UnknownCalls counts invocations whose consumption could not be established,
 // including history recorded before this ledger existed; they are never
 // counted as zero.
+//
+// The Observed columns are separate on purpose. A native turn reports figures
+// for each of its model responses, and those survive a turn that failed or was
+// interrupted without terminal accounting. They are evidence of what the worker
+// was seen to use; they are not a measurement of it, they are not charged
+// against a budget, and a turn whose accounting is missing stays unknown.
 type Usage struct {
-	InputTokens  int64 `json:"input_tokens,omitempty"`
-	OutputTokens int64 `json:"output_tokens,omitempty"`
-	UnknownCalls int   `json:"unknown_calls,omitempty"`
-	TokenBudget  int64 `json:"token_budget,omitempty"`
+	InputTokens          int64 `json:"input_tokens,omitempty"`
+	OutputTokens         int64 `json:"output_tokens,omitempty"`
+	ObservedInputTokens  int64 `json:"observed_input_tokens,omitempty"`
+	ObservedOutputTokens int64 `json:"observed_output_tokens,omitempty"`
+	UnknownCalls         int   `json:"unknown_calls,omitempty"`
+	TokenBudget          int64 `json:"token_budget,omitempty"`
+}
+
+// SessionRef identifies the worker's coding session without exposing the
+// provider's own identifier, which is private application state.
+type SessionRef struct {
+	Engine  string `json:"engine"`
+	Resumed bool   `json:"resumed,omitempty"`
+}
+
+// ContextOccupancy is how full the worker's conversation is right now. It is
+// not consumption and must never be added to it. Quality distinguishes a
+// provider measurement from a local estimate; Invalidated marks an observation
+// the provider has superseded, typically by compacting.
+type ContextOccupancy struct {
+	UsedPercent *float64  `json:"used_percent,omitempty"`
+	Quality     string    `json:"quality,omitempty"`
+	ObservedAt  time.Time `json:"observed_at,omitzero"`
+	Invalidated bool      `json:"invalidated,omitempty"`
+	Model       string    `json:"model,omitempty"`
+}
+
+// Activity is one bounded, sanitized observation of what a worker did. It
+// carries tool names, statuses and short excerpts — never the model's private
+// reasoning, provider credentials, or raw tool payloads. Truncated marks a
+// record whose earlier entries were dropped.
+type Activity struct {
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Tool      string    `json:"tool,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	Truncated bool      `json:"truncated,omitempty"`
 }
 
 type Run struct {
+	// ContextCompactions counts the harness's own compactions. The application
+	// does not rewrite a worker's conversation, so there is no byte budget here;
+	// how full the conversation is lives in Context.
 	ContextCompactions       int                `json:"context_compactions,omitempty"`
-	ContextBytes             int                `json:"context_bytes,omitempty"`
+	Context                  ContextOccupancy   `json:"context,omitzero"`
+	Session                  *SessionRef        `json:"session,omitempty"`
+	Activity                 []Activity         `json:"activity,omitempty"`
 	Usage                    Usage              `json:"usage,omitzero"`
 	ResourceHold             *ResourceHold      `json:"resource_hold,omitempty"`
 	RetryAt                  time.Time          `json:"retry_at,omitempty"`

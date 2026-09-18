@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -13,26 +11,28 @@ import (
 )
 
 func TestActiveCancellationWaitsForCleanup(t *testing.T) {
-	modelStarted := make(chan struct{}, 1)
-	releaseModel := make(chan struct{})
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case modelStarted <- struct{}{}:
-		default:
-		}
-		select {
-		case <-r.Context().Done():
-		case <-releaseModel:
-		}
-	}))
-	defer model.Close()
-	defer close(releaseModel)
 	d := &fakeDocker{}
-	b, _ := newFixture(t, model.URL, d)
+	b, _ := newFixture(t, "https://model.test", d)
+	// The worker is held inside its container launch, so the cancellation below
+	// lands on an assignment that is genuinely executing.
+	working := make(chan struct{}, 1)
+	releaseWork := make(chan struct{})
 	cleanupStarted := make(chan struct{}, 1)
 	releaseCleanup := make(chan struct{})
+	defer close(releaseWork)
 	b.cfg.Command = CommandFunc(func(ctx context.Context, args []string, in []byte) ([]byte, error) {
-		if args[0] == "rm" {
+		switch args[0] {
+		case "run":
+			select {
+			case working <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseWork:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		case "rm":
 			select {
 			case cleanupStarted <- struct{}{}:
 			default:
@@ -55,9 +55,9 @@ func TestActiveCancellationWaitsForCleanup(t *testing.T) {
 		t.Fatal(response.Body.String())
 	}
 	select {
-	case <-modelStarted:
+	case <-working:
 	case <-time.After(3 * time.Second):
-		t.Fatal("model did not start")
+		t.Fatal("the worker never started executing")
 	}
 	response = request(t, b, "/runs/"+run.ID+"/cancel", "cancel-once", struct{}{})
 	if response.Code != 200 {

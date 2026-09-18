@@ -355,7 +355,11 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, in AgentUpdate) (A
 			}
 		}
 		a.Status = in.Status
-		a.ContextCompactions, a.ContextBytes = in.ContextCompactions, in.ContextBytes
+		a.ContextCompactions = in.ContextCompactions
+		a.ContextUsedPercent, a.ContextQuality = in.ContextUsedPercent, in.ContextQuality
+		a.SessionEngine, a.SessionResumed = in.SessionEngine, in.SessionResumed
+		a.ObservedInputTokens, a.ObservedOutputTokens = in.ObservedInputTokens, in.ObservedOutputTokens
+		a.Work = append([]AgentWork{}, in.Work...)
 		a.RetryAt, a.ProviderFailures, a.ProviderFailureKind = in.RetryAt, in.ProviderFailures, in.ProviderFailureKind
 		a.ModelFailureEngine, a.ModelFailurePhase, a.ModelFailureCode, a.ModelExitCode = in.ModelFailureEngine, in.ModelFailurePhase, in.ModelFailureCode, in.ModelExitCode
 		a.ModelFailureEvidence = in.ModelFailureEvidence

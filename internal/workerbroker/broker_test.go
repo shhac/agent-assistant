@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
@@ -105,102 +103,54 @@ func request(t *testing.T, b *Broker, path, key string, value any) *httptest.Res
 	b.Handler().ServeHTTP(w, r)
 	return w
 }
-func TestWorkerImplementsInCopyAndPublishesActualEvidence(t *testing.T) {
-	calls := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.Header.Get("Authorization") != "Bearer fixture-model-secret" {
-			t.Error("host model missing configured key")
-		}
-		names := []string{"write_file", "run_command", "finish"}
-		args := []string{`{"path":"hello.txt","content":"after\n"}`, `{"command":"printf synthetic-test"}`, `{"summary":"Updated the greeting and synthetic verification passed."}`}
-		call := toolCall{ID: names[calls-1], Type: "function"}
-		call.Function.Name = names[calls-1]
-		call.Function.Arguments = args[calls-1]
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}, "finish_reason": "tool_calls"}}})
-	}))
-	defer provider.Close()
-	docker := &fakeDocker{}
-	b, cfg := newFixture(t, provider.URL, docker)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	resp := request(t, b, "/runs", "dispatch-one", startRequest())
-	if resp.Code != 201 {
-		t.Fatal(resp.Body.String())
-	}
-	var run worker.Run
-	_ = json.Unmarshal(resp.Body.Bytes(), &run)
-	deadline := time.After(5 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-deadline:
-			t.Fatal("worker did not complete")
-		case <-ticker.C:
-			current, _ := b.snapshot(run.ID)
-			if current.Run.Status == "completed" {
-				run = current.Run
-				goto finished
-			}
-			if current.Run.Status == "interrupted" {
-				t.Fatal(current.Run.Summary)
+
+// The container a worker runs in is offline, unprivileged, read-only and
+// carries none of the operator's environment. This reads the arguments the
+// daemon actually issues; whether a worker can then get anything done inside
+// one is what the integration tests cover.
+func TestTheWorkerContainerIsOfflineUnprivilegedAndCredentialFree(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "private-key")
+	b, cfg := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := startedRun(t, b)
+	r, _ := b.snapshot(id)
+	r.WorkDir = filepath.Join(t.TempDir(), "run-copy")
+	call := b.containerArgs(r)
+
+	for _, pair := range [][]string{{"--network", "none"}, {"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"}} {
+		found := false
+		for i, v := range call {
+			if v == pair[0] && i+1 < len(call) && call[i+1] == pair[1] {
+				found = true
 			}
 		}
-	}
-finished:
-	if len(run.Evidence) < 8 || calls != 3 {
-		t.Fatalf("missing actual evidence: %#v calls=%d", run, calls)
-	}
-	original, _ := os.ReadFile(filepath.Join(cfg.Workspace, "hello.txt"))
-	if string(original) != "before\n" {
-		t.Fatal("original workspace was modified")
-	}
-	patch, err := os.ReadFile(filepath.Join(cfg.StateDir, "runs", run.ID, "artifacts", "changes.patch"))
-	if err != nil || !strings.Contains(string(patch), "-before\n+after\n") {
-		t.Fatalf("missing actual diff: %q %v", patch, err)
-	}
-	commands, _ := os.ReadFile(filepath.Join(cfg.StateDir, "runs", run.ID, "artifacts", "commands.json"))
-	if !strings.Contains(string(commands), "PASS: synthetic verification") {
-		t.Fatal("actual command result not captured")
-	}
-	docker.mu.Lock()
-	defer docker.mu.Unlock()
-	if !docker.stopped {
-		t.Fatal("completion published before container stopped")
-	}
-	for _, call := range docker.calls {
-		if call[0] != "run" {
-			continue
+		if !found {
+			t.Errorf("missing isolation %v", pair)
 		}
-		for _, pair := range [][]string{{"--network", "none"}, {"--cap-drop", "ALL"}, {"--security-opt", "no-new-privileges"}, {"--pull", "never"}} {
-			if pair[0] == "--pull" {
-				if !contains(call, "--pull=never") {
-					t.Error("image may pull")
-				}
-				continue
-			}
-			found := false
-			for i, v := range call {
-				if v == pair[0] && i+1 < len(call) && call[i+1] == pair[1] {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("missing isolation %v", pair)
-			}
-		}
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "docker.sock") || strings.Contains(joined, "fixture-model-secret") {
-			t.Fatal("host socket or credentials mounted")
-		}
-		if !contains(call, "--read-only") {
-			t.Fatal("root filesystem writable")
-		}
+	}
+	if !contains(call, "--pull=never") {
+		t.Error("the image may be pulled")
+	}
+	if !contains(call, "--read-only") {
+		t.Error("the root filesystem is writable")
+	}
+	joined := strings.Join(call, " ")
+	if strings.Contains(joined, "docker.sock") || strings.Contains(joined, "private-key") || strings.Contains(joined, "fixture-model-secret") {
+		t.Fatal("a host socket or credential was mounted")
+	}
+	// The worker edits a copy. The project folder itself is never mounted.
+	if !strings.Contains(joined, "src="+r.WorkDir+",dst=/workspace") {
+		t.Fatalf("the isolated copy was not the mounted workspace: %s", joined)
+	}
+	if strings.Contains(joined, "src="+cfg.Workspace+",") {
+		t.Fatal("the original project folder was mounted into the container")
+	}
+	// Nothing of the operator's environment reaches the container process.
+	if env := strings.Join(dockerEnvironment(), " "); strings.Contains(env, "private-key") {
+		t.Fatal("a host credential reached the container runtime's environment")
 	}
 }
+
 func TestProtocolScopeAuthenticationAndIdempotency(t *testing.T) {
 	b, _ := newFixture(t, "http://127.0.0.1:1", &fakeDocker{})
 	defer b.Close()
@@ -298,12 +248,33 @@ func TestBinaryBaselineSurvivesPersistence(t *testing.T) {
 		t.Fatalf("false binary diff after roundtrip: %s", patch)
 	}
 }
-func TestIncompleteToolsAreNotReplayedOnRecovery(t *testing.T) {
-	call := toolCall{ID: "pending", Type: "function"}
-	call.Function.Name = "write_file"
-	got := repairTranscript([]modelMessage{{Role: "assistant", ToolCalls: []toolCall{call}}})
-	if len(got) != 2 || got[1].Role != "tool" || got[1].ToolCallID != "pending" || !strings.Contains(got[1].Content, "interrupted") {
-		t.Fatal("missing uncertainty repair")
+
+// The harness owns the conversation now, so there is no transcript to repair.
+// What recovery has to get right on the daemon's side is in delivery_test.go;
+// what belongs here is the ordinary path: the opening turn carries the
+// assignment, and a confirmed delivery is neither repeated nor invented.
+func TestTheOpeningTurnCarriesTheAssignmentAndIsNotRepeated(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := runningRun(t, b)
+	withDirection(t, b, id, "Prefer the smaller change")
+	first, err := b.nextTurnInput(id)
+	if err != nil || !strings.Contains(first, "Prefer the smaller change") || !strings.Contains(first, "Begin this assignment") {
+		t.Fatalf("the opening turn did not carry the assignment and the direction: %q %v", first, err)
+	}
+	taken, _ := b.snapshot(id)
+	if taken.InFlight == nil || len(taken.Messages) != 0 || taken.Briefed {
+		t.Fatalf("direction was dequeued or the brief recorded before delivery: %+v", taken)
+	}
+	b.deliveryAccepted(id)
+	delivered, _ := b.snapshot(id)
+	if delivered.InFlight != nil || !delivered.Briefed {
+		t.Fatalf("confirmed delivery was not recorded: %+v", delivered)
+	}
+	// With nothing queued there is genuinely nothing to say, and nothing is
+	// invented to fill the turn.
+	if next, err := b.nextTurnInput(id); err != nil || next != "" {
+		t.Fatalf("a prompt was invented for an idle turn: %q %v", next, err)
 	}
 }
 
@@ -360,57 +331,6 @@ func TestCleanupRequiresProvenContainerIdentity(t *testing.T) {
 	}
 }
 
-func TestFailedCommandEvidenceReachesRunDespiteModelSuccessClaim(t *testing.T) {
-	calls := 0
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		call := toolCall{ID: "check", Type: "function"}
-		call.Function.Name = "run_command"
-		call.Function.Arguments = `{"command":"synthetic-failing-test"}`
-		if calls == 2 {
-			call.ID = "finish"
-			call.Function.Name = "finish"
-			call.Function.Arguments = `{"summary":"Everything passed."}`
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}}}})
-	}))
-	defer provider.Close()
-	docker := &fakeDocker{}
-	b, _ := newFixture(t, provider.URL, docker)
-	b.cfg.Command = CommandFunc(func(ctx context.Context, args []string, input []byte) ([]byte, error) {
-		if len(args) > 1 && args[0] == "exec" && args[len(args)-1] == "synthetic-failing-test" {
-			return []byte("FAIL: acceptance expectation was not satisfied"), errors.New("nonzero test exit")
-		}
-		return docker.Run(ctx, args, input)
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	response := request(t, b, "/runs", "dispatch-one", startRequest())
-	var run worker.Run
-	_ = json.Unmarshal(response.Body.Bytes(), &run)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		current, _ := b.snapshot(run.ID)
-		if current.Run.Status == "completed" {
-			req := httptest.NewRequest("GET", "http://broker.test/runs/"+run.ID, nil)
-			req.Header.Set("Authorization", "Bearer fixture-auth")
-			w := httptest.NewRecorder()
-			b.Handler().ServeHTTP(w, req)
-			_ = json.Unmarshal(w.Body.Bytes(), &run)
-			text := strings.Join(run.Evidence, "\n")
-			for _, want := range []string{"0 SUCCEEDED, 1 FAILED", "Command 1 FAILED: synthetic-failing-test", "FAIL: acceptance expectation was not satisfied", "Content patch SHA-256:"} {
-				if !strings.Contains(text, want) {
-					t.Fatalf("real failed check hidden by model summary; missing %q in %s", want, text)
-				}
-			}
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("worker did not provide final evidence")
-}
 func TestEvidenceDigestIsBoundedAndExplicitAboutOmissions(t *testing.T) {
 	names := make([]string, 100)
 	for i := range names {

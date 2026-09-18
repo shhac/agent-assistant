@@ -1,7 +1,6 @@
 package workerbroker
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -9,13 +8,6 @@ import (
 
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
-
-func steeringCall(arguments string) toolCall {
-	call := toolCall{ID: "fixture-steering", Type: "function"}
-	call.Function.Name = "acknowledge_steering"
-	call.Function.Arguments = arguments
-	return call
-}
 
 func TestSteeringReceiptsSurviveRestartAndDeduplicate(t *testing.T) {
 	b, cfg := newFixture(t, "https://provider.test/v1", &fakeDocker{})
@@ -31,9 +23,8 @@ func TestSteeringReceiptsSurviveRestartAndDeduplicate(t *testing.T) {
 		`{"message_ids":["first","first"]}`,
 		`{"message_ids":["first","second"]}`,
 	} {
-		_, finished, err := b.tool(context.Background(), run.ID, storedRun{}, steeringCall(args))
-		if err != nil || finished {
-			t.Fatal(finished, err)
+		if result := rawInvoke(b, run.ID, "agent-one", "acknowledge_steering", args); result.IsError {
+			t.Fatal(result.Content)
 		}
 	}
 	// Completing the run must not discard receipts that the daemon has not
@@ -68,7 +59,7 @@ func TestSteeringReceiptsRejectInvalidOrExcessClaims(t *testing.T) {
 		`{"message_ids":[" wrong "]}`,
 		`{"message_ids":["one"],"agent_id":"another-agent"}`,
 	} {
-		if _, _, err := b.tool(context.Background(), run.ID, storedRun{}, steeringCall(args)); err == nil {
+		if result := rawInvoke(b, run.ID, "agent-one", "acknowledge_steering", args); !result.IsError {
 			t.Fatalf("accepted invalid receipt: %s", args)
 		}
 	}
@@ -77,10 +68,10 @@ func TestSteeringReceiptsRejectInvalidOrExcessClaims(t *testing.T) {
 		ids[i] = fmt.Sprintf("steering-%d", i)
 	}
 	args, _ := json.Marshal(map[string]any{"message_ids": ids})
-	if _, _, err := b.tool(context.Background(), run.ID, storedRun{}, steeringCall(string(args))); err != nil {
-		t.Fatal(err)
+	if result := rawInvoke(b, run.ID, "agent-one", "acknowledge_steering", string(args)); result.IsError {
+		t.Fatal(result.Content)
 	}
-	if _, _, err := b.tool(context.Background(), run.ID, storedRun{}, steeringCall(`{"message_ids":["overflow"]}`)); err == nil {
+	if result := rawInvoke(b, run.ID, "agent-one", "acknowledge_steering", `{"message_ids":["overflow"]}`); !result.IsError {
 		t.Fatal("unbounded cumulative receipts")
 	}
 	got, _ := b.snapshot(run.ID)
@@ -88,7 +79,7 @@ func TestSteeringReceiptsRejectInvalidOrExcessClaims(t *testing.T) {
 		t.Fatal("rejected receipt changed persisted acknowledgements")
 	}
 	b.finalize(run.ID, "cancelled", "Stopped", nil)
-	if _, _, err := b.tool(context.Background(), run.ID, storedRun{}, steeringCall(`{"message_ids":["late"]}`)); err == nil {
+	if result := rawInvoke(b, run.ID, "agent-one", "acknowledge_steering", `{"message_ids":["late"]}`); !result.IsError {
 		t.Fatal("cancelled execution created a receipt")
 	}
 }

@@ -170,5 +170,6 @@ func registerWorker(root *cobra.Command, o *options) {
 	_ = cmd.MarkFlagRequired("project")
 	_ = cmd.MarkFlagRequired("image")
 	worker.AddCommand(cmd)
+	worker.AddCommand(toolBridge())
 	root.AddCommand(worker)
 }

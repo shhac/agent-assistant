@@ -5,34 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"reflect"
-	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/shhac/agent-assistant/internal/engine"
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
+	"github.com/shhac/lib-agent-harness/session"
 )
 
-// toolProvider answers every request with one tool call, plus optional usage,
-// so a test can drive as many turns as it likes without a real model.
-func toolProvider(t *testing.T, calls *atomic.Int64, input, output int) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		call := toolCall{ID: "call", Type: "function"}
-		call.Function.Name = "run_command"
-		call.Function.Arguments = `{"command":"synthetic-check"}`
-		body := map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}, "finish_reason": "tool_calls"}}}
-		if input > 0 || output > 0 {
-			body["usage"] = map[string]int{"prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output}
-		}
-		_ = json.NewEncoder(w).Encode(body)
-	}))
-}
+// Admission is now the only per-turn gate. The previous contract counted model
+// calls and capped them; a native worker's turn is many provider requests, so
+// what is authorized here is a turn and what is measured is what the harness
+// reports for it. These tests drive that gate directly, because the engine
+// transport it sits in front of is covered end-to-end elsewhere.
 
 func startedRun(t *testing.T, b *Broker) string {
 	t.Helper()
@@ -47,111 +34,82 @@ func startedRun(t *testing.T, b *Broker) string {
 	return run.ID
 }
 
-func awaitRun(t *testing.T, b *Broker, id string, accept func(storedRun) bool) storedRun {
+// runningRun is an assignment the daemon has already dispatched, which is the
+// state a turn is admitted from.
+func runningRun(t *testing.T, b *Broker) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		r, err := b.snapshot(id)
-		if err == nil && accept(r) {
-			return r
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	r, _ := b.snapshot(id)
-	t.Fatalf("worker never reached the expected state: status=%q pending=%q calls=%d", r.Run.Status, r.PendingStatus, r.ModelCalls)
-	return storedRun{}
-}
-
-// The former ceiling was 16 cumulative calls, and it counted successful
-// thinking. Useful work must be able to run past it.
-func TestWorkerRunsPastTheFormerCallCeiling(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 10, 5)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
 	id := startedRun(t, b)
-	r := awaitRun(t, b, id, func(r storedRun) bool { return r.ModelCalls >= 40 })
-	if r.Run.Status != "running" {
-		t.Fatalf("long assignment stopped at %d calls: %s", r.ModelCalls, r.Run.Summary)
-	}
-	// One call may be reserved and not yet settled when the snapshot is taken,
-	// which is exactly the reservation that protects a crash from losing it.
-	settled := r.UsageInputTokens / 10
-	if r.UsageOutputTokens != settled*5 || settled < int64(r.ModelCalls)-1 || settled > int64(r.ModelCalls) {
-		t.Fatalf("usage ledger disagrees with calls: %d in / %d out over %d calls", r.UsageInputTokens, r.UsageOutputTokens, r.ModelCalls)
-	}
-	if r.UsageUnknownCalls != 0 {
-		t.Fatal("measured calls recorded as unknown", r.UsageUnknownCalls)
-	}
-}
-
-// An exhausted saved assignment from before this change must continue on an
-// ordinary resume, keeping its counter and its transcript.
-func TestExhaustedSavedAssignmentResumesWithoutResettingHistory(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 4, 2)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	// Establish the saved state of an assignment stopped by the old ceiling
-	// before the runtime can dispatch it, so the resume is what starts work.
-	id := startedRun(t, b)
-	saved := []modelMessage{{Role: "user", Content: "Owner direction from the original assignment"}}
 	if err := b.update(id, func(r *storedRun) error {
-		r.Run.Status = "blocked"
-		r.Run.Summary = "Worker exhausted its cumulative model-call allowance"
-		r.ModelCalls = 16
-		r.Transcript = append([]modelMessage(nil), saved...)
+		r.Run.Status = "running"
+		r.Container = "agent-assistant-" + id
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	if code := request(t, b, "/runs/"+id+"/resume", "resume-one", map[string]string{"instruction": "Continue"}).Code; code != 200 {
-		t.Fatal("exhausted assignment refused resume", code)
+	return id
+}
+
+func reserve(t *testing.T, b *Broker, id string) string {
+	t.Helper()
+	request := ""
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); err != nil {
+		t.Fatal(err)
 	}
-	r := awaitRun(t, b, id, func(r storedRun) bool { return r.ModelCalls > 16 })
-	if r.ModelCalls <= 16 {
-		t.Fatal("history was reset instead of continued", r.ModelCalls)
+	if request == "" {
+		t.Fatal("admission produced no reservation")
 	}
-	if len(r.Transcript) == 0 || r.Transcript[0].Content != saved[0].Content {
-		t.Fatal("resume lost the saved transcript")
+	return request
+}
+
+func engineUsage(input, output int) engine.Usage {
+	return engine.Usage{InputTokens: input, OutputTokens: output, TotalTokens: input + output, Known: true}
+}
+
+// The former ceiling was 16 cumulative calls, and it counted successful
+// thinking. Useful work must be able to run well past it.
+func TestWorkerRunsPastTheFormerCallCeiling(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := runningRun(t, b)
+	for i := 0; i < 64; i++ {
+		request := ""
+		if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); err != nil {
+			t.Fatalf("turn %d was refused: %v", i+1, err)
+		}
+		if err := b.settleUsage(id, request, engineUsage(10, 5)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := b.snapshot(id)
+	if r.Run.Status != "running" || r.Run.ResourceHold != nil {
+		t.Fatalf("a long assignment was stopped by its own length: %q %+v", r.Run.Status, r.Run.ResourceHold)
+	}
+	if r.UsageInputTokens != 640 || r.UsageOutputTokens != 320 || r.UsageUnknownCalls != 0 {
+		t.Fatalf("ledger disagrees with the turns taken: %+v", r.Run.Usage)
 	}
 }
 
-// Every request passes the injected gate, including the summary a compaction
-// needs, and a refusal spends nothing.
-func TestAdmissionCoversEveryRequestAndRefusalSpendsNothing(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 1, 1)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
+// Every turn passes the injected gate, and a refusal spends nothing.
+func TestAdmissionCoversEveryTurnAndRefusalSpendsNothing(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
-	var admitted atomic.Int64
+	admitted := 0
 	b.cfg.Admit = func(context.Context) error {
-		admitted.Add(1)
+		admitted++
 		return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Account allowance consumed; resets soon", ResetsAt: time.Now().Add(time.Hour).UTC()}}
 	}
-	id := contextRun(t, b)
+	id := runningRun(t, b)
 	before, _ := b.snapshot(id)
-	if _, err := b.completeForRun(context.Background(), id, nil); err == nil {
-		t.Fatal("held request proceeded")
+	request := ""
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); err == nil {
+		t.Fatal("held turn proceeded")
 	}
 	after, _ := b.snapshot(id)
-	if admitted.Load() != 1 || calls.Load() != 0 {
-		t.Fatalf("gate ran %d times and provider saw %d requests", admitted.Load(), calls.Load())
+	if admitted != 1 || request != "" {
+		t.Fatalf("gate ran %d times and produced reservation %q", admitted, request)
 	}
 	if after.ModelCalls != before.ModelCalls || after.PendingUsage != nil || after.UsageUnknownCalls != 0 {
-		t.Fatal("refused request was accounted for")
-	}
-	if !reflect.DeepEqual(after.Transcript, before.Transcript) {
-		t.Fatal("refused request altered the conversation")
+		t.Fatal("refused turn was accounted for")
 	}
 	if after.Run.ResourceHold == nil || after.Run.ResourceHold.OwnerAction || after.Run.ResourceHold.ResetsAt.IsZero() {
 		t.Fatalf("quota hold did not record a self-clearing wait: %+v", after.Run.ResourceHold)
@@ -161,139 +119,164 @@ func TestAdmissionCoversEveryRequestAndRefusalSpendsNothing(t *testing.T) {
 	}
 }
 
-// A held run finishes its attempt as a wait, keeping the owner's queued message
-// for the continuation rather than answering it with a refusal.
+// A held run keeps the owner's queued direction for the continuation rather than
+// answering it with a refusal, and will not accept new direction while held.
 func TestResourceHoldPreservesQueuedOwnerDirection(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 1, 1)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	var held atomic.Bool
-	held.Store(true)
-	b.cfg.Admit = func(context.Context) error {
-		if held.Load() {
-			return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Account allowance consumed"}}
-		}
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := runningRun(t, b)
+	if err := b.update(id, func(r *storedRun) error {
+		r.Messages = append(r.Messages, "Prefer the smaller change")
 		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	id := startedRun(t, b)
-	r := awaitRun(t, b, id, func(r storedRun) bool { return r.Run.Status == "usage_wait" })
-	if r.Run.ResourceHold == nil || r.Run.Summary == "" {
-		t.Fatal("hold published without a reason")
+	b.cfg.Admit = func(context.Context) error {
+		return &worker.HoldError{Hold: worker.ResourceHold{Kind: worker.HoldSubscriptionQuota, Reason: "Account allowance consumed"}}
 	}
-	if code := request(t, b, "/runs/"+id+"/messages", "direction-one", map[string]string{"message": "Prefer the smaller change"}).Code; code != 409 {
+	reservation := ""
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &reservation); err == nil {
+		t.Fatal("held turn proceeded")
+	}
+	b.finalize(id, "usage_wait", "Account allowance consumed", nil)
+	held, _ := b.snapshot(id)
+	if held.Run.Status != "usage_wait" || held.Run.ResourceHold == nil {
+		t.Fatalf("hold published without a wait: %q %+v", held.Run.Status, held.Run.ResourceHold)
+	}
+	if len(held.Messages) != 1 || held.Messages[0] != "Prefer the smaller change" {
+		t.Fatalf("owner direction was lost across the hold: %v", held.Messages)
+	}
+	if code := request(t, b, "/runs/"+id+"/messages", "direction-one", map[string]string{"message": "More"}).Code; code != 409 {
 		t.Fatal("a held worker accepted a message instead of requiring resume", code)
 	}
-	held.Store(false)
-	if code := request(t, b, "/runs/"+id+"/resume", "resume-one", map[string]string{"instruction": "Prefer the smaller change"}).Code; code != 200 {
+	// The hold clears on its own, and an explicit resume continues the same
+	// assignment with everything it had.
+	b.cfg.Admit = nil
+	if code := request(t, b, "/runs/"+id+"/resume", "resume-one", map[string]string{"instruction": "Continue"}).Code; code != 200 {
 		t.Fatal("resume refused after the hold cleared", code)
 	}
-	r = awaitRun(t, b, id, func(r storedRun) bool { return r.ModelCalls > 0 })
-	if r.Run.ResourceHold != nil {
-		t.Fatal("stale hold survived a continued run")
+	resumed, _ := b.snapshot(id)
+	if resumed.Run.ResourceHold != nil {
+		t.Fatal("a stale hold survived the resume")
 	}
-	found := false
-	for _, m := range r.Transcript {
-		if m.Role == "user" && m.Content == "Prefer the smaller change" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("owner direction was lost across the hold")
+	if len(resumed.Messages) < 2 {
+		t.Fatalf("resume discarded queued direction: %v", resumed.Messages)
 	}
 }
 
-// A configured token budget stops the next request, and raising it lets the
-// same assignment continue with its saved context.
-func TestTokenBudgetStopsAndExtendsWithoutLosingContext(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 100, 50)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	var budget atomic.Int64
-	budget.Store(1000)
-	b.cfg.TokenBudget = budget.Load
-	id := startedRun(t, b)
-	r := awaitRun(t, b, id, func(r storedRun) bool { return r.Run.Status == "usage_wait" })
-	if r.Run.ResourceHold.Kind != worker.HoldTokenBudget || !r.Run.ResourceHold.OwnerAction {
-		t.Fatalf("budget hold is not an owner decision: %+v", r.Run.ResourceHold)
+// A configured token budget stops the next turn, and raising it lets the same
+// assignment continue with its saved session.
+func TestTokenBudgetStopsAndExtendsWithoutLosingTheSession(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	budget := int64(1000)
+	b.cfg.TokenBudget = func() int64 { return budget }
+	id := runningRun(t, b)
+	if err := b.update(id, func(r *storedRun) error {
+		r.Session = &session.Ref{Engine: "claude", ID: "session-1"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	used := r.UsageInputTokens + r.UsageOutputTokens
-	if used < 1000 {
+	for {
+		request := ""
+		if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); err != nil {
+			break
+		}
+		if err := b.settleUsage(id, request, engineUsage(300, 150)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held, _ := b.snapshot(id)
+	if held.Run.ResourceHold == nil || held.Run.ResourceHold.Kind != worker.HoldTokenBudget || !held.Run.ResourceHold.OwnerAction {
+		t.Fatalf("budget hold is not an owner decision: %+v", held.Run.ResourceHold)
+	}
+	used := held.UsageInputTokens + held.UsageOutputTokens
+	if used < budget {
 		t.Fatal("stopped before the budget was reached", used)
 	}
-	transcript := len(r.Transcript)
-	if transcript == 0 {
-		t.Fatal("budget hold discarded the conversation")
+	if held.Session == nil {
+		t.Fatal("the budget hold discarded the coding session")
 	}
-	budget.Store(100000)
-	if code := request(t, b, "/runs/"+id+"/resume", "resume-one", map[string]string{"instruction": "Continue"}).Code; code != 200 {
-		t.Fatal("raised budget did not allow an explicit resume", code)
+	if !strings.Contains(held.Run.ResourceHold.Reason, "resume this assignment explicitly") {
+		t.Errorf("the hold did not say how to continue: %q", held.Run.ResourceHold.Reason)
 	}
-	after := awaitRun(t, b, id, func(r storedRun) bool { return r.UsageInputTokens+r.UsageOutputTokens > used })
-	if len(after.Transcript) < transcript {
-		t.Fatal("continuation lost saved context")
+	budget = 100000
+	after := reserve(t, b, id)
+	if err := b.settleUsage(id, after, engineUsage(1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	continued, _ := b.snapshot(id)
+	if continued.Session == nil || continued.Session.ID != "session-1" {
+		t.Fatal("continuation lost the saved session")
+	}
+	if continued.UsageInputTokens+continued.UsageOutputTokens <= used {
+		t.Fatal("the raised budget did not let the assignment continue")
 	}
 }
 
 // Missing usage is not free work. With a budget configured, an assignment whose
 // consumption cannot be established waits for an owner decision, and raising
-// the budget does not measure what the provider never reported.
+// the budget does not measure what the harness never reported.
 func TestUnknownUsageHoldsUntilTheOwnerDecides(t *testing.T) {
-	var calls atomic.Int64
-	provider := toolProvider(t, &calls, 0, 0)
-	defer provider.Close()
-	b, _ := newFixture(t, provider.URL, &fakeDocker{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; _ = b.Close() }()
-	var budget atomic.Int64
-	budget.Store(100000)
-	b.cfg.TokenBudget = budget.Load
-	id := startedRun(t, b)
-	r := awaitRun(t, b, id, func(r storedRun) bool { return r.Run.Status == "usage_wait" })
-	if r.Run.ResourceHold.Kind != worker.HoldUsageUnknown || r.UsageUnknownCalls == 0 {
-		t.Fatalf("unmeasured call was treated as free: %+v unknown=%d", r.Run.ResourceHold, r.UsageUnknownCalls)
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	budget := int64(100000)
+	b.cfg.TokenBudget = func() int64 { return budget }
+	id := runningRun(t, b)
+	// A turn the harness could not account for.
+	if err := b.settleUsage(id, reserve(t, b, id), engine.Usage{}); err != nil {
+		t.Fatal(err)
 	}
-	if r.UsageInputTokens != 0 || r.UsageOutputTokens != 0 {
-		t.Fatal("unknown usage was invented as a number")
+	r, _ := b.snapshot(id)
+	if r.UsageUnknownCalls != 1 || r.UsageInputTokens != 0 || r.UsageOutputTokens != 0 {
+		t.Fatalf("an unmeasured turn was treated as free or invented: %+v", r.Run.Usage)
 	}
-	budget.Store(10_000_000)
-	if _, err := b.completeForRun(context.Background(), id, nil); err == nil {
+	request := ""
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); !errors.Is(err, worker.ErrResourceHold) {
+		t.Fatalf("unknown consumption under a budget did not hold: %v", err)
+	}
+	held, _ := b.snapshot(id)
+	if held.Run.ResourceHold.Kind != worker.HoldUsageUnknown || !held.Run.ResourceHold.OwnerAction {
+		t.Fatalf("an unmeasurable assignment did not become an owner decision: %+v", held.Run.ResourceHold)
+	}
+	budget = 10_000_000
+	if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); !errors.Is(err, worker.ErrResourceHold) {
 		t.Fatal("raising the budget erased the uncertainty")
 	}
-	budget.Store(0)
-	held, _ := b.snapshot(id)
-	if hold := budgetHold(held, 0); hold != nil {
+	budget = 0
+	disabled, _ := b.snapshot(id)
+	if hold := budgetHold(disabled, 0); hold != nil {
 		t.Fatal("disabling the budget did not release the hold")
+	}
+	// Disabling it is the only way past: the assignment continues, and the
+	// uncertainty it continues with stays on the record.
+	continued := reserve(t, b, id)
+	if err := b.settleUsage(id, continued, engineUsage(4, 2)); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := b.snapshot(id)
+	if final.UsageUnknownCalls != 1 {
+		t.Fatalf("continuing erased the recorded uncertainty: %d", final.UsageUnknownCalls)
 	}
 }
 
-// Nothing is spent, and nothing new becomes unknown, when a preflight fails
-// before the request leaves.
-func TestFailedPreflightAddsNoUnknownConsumption(t *testing.T) {
+// Nothing is spent, and nothing new becomes unknown, when a session cannot be
+// opened at all.
+func TestFailedLaunchAddsNoUnknownConsumption(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
 	b.cfg.Engine = "codex"
 	b.cfg.CodexBin = "/nonexistent/synthetic-codex"
 	b.cfg.TokenBudget = func() int64 { return 100000 }
-	id := contextRun(t, b)
+	id := runningRun(t, b)
 	before, _ := b.snapshot(id)
-	if _, err := b.completeForRun(context.Background(), id, nil); err == nil {
-		t.Fatal("missing CLI produced a completion")
+	if _, err := b.sessionOptions(id, before, t.TempDir()); err == nil {
+		t.Fatal("a missing CLI produced usable session options")
 	}
 	after, _ := b.snapshot(id)
 	if after.UsageUnknownCalls != before.UsageUnknownCalls || after.ModelCalls != before.ModelCalls || after.PendingUsage != nil {
-		t.Fatalf("preflight failure was accounted as consumption: unknown=%d calls=%d pending=%+v", after.UsageUnknownCalls, after.ModelCalls, after.PendingUsage)
+		t.Fatalf("a failed launch was accounted as consumption: unknown=%d calls=%d pending=%+v", after.UsageUnknownCalls, after.ModelCalls, after.PendingUsage)
 	}
 }
 
@@ -306,7 +289,7 @@ func TestRestartConvertsStaleReservationsAndPreLedgerHistory(t *testing.T) {
 		run     storedRun
 		unknown int
 	}{
-		{"stale reservation", storedRun{UsageLedger: true, ModelCalls: 3, UsageInputTokens: 30, PendingUsage: &pendingUsage{RequestID: "abandoned", Stage: stageTurn}}, 1},
+		{"stale reservation", storedRun{UsageLedger: true, ModelCalls: 3, UsageInputTokens: 30, PendingUsage: &pendingUsage{RequestID: "abandoned", Stage: stageNativeTurn}}, 1},
 		{"pre-ledger history", storedRun{ModelCalls: 16}, 16},
 		{"pre-ledger with reservation", storedRun{ModelCalls: 2, PendingUsage: &pendingUsage{RequestID: "abandoned"}}, 3},
 		{"already reconciled", storedRun{UsageLedger: true, ModelCalls: 5, UsageInputTokens: 50}, 0},
@@ -334,14 +317,8 @@ func TestRestartConvertsStaleReservationsAndPreLedgerHistory(t *testing.T) {
 func TestUsageSettlesOncePerReservation(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
-	id := contextRun(t, b)
-	request := ""
-	if err := b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request); err != nil {
-		t.Fatal(err)
-	}
-	if request == "" {
-		t.Fatal("admission produced no reservation")
-	}
+	id := runningRun(t, b)
+	request := reserve(t, b, id)
 	b.settleUsage(id, request, engineUsage(11, 7))
 	b.settleUsage(id, request, engineUsage(11, 7))
 	b.settleUsage(id, "a-different-request", engineUsage(500, 500))
@@ -358,7 +335,7 @@ func TestOwnerControlsOutrankResourceHolds(t *testing.T) {
 		t.Run(control, func(t *testing.T) {
 			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 			defer b.Close()
-			id := contextRun(t, b)
+			id := runningRun(t, b)
 			if err := b.update(id, func(r *storedRun) error { r.PendingStatus = control; return nil }); err != nil {
 				t.Fatal(err)
 			}
@@ -367,23 +344,23 @@ func TestOwnerControlsOutrankResourceHolds(t *testing.T) {
 			if r.PendingStatus != control || r.Run.ResourceHold != nil {
 				t.Fatalf("resource hold overwrote an owner control: %q", r.PendingStatus)
 			}
+			// It also refuses to authorize another turn, rather than racing the
+			// control it just declined to overwrite.
+			request := ""
+			if err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &request); err == nil {
+				t.Fatal("a controlled run authorized another turn")
+			}
 		})
 	}
 }
 
-func engineUsage(input, output int) engine.Usage {
-	return engine.Usage{InputTokens: input, OutputTokens: output, TotalTokens: input + output, Known: true}
-}
-
-// A worker running a long build-and-test loop must not be stopped because it
-// has run a certain number of commands. Per-command time and output bounds are
-// what contain a command; a lifetime count is not a resource limit.
+// A worker running a long build-and-test loop must not be stopped because it has
+// run a certain number of commands. Per-command time and output bounds are what
+// contain a command; a lifetime count is not a resource limit.
 func TestCommandsAreNotCappedByCount(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
-	id := contextRun(t, b)
-	r, _ := b.snapshot(id)
-	r.Container = "agent-assistant-" + id
+	id := runningRun(t, b)
 	for i := 0; i < 128; i++ {
 		if err := b.update(id, func(run *storedRun) error {
 			run.Commands = append(run.Commands, commandRecord{Command: "synthetic", Success: true})
@@ -392,74 +369,52 @@ func TestCommandsAreNotCappedByCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var call toolCall
-	call.ID, call.Type, call.Function.Name = "command-129", "function", "run_command"
-	call.Function.Arguments = `{"command":"go test ./..."}`
-	value, finished, err := b.tool(context.Background(), id, r, call)
-	if err != nil || finished {
-		t.Fatalf("command 129 was refused: %v", err)
-	}
-	record, ok := value.(commandRecord)
-	if !ok || record.Command != "go test ./..." {
-		t.Fatalf("command 129 did not run: %+v", value)
+	result := invoke(t, b, id, "agent-one", "run_command", map[string]string{"command": "go test ./..."})
+	if result.IsError {
+		t.Fatalf("command 129 was refused: %s", result.Content)
 	}
 	after, _ := b.snapshot(id)
 	if len(after.Commands) != 129 {
 		t.Fatalf("command 129 was not recorded: %d", len(after.Commands))
 	}
+	if after.Commands[128].Command != "go test ./..." {
+		t.Fatalf("command 129 did not run: %+v", after.Commands[128])
+	}
 }
 
-// A settlement that did not persist leaves consumption unrecorded. Continuing
-// to act on that reply would spend against a ledger the broker cannot vouch
-// for, so the failure has to reach the caller instead of the proposals.
-func TestUnpersistedSettlementStopsTheReplyAndHoldsTheNextRequest(t *testing.T) {
-	var calls atomic.Int64
+// A settlement that did not persist leaves consumption unrecorded. Continuing to
+// spend against a ledger the broker cannot vouch for is the thing to prevent, so
+// the failure reaches the caller and the next turn is refused.
+func TestUnpersistedSettlementHoldsTheNextTurn(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		// The reservation has persisted by now; make the settlement that follows
-		// unable to write, which is what a durability failure looks like here.
-		if err := os.Chmod(b.cfg.StateDir, 0500); err != nil {
-			t.Error(err)
-		}
-		call := toolCall{ID: "call", Type: "function"}
-		call.Function.Name = "finish"
-		call.Function.Arguments = `{"summary":"Claiming completion"}`
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": modelMessage{Role: "assistant", ToolCalls: []toolCall{call}}, "finish_reason": "tool_calls"}}})
-	}))
-	defer provider.Close()
-	defer os.Chmod(b.cfg.StateDir, 0700)
-	b.cfg.ModelEndpoint = provider.URL
-	id := contextRun(t, b)
-
-	reply, err := b.completeForRun(context.Background(), id, nil)
-	if err == nil {
-		t.Fatal("an unrecorded settlement returned a usable reply")
+	id := runningRun(t, b)
+	request := reserve(t, b, id)
+	if err := os.Chmod(b.cfg.StateDir, 0500); err != nil {
+		t.Fatal(err)
 	}
-	if len(reply.ToolCalls) != 0 {
-		t.Fatalf("proposals escaped an unrecorded settlement: %+v", reply.ToolCalls)
-	}
+	settleErr := b.settleUsage(id, request, engineUsage(10, 5))
 	if err := os.Chmod(b.cfg.StateDir, 0700); err != nil {
 		t.Fatal(err)
 	}
+	if settleErr == nil {
+		t.Fatal("a settlement that could not be written reported success")
+	}
+
+	// The reservation is retained rather than discarded, and the next turn is
+	// refused while it is open, budget or not.
 	held, _ := b.snapshot(id)
 	if held.PendingUsage == nil {
 		t.Fatal("the unsettled reservation was discarded rather than retained")
 	}
-
-	// The next request is refused while that reservation is open, budget or not.
-	request := ""
-	err = b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request)
-	if !errors.Is(err, worker.ErrResourceHold) || request != "" {
-		t.Fatalf("another request was authorized over an open reservation: %v", err)
+	next := ""
+	err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &next)
+	if !errors.Is(err, worker.ErrResourceHold) || next != "" {
+		t.Fatalf("another turn was authorized over an open reservation: %v", err)
 	}
 	after, _ := b.snapshot(id)
 	if after.Run.ResourceHold == nil || after.Run.ResourceHold.Kind != worker.HoldUsageUnknown || !after.Run.ResourceHold.OwnerAction {
 		t.Fatalf("an unresolved reservation was not surfaced for the owner: %+v", after.Run.ResourceHold)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("the provider was contacted again: %d", calls.Load())
 	}
 }
 
@@ -480,15 +435,11 @@ func TestUnusableUsageIsRecordedAsUnknownNotRepaired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 			defer b.Close()
-			id := contextRun(t, b)
+			id := runningRun(t, b)
 			if err := b.update(id, func(r *storedRun) error { r.UsageInputTokens = tc.seed; return nil }); err != nil {
 				t.Fatal(err)
 			}
-			request := ""
-			if err := b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request); err != nil {
-				t.Fatal(err)
-			}
-			if err := b.settleUsage(id, request, tc.usage); err != nil {
+			if err := b.settleUsage(id, reserve(t, b, id), tc.usage); err != nil {
 				t.Fatal(err)
 			}
 			r, _ := b.snapshot(id)
@@ -510,7 +461,7 @@ func TestUnusableUsageIsRecordedAsUnknownNotRepaired(t *testing.T) {
 func TestCombinedTotalOverflowIsUnknownNotWrapped(t *testing.T) {
 	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
-	id := contextRun(t, b)
+	id := runningRun(t, b)
 	half := int64(math.MaxInt64/2 + 1)
 	if err := b.update(id, func(r *storedRun) error {
 		r.UsageInputTokens, r.UsageOutputTokens = half, half-1
@@ -518,11 +469,7 @@ func TestCombinedTotalOverflowIsUnknownNotWrapped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request := ""
-	if err := b.reserveWorkerModelCall(context.Background(), id, stageTurn, &request); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.settleUsage(id, request, engineUsage(1, 1)); err != nil {
+	if err := b.settleUsage(id, reserve(t, b, id), engineUsage(1, 1)); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := b.snapshot(id)
@@ -537,10 +484,10 @@ func TestCombinedTotalOverflowIsUnknownNotWrapped(t *testing.T) {
 	}
 }
 
-// A reservation whose settlement never persisted must not make every resume
-// hold against the same unresolved record. The explicit resume closes it once,
-// as unknown consumption — which a configured budget then rightly stops on,
-// and a disabled one rightly continues past.
+// A reservation whose settlement never persisted must not make every resume hold
+// against the same unresolved record. The explicit resume closes it once, as
+// unknown consumption — which a configured budget then rightly stops on, and a
+// disabled one rightly continues past.
 func TestResumeAfterRepairedStorageResolvesTheStaleReservation(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -551,28 +498,21 @@ func TestResumeAfterRepairedStorageResolvesTheStaleReservation(t *testing.T) {
 		{"budget disabled continues", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls atomic.Int64
-			provider := toolProvider(t, &calls, 10, 5)
-			defer provider.Close()
-			b, _ := newFixture(t, provider.URL, &fakeDocker{})
+			b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+			defer b.Close()
 			b.cfg.TokenBudget = func() int64 { return tc.budget }
-			id := contextRun(t, b)
+			id := runningRun(t, b)
 			// The state a transient write failure leaves behind: a reservation
 			// recorded, its settlement lost, and the run stopped for the owner.
 			if err := b.update(id, func(r *storedRun) error {
 				r.Run.Status = "usage_wait"
 				r.Run.Summary = "A previous model request's consumption was never recorded"
-				r.PendingUsage = &pendingUsage{RequestID: "lost-settlement", Stage: stageTurn, StartedAt: now()}
+				r.PendingUsage = &pendingUsage{RequestID: "lost-settlement", Stage: stageNativeTurn, StartedAt: now()}
 				r.Run.ResourceHold = &worker.ResourceHold{Kind: worker.HoldUsageUnknown, OwnerAction: true, Reason: "unresolved accounting"}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
-			done := make(chan error, 1)
-			go func() { done <- b.Run(ctx) }()
-			defer func() { cancel(); <-done; _ = b.Close() }()
-
 			if code := request(t, b, "/runs/"+id+"/resume", "owner-resume", map[string]string{"instruction": "Continue"}).Code; code != 200 {
 				t.Fatal("the supported recovery path refused an explicit resume", code)
 			}
@@ -583,20 +523,27 @@ func TestResumeAfterRepairedStorageResolvesTheStaleReservation(t *testing.T) {
 			if settled.UsageUnknownCalls != 1 {
 				t.Fatalf("a possibly-billed request was written off as free: unknown=%d", settled.UsageUnknownCalls)
 			}
-
-			if !tc.proceeds {
-				held := awaitRun(t, b, id, func(r storedRun) bool { return r.Run.Status == "usage_wait" })
-				if held.Run.ResourceHold == nil || held.Run.ResourceHold.Kind != worker.HoldUsageUnknown {
-					t.Fatalf("unknown consumption under a budget did not hold: %+v", held.Run.ResourceHold)
+			if err := b.update(id, func(r *storedRun) error { r.Run.Status = "running"; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			next := ""
+			err := b.reserveWorkerModelCall(context.Background(), id, stageNativeTurn, &next)
+			if tc.proceeds {
+				if err != nil {
+					t.Fatalf("a disabled budget still held on recorded uncertainty: %v", err)
 				}
-				if calls.Load() != 0 {
-					t.Fatalf("a held worker still contacted the provider: %d", calls.Load())
+				working, _ := b.snapshot(id)
+				if working.UsageUnknownCalls != 1 {
+					t.Fatal("continuing erased the recorded uncertainty", working.UsageUnknownCalls)
 				}
 				return
 			}
-			working := awaitRun(t, b, id, func(r storedRun) bool { return r.ModelCalls > 0 })
-			if working.UsageUnknownCalls != 1 {
-				t.Fatal("continuing erased the recorded uncertainty", working.UsageUnknownCalls)
+			if !errors.Is(err, worker.ErrResourceHold) {
+				t.Fatalf("unknown consumption under a budget did not hold: %v", err)
+			}
+			held, _ := b.snapshot(id)
+			if held.Run.ResourceHold == nil || held.Run.ResourceHold.Kind != worker.HoldUsageUnknown {
+				t.Fatalf("unknown consumption under a budget did not hold: %+v", held.Run.ResourceHold)
 			}
 		})
 	}

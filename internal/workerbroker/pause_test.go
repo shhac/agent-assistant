@@ -1,105 +1,53 @@
 package workerbroker
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
+	"github.com/shhac/lib-agent-harness/session"
 )
 
-func awaitPaused(t *testing.T, b *Broker, id string) storedRun {
-	t.Helper()
-	deadline := time.After(3 * time.Second)
-	for {
-		r, _ := b.snapshot(id)
-		if r.Run.Status == "paused" {
-			return r
-		}
-		select {
-		case <-deadline:
-			t.Fatal("worker did not confirm paused", r.Run)
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-}
-func TestPauseFinishesModelBoundarySkipsToolsAndWaitsForCleanup(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	cleanup := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	var tools atomic.Int32
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"should-not-run","type":"function","function":{"name":"run_command","arguments":"{\"command\":\"echo skip\"}"}}]}}]}`))
-	}))
-	defer model.Close()
-	d := &fakeDocker{}
-	b, _ := newFixture(t, model.URL, d)
-	b.cfg.Command = CommandFunc(func(ctx context.Context, args []string, in []byte) ([]byte, error) {
-		if args[0] == "exec" {
-			tools.Add(1)
-		}
-		if args[0] == "rm" {
-			close(cleanup)
-			select {
-			case <-releaseCleanup:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		return d.Run(ctx, args, in)
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; b.Close() }()
-	response := request(t, b, "/runs", "dispatch-one", startRequest())
+// Pausing a live worker is covered end-to-end in native_integration_test.go,
+// where a real turn is interrupted at a resumable point. What is here is the
+// durable side: an owner's hold outranks everything that happens afterwards, and
+// nothing a pause touches is allowed to claim more than it knows.
+
+// A pause is confirmed only once the container is confirmed gone. Until then the
+// assignment is still running, however the owner's request is recorded.
+func TestPauseIsNotConfirmedUntilCleanupIs(t *testing.T) {
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
+	defer b.Close()
+	id := runningRun(t, b)
+	response := request(t, b, "/runs/"+id+"/pause", "pause-once", struct{}{})
 	var run worker.Run
 	_ = json.Unmarshal(response.Body.Bytes(), &run)
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("model not started")
-	}
-	response = request(t, b, "/runs/"+run.ID+"/pause", "pause-once", struct{}{})
-	_ = json.Unmarshal(response.Body.Bytes(), &run)
 	if response.Code != 200 || run.Status != "running" || !run.PauseRequested {
-		t.Fatal("pause falsely confirmed before boundary", response.Code, run)
+		t.Fatal("pause falsely confirmed before the boundary", response.Code, run)
 	}
-	select {
-	case <-cleanup:
-		t.Fatal("pause killed active model")
-	default:
+	held, _ := b.snapshot(id)
+	if held.PendingStatus != "paused" {
+		t.Fatalf("the owner's hold was not recorded: %q", held.PendingStatus)
 	}
-	close(release)
-	select {
-	case <-cleanup:
-	case <-time.After(3 * time.Second):
-		t.Fatal("cleanup not started")
+	// Cleanup that could not be confirmed leaves execution where it was.
+	b.cleanupUncertain(id, "Cleanup unconfirmed")
+	uncertain, _ := b.snapshot(id)
+	if uncertain.Run.Status != "running" || uncertain.PendingStatus != "paused" {
+		t.Fatal("unconfirmed cleanup released execution", uncertain)
 	}
-	r, _ := b.snapshot(run.ID)
-	if r.Run.Status != "running" || tools.Load() != 0 {
-		t.Fatal("pause ran tools or released before cleanup", r.Run, tools.Load())
+	// And an ordinary message cannot wake a worker the owner has held.
+	if code := request(t, b, "/runs/"+id+"/messages", "must-not-wake", map[string]string{"message": "wake"}).Code; code != 409 {
+		t.Fatal("ordinary message resumed a held worker", code)
 	}
-	close(releaseCleanup)
-	r = awaitPaused(t, b, run.ID)
-	if len(r.Transcript) == 0 || r.Run.PauseRequested {
-		t.Fatal("checkpoint lost or request remained", r)
-	}
-	response = request(t, b, "/runs/"+run.ID+"/messages", "must-not-wake", map[string]string{"message": "wake"})
-	if response.Code != 409 {
-		t.Fatal("ordinary message resumed paused worker")
+	b.finalize(id, "completed", "Synthetic outcome", nil)
+	paused, _ := b.snapshot(id)
+	if paused.Run.Status != "paused" || paused.Run.PauseRequested {
+		t.Fatalf("confirmed cleanup did not settle the pause: %q request=%v", paused.Run.Status, paused.Run.PauseRequested)
 	}
 }
-func TestPauseSurvivesBrokerRestartAndResumeReusesWorkspace(t *testing.T) {
-	b, cfg := newFixture(t, "http://127.0.0.1:9999", &fakeDocker{})
+
+func TestPauseSurvivesBrokerRestartAndResumeReusesTheSession(t *testing.T) {
+	b, cfg := newFixture(t, "https://model.test", &fakeDocker{})
 	response := request(t, b, "/runs", "dispatch-one", startRequest())
 	var run worker.Run
 	_ = json.Unmarshal(response.Body.Bytes(), &run)
@@ -107,7 +55,8 @@ func TestPauseSurvivesBrokerRestartAndResumeReusesWorkspace(t *testing.T) {
 		r.Run.Status = "running"
 		r.Run.PauseRequested = true
 		r.PendingStatus = "paused"
-		r.Transcript = []modelMessage{{Role: "user", Content: "Preserved context"}}
+		r.Session = &session.Ref{Engine: "claude", ID: "session-1"}
+		r.SessionPhase = phaseOpen
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -127,67 +76,16 @@ func TestPauseSurvivesBrokerRestartAndResumeReusesWorkspace(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 	resumed, _ := reopened.snapshot(run.ID)
-	if resumed.Run.Status != "queued" || len(resumed.Transcript) != 1 || resumed.Run.ID != run.ID {
-		t.Fatal("resume discarded original session", resumed)
+	if resumed.Run.Status != "queued" || resumed.Run.ID != run.ID {
+		t.Fatal("resume did not requeue the same assignment", resumed)
+	}
+	if resumed.Session == nil || resumed.Session.ID != "session-1" {
+		t.Fatal("resume discarded the coding session", resumed.Session)
 	}
 }
 
-func TestPauseLetsActiveToolFinishButSkipsRemainingOperations(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int32
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"first","type":"function","function":{"name":"run_command","arguments":"{\"command\":\"echo one\"}"}},{"id":"second","type":"function","function":{"name":"run_command","arguments":"{\"command\":\"echo two\"}"}}]}}]}`))
-	}))
-	defer model.Close()
-	d := &fakeDocker{}
-	b, _ := newFixture(t, model.URL, d)
-	b.cfg.Command = CommandFunc(func(ctx context.Context, args []string, in []byte) ([]byte, error) {
-		if args[0] == "exec" {
-			if calls.Add(1) == 1 {
-				close(started)
-				select {
-				case <-release:
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
-			}
-		}
-		return d.Run(ctx, args, in)
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-	defer func() { cancel(); <-done; b.Close() }()
-	response := request(t, b, "/runs", "dispatch-one", startRequest())
-	var run worker.Run
-	_ = json.Unmarshal(response.Body.Bytes(), &run)
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("tool did not start")
-	}
-	response = request(t, b, "/runs/"+run.ID+"/pause", "pause-tool", struct{}{})
-	if response.Code != 200 {
-		t.Fatal(response.Body.String())
-	}
-	current, _ := b.snapshot(run.ID)
-	if current.Run.Status != "running" {
-		t.Fatal("active tool interrupted by pause")
-	}
-	close(release)
-	current = awaitPaused(t, b, run.ID)
-	if calls.Load() != 1 || len(current.Commands) != 1 || !current.Commands[0].Success {
-		t.Fatal("pause lost active result or executed another command", calls.Load(), current.Commands)
-	}
-	repaired := repairTranscript(current.Transcript)
-	if repaired[len(repaired)-1].ToolCallID != "second" {
-		t.Fatal("resume cannot reconcile deferred calls", repaired)
-	}
-}
 func TestPausePreservesPeerOutboxBeforeResume(t *testing.T) {
-	b, _ := newFixture(t, "http://127.0.0.1:9999", &fakeDocker{})
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
 	response := request(t, b, "/runs", "dispatch-one", startRequest())
 	var run worker.Run
@@ -214,7 +112,7 @@ func TestPausePreservesPeerOutboxBeforeResume(t *testing.T) {
 }
 
 func TestPauseCleanupFailureNeverClaimsCheckpointIsStopped(t *testing.T) {
-	b, _ := newFixture(t, "http://127.0.0.1:9999", &fakeDocker{})
+	b, _ := newFixture(t, "https://model.test", &fakeDocker{})
 	defer b.Close()
 	response := request(t, b, "/runs", "dispatch-one", startRequest())
 	var run worker.Run

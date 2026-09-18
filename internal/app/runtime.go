@@ -328,10 +328,39 @@ func (a *App) superviseAgent(ctx context.Context, agent core.Agent, noDispatch b
 // resource ledger travels with every report so the owner sees what an
 // assignment has consumed, not only what it is waiting for.
 func agentUpdate(run worker.Run, status string) core.AgentUpdate {
-	out := core.AgentUpdate{ModelFailureEngine: run.ModelFailureEngine, ModelFailurePhase: run.ModelFailurePhase, ModelFailureCode: run.ModelFailureCode, ModelFailureEvidence: run.ModelFailureEvidence, ModelExitCode: run.ModelExitCode, ContextCompactions: run.ContextCompactions, ContextBytes: run.ContextBytes, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt,
-		UsageInputTokens: run.Usage.InputTokens, UsageOutputTokens: run.Usage.OutputTokens, UsageUnknownCalls: run.Usage.UnknownCalls, TokenBudget: run.Usage.TokenBudget}
+	out := core.AgentUpdate{ModelFailureEngine: run.ModelFailureEngine, ModelFailurePhase: run.ModelFailurePhase, ModelFailureCode: run.ModelFailureCode, ModelFailureEvidence: run.ModelFailureEvidence, ModelExitCode: run.ModelExitCode, ContextCompactions: run.ContextCompactions, ContextUsedPercent: run.Context.UsedPercent, ContextQuality: run.Context.Quality, RetryAt: run.RetryAt, ProviderFailures: run.ProviderFailures, ProviderFailureKind: run.ProviderFailureKind, Status: status, Summary: run.Summary, Evidence: run.Evidence, ExternalID: run.ID, UpdatedAt: run.UpdatedAt,
+		UsageInputTokens: run.Usage.InputTokens, UsageOutputTokens: run.Usage.OutputTokens, UsageUnknownCalls: run.Usage.UnknownCalls, TokenBudget: run.Usage.TokenBudget,
+		ObservedInputTokens: run.Usage.ObservedInputTokens, ObservedOutputTokens: run.Usage.ObservedOutputTokens}
+	if run.Session != nil {
+		out.SessionEngine, out.SessionResumed = run.Session.Engine, run.Session.Resumed
+	}
 	if run.ResourceHold != nil {
 		out.ResourceHoldKind, out.ResourceHoldOwnerAction, out.ResourceHoldResetsAt = run.ResourceHold.Kind, run.ResourceHold.OwnerAction, run.ResourceHold.ResetsAt
+	}
+	out.Work = workObservations(run.Activity)
+	return out
+}
+
+// workObservations carries the worker's recent activity through to the owner's
+// surfaces. A native worker can spend an hour inside one turn, so a single
+// summary line is not enough to tell working from stuck; this is what makes the
+// difference visible. The daemon has already bounded and sanitized it.
+func workObservations(entries []worker.Activity) []core.AgentWork {
+	// Only the recent tail travels. The full record stays with the assignment,
+	// where it can be inspected without putting it in every status report.
+	const shown = 40
+	dropped := false
+	if len(entries) > shown {
+		entries, dropped = entries[len(entries)-shown:], true
+	}
+	out := make([]core.AgentWork, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, core.AgentWork{At: entry.At, Kind: entry.Kind, Tool: entry.Tool, Status: entry.Status, Detail: entry.Detail, Truncated: entry.Truncated})
+	}
+	if dropped && len(out) > 0 {
+		// Say the feed starts mid-assignment. Without this it reads as the whole
+		// of what the worker did.
+		out[0].Truncated = true
 	}
 	return out
 }

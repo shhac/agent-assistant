@@ -252,6 +252,14 @@ func (b *Broker) control(w http.ResponseWriter, r *http.Request) {
 				run.UsageUnknownCalls++
 				publishUsage(run, b.tokenBudget())
 			}
+			// An assignment from the previous contract converts its preserved
+			// evidence into a handover brief exactly once, here, where the owner
+			// has explicitly asked for it to continue rather than accepting what
+			// it already produced.
+			run.migrate()
+			// Direction whose delivery was never established is the owner's call,
+			// and this is them making it.
+			run.resolveUncertainDelivery()
 		}
 		run.Messages = append(run.Messages, message)
 		if run.Run.Status == "retry_wait" || run.Run.Status == "usage_wait" || run.Run.Status == "paused" || run.Run.Status == "blocked" || run.Run.Status == "interrupted" || (run.Run.Status == "waiting" && (run.Run.Message == nil || key == "peer-message-ack:"+run.Request.AgentID+":"+run.Run.Message.RequestID)) {

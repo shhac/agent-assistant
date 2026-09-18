@@ -17,7 +17,7 @@ import (
 func TestModelFailureReportsRunAndStageWithoutLeakingPayload(t *testing.T) {
 	b, _ := newFixture(t, "http://127.0.0.1:1", &fakeDocker{})
 	defer b.Close()
-	id := providerRun(t, b)
+	id := failingRun(t, b)
 	var buf bytes.Buffer
 	b.cfg.Diagnostics = diagnostics.New(&buf)
 	b.modelFailureAt(id, "context_preparation", errors.New("private-model-response"))
@@ -37,13 +37,23 @@ func TestModelFailureReportsRunAndStageWithoutLeakingPayload(t *testing.T) {
 	}
 }
 
-func TestProviderRetryLogReflectsDurableCooldown(t *testing.T) {
+// A cooldown saved by an earlier version of this daemon still travels with the
+// diagnostic, so an operator reading their log is told the same thing the run
+// state says rather than being left to compare the two.
+func TestADurableCooldownTravelsWithTheDiagnostic(t *testing.T) {
 	b, _ := newFixture(t, "http://127.0.0.1:1", &fakeDocker{})
 	defer b.Close()
-	id := providerRun(t, b)
+	id := failingRun(t, b)
+	if err := b.update(id, func(r *storedRun) error {
+		r.Run.Status = "retry_wait"
+		r.Run.RetryAt = now().Add(time.Minute)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
 	b.cfg.Diagnostics = diagnostics.New(&buf)
-	b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorOverloaded, Engine: "claude", Phase: completion.PhaseResponse, Code: "overloaded"})
+	b.reportFailure(id, "native_turn", &completion.RequestError{Kind: completion.ErrorOverloaded, Engine: "claude", Phase: completion.PhaseResponse, Code: "overloaded"})
 	var event diagnostics.Event
 	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
 		t.Fatal(err)
@@ -70,7 +80,7 @@ func TestRetryDiagnosticRequiresEffectiveWaitAndFutureCooldown(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			b, _ := newFixture(t, "http://127.0.0.1:1", &fakeDocker{})
 			defer b.Close()
-			id := providerRun(t, b)
+			id := failingRun(t, b)
 			if err := b.update(id, func(r *storedRun) error {
 				r.Run.Status = tt.status
 				r.PendingStatus = tt.pending
@@ -93,10 +103,12 @@ func TestRetryDiagnosticRequiresEffectiveWaitAndFutureCooldown(t *testing.T) {
 	}
 }
 
-func TestFailedRetryPersistenceDoesNotReportPreviousCooldownAsScheduled(t *testing.T) {
+// A failure whose record could not be written must not report the cooldown the
+// run happened to be carrying as if this attempt had scheduled one.
+func TestFailedPersistenceDoesNotReportAPreviousCooldownAsScheduled(t *testing.T) {
 	b, _ := newFixture(t, "http://127.0.0.1:1", &fakeDocker{})
 	defer b.Close()
-	id := providerRun(t, b)
+	id := failingRun(t, b)
 	if err := b.update(id, func(r *storedRun) error { r.Run.RetryAt = now().Add(-time.Minute); return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -108,16 +120,16 @@ func TestFailedRetryPersistenceDoesNotReportPreviousCooldownAsScheduled(t *testi
 		t.Fatal(err)
 	}
 	b.cfg.StateDir = blocked
-	b.modelFailure(id, &completion.RequestError{Kind: completion.ErrorOverloaded})
+	b.modelFailureAt(id, "native_turn", errors.New("opaque failure"))
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
-	if len(lines) != 2 {
-		t.Fatalf("expected persistence and model diagnostics, got %d", len(lines))
+	if len(lines) == 0 {
+		t.Fatal("no diagnostic was written at all")
 	}
 	var event diagnostics.Event
-	if err := json.Unmarshal(lines[1], &event); err != nil {
+	if err := json.Unmarshal(lines[len(lines)-1], &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Stage != "model_completion" || event.RetryAt != nil || event.FixableBy == "retry" {
+	if event.RetryAt != nil || event.FixableBy == "retry" {
 		t.Fatalf("failed persistence claimed a scheduled retry: %+v", event)
 	}
 	run, _ := b.snapshot(id)

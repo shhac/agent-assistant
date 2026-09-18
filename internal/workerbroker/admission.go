@@ -11,16 +11,8 @@ import (
 	"github.com/shhac/agent-assistant/internal/integrations/worker"
 )
 
-// Stages name which kind of inference is being admitted. A context summary is
-// as billable as an ordinary turn and is admitted and accounted identically.
-const (
-	stageTurn    = "model_turn"
-	stageSummary = "context_summary"
-)
-
 // reserveWorkerModelCall is the one place a worker's model work is authorized.
-// It runs as the completion transport's BeforeRequest hook, which fires after
-// non-billable local probes and immediately before the request leaves, so a
+// It runs immediately before a turn is handed to the coding session, so a
 // refusal here spends nothing and a failure earlier adds no unknown usage.
 //
 // Order matters: the local budget is checked before the account is inspected,

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/shhac/lib-agent-harness/completion"
+	"github.com/shhac/lib-agent-harness/session"
 )
 
 func TestFailuresAreStructuredAndDoNotCopySensitiveErrorText(t *testing.T) {
@@ -67,5 +68,56 @@ func TestConcurrentFailuresRemainSingleJSONRecords(t *testing.T) {
 		if !json.Valid(line) {
 			t.Fatalf("invalid line: %s", line)
 		}
+	}
+}
+
+// A coding harness classifies its own failures. Reporting them as untyped meant
+// an operator whose CLI login had expired saw a diagnostic with nothing in it
+// they could act on.
+func TestNativeHarnessFailureKeepsItsCodeAndEngine(t *testing.T) {
+	status := 3
+	for _, tc := range []struct {
+		name   string
+		err    error
+		code   string
+		engine string
+	}{
+		{"turn", &session.TurnError{Engine: "claude", Code: "authentication_failed"}, "authentication_failed", "claude"},
+		{"process", &session.ProcessError{Engine: "codex", Code: session.ProcessExited, ExitCode: &status}, session.ProcessExited, "codex"},
+		{"capability", &session.CapabilityError{Engine: "codex", Code: session.CapabilityNativeToolsPresent, Phase: session.BeforeLaunch}, session.CapabilityNativeToolsPresent, "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			// Wrapped, because that is how the daemon receives it.
+			New(&buf).Failure(Event{Component: "worker", Stage: "native_turn"}, fmt.Errorf("worker turn: %w", tc.err))
+			var event Event
+			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Code != tc.code {
+				t.Fatalf("native diagnostic code lost: got %q", event.Code)
+			}
+			if event.Engine != tc.engine || event.Kind == "" {
+				t.Fatalf("native failure lost its engine or family: %+v", event)
+			}
+			if tc.name == "process" && (event.ExitCode == nil || *event.ExitCode != status) {
+				t.Fatalf("exit status lost: %+v", event.ExitCode)
+			}
+		})
+	}
+}
+
+// A caller that already knows the code keeps it. A harness diagnostic arrives
+// with one, and overwriting it threw away better information than this package
+// has.
+func TestACallerSuppliedCodeSurvives(t *testing.T) {
+	var buf bytes.Buffer
+	New(&buf).Failure(Event{Component: "worker", Stage: "harness_startup", Code: "harness_stderr"}, errors.New("opaque"))
+	var event Event
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Code != "harness_stderr" {
+		t.Fatalf("a supplied code was replaced: %q", event.Code)
 	}
 }

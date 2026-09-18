@@ -5,7 +5,7 @@ import "github.com/shhac/agent-assistant/internal/diagnostics"
 func (b *Broker) reportFailure(id, stage string, err error) {
 	event := diagnostics.Event{Component: "worker", Stage: stage, ProjectID: b.cfg.ProjectID, RunID: id, Engine: b.cfg.Engine}
 	if run, getErr := b.snapshot(id); getErr == nil {
-		event.ModelCalls, event.ContextBytes = run.ModelCalls, run.Run.ContextBytes
+		event.ModelCalls = run.ModelCalls
 		status := run.Run.Status
 		if run.PendingStatus != "" {
 			status = run.PendingStatus
