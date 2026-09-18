@@ -39,7 +39,43 @@ const (
 	// a test can say what the harness was actually told, and how many times —
 	// which is the difference between direction delivered and direction repeated.
 	promptEnv = "FAKE_CLI_PROMPT_FILE"
+	// gateEnv names a file this process waits for before making a scripted
+	// trailing call, and resultEnv names the file that call's outcome is written
+	// to. Together they let a test place a request at a known point in the
+	// daemon's lifecycle rather than guessing with a sleep.
+	gateEnv   = "FAKE_CLI_TRAILING_GATE"
+	resultEnv = "FAKE_CLI_TRAILING_RESULT"
 )
+
+// awaitGate waits for the test to say it is ready. Bounded, so a fixture whose
+// test failed early stops rather than holding a process open.
+func awaitGate() bool {
+	path := os.Getenv(gateEnv)
+	if path == "" {
+		return true
+	}
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
+// recordTrailing reports what the trailing call actually produced, so a test can
+// tell a refusal apart from a call that never happened.
+func recordTrailing(text string, isError bool) {
+	path := os.Getenv(resultEnv)
+	if path == "" {
+		return
+	}
+	outcome := "ok"
+	if isError {
+		outcome = "refused"
+	}
+	appendLine(path, outcome+": "+strings.Join(strings.Fields(text), " "))
+}
 
 // recordPrompt appends what the harness was told, flattened to one line.
 func recordPrompt(text string) {

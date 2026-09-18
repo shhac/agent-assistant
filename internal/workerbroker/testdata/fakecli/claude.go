@@ -196,11 +196,15 @@ func (s *claudeSession) runTurn(plan []turnScript) {
 	if trailing == "" {
 		return
 	}
-	// A call made after the turn has already ended. The pause is so this is about
-	// the state the channel is left in rather than about racing the terminal
-	// frame down a different socket than the one that carried it.
-	time.Sleep(50 * time.Millisecond)
-	s.tools.invoke(trailing, map[string]any{"path": "after-the-turn.txt", "content": "late"})
+	// A call made after the turn has already ended. It waits for the test to say
+	// the daemon has finished with that turn, so this is about the state the
+	// channel is left in rather than about racing a terminal frame down a
+	// different socket than the one that carried it.
+	if !awaitGate() {
+		return
+	}
+	text, isError := s.tools.invoke(trailing, map[string]any{"path": "after-the-turn.txt", "content": "late"})
+	recordTrailing(text, isError)
 }
 
 func (s *claudeSession) terminal(failed bool, subtype string) {

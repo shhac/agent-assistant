@@ -737,35 +737,80 @@ func TestOwnerPauseCheckpointsALiveTurn(t *testing.T) {
 	}
 }
 
-// A turn ending does not close the daemon's tool channel by itself, and an
-// instant with nothing running is not a stopped worker — it is the gap between
-// two calls. A harness that sends one just after its turn reports terminal must
-// find the channel closed, and it must stay closed until an admitted turn opens
-// it again. Otherwise a write lands after the assignment was checkpointed, and
-// the evidence collected in between describes a workspace that was still moving.
+// A turn ending closes the daemon's tool channel, and it stays closed until an
+// admitted turn opens it again. A harness that asks for a tool in between must
+// be refused — otherwise a write lands after the assignment was checkpointed,
+// and the evidence collected in between describes a workspace that was still
+// moving.
+//
+// This drives one turn against the real harness transport and then holds the
+// session open, because the question is what the channel does while the session
+// is alive and quiet. Waiting for the whole assignment to finish would close the
+// session first, and a late call that never arrived proves nothing either way.
+// The library proves the same barrier deterministically in
+// TestATurnEndingClosesToolAdmissionWithoutCancellingWhatRuns; what is being
+// established here is that the application wires it up.
 func TestNoToolRunsBetweenATerminalTurnAndTheNextAdmittedOne(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "gate")
+	outcome := filepath.Join(t.TempDir(), "trailing")
 	h := newHarness(t, "claude", []map[string]any{
-		// The turn ends, then the harness sends one more call anyway.
+		// The turn ends, then the harness asks for one more tool anyway.
 		turnScript(map[string]any{"trailing": "write_file"}),
-	}, nil)
-	id := h.start(t, "end a turn and keep calling")
-	run := h.await(t, id, 90*time.Second, settled...)
-	if run.Run.Status != "blocked" {
-		t.Fatalf("unexpected status %q: %s", run.Run.Status, run.Run.Summary)
+	}, map[string]string{
+		"FAKE_CLI_TRAILING_GATE":   gate,
+		"FAKE_CLI_TRAILING_RESULT": outcome,
+	})
+	runner, id := h.session(t, "end a turn and keep calling")
+	defer runner.close()
+
+	prompt, err := h.broker.nextTurnInput(id)
+	if err != nil || prompt == "" {
+		t.Fatalf("no opening prompt: %q %v", prompt, err)
 	}
-	// The late call is the one that must not have happened.
-	if _, err := os.Stat(filepath.Join(h.runner.workspace(), "after-the-turn.txt")); err == nil {
+	if !runner.turn(t.Context(), prompt) {
+		run, _ := h.broker.snapshot(id)
+		t.Fatalf("the turn did not complete: %q %s", run.Run.Status, run.Run.Summary)
+	}
+	// The turn is over and its tools are settled. The session is still open, so
+	// the harness is still there to ask — which is the situation being tested.
+	if h.broker.snapshotMust(t, id).Run.Status != "running" {
+		t.Fatal("the assignment ended before the late call could be made")
+	}
+
+	// Now let the harness make its late request.
+	if err = os.WriteFile(gate, []byte("go"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recorded := awaitFileContents(t, outcome, 30*time.Second)
+	if !strings.HasPrefix(recorded, "refused:") {
+		t.Fatalf("a tool call after the turn ended was not refused: %q", recorded)
+	}
+	if !strings.Contains(recorded, "paused") {
+		t.Errorf("the refusal did not say the channel was closed: %q", recorded)
+	}
+	// It was refused, not merely unlucky: nothing reached the workspace.
+	if _, err = os.Stat(filepath.Join(h.runner.workspace(), "after-the-turn.txt")); err == nil {
 		t.Fatal("a tool call after the turn ended wrote to the workspace")
 	}
-	for _, record := range run.Commands {
-		t.Errorf("a command ran after the turn ended: %+v", record)
-	}
-	// And the refusal is recorded, rather than the write silently not happening.
-	// There is no turn left to observe it on — which is the point — so it lands
-	// in the daemon's diagnostics.
+	// And the daemon recorded it. There is no turn left to observe it on — which
+	// is the point — so it lands in the daemon's own diagnostics.
 	if log := h.diagnostics.String(); !strings.Contains(log, "tool_refused") || !strings.Contains(log, "write_file") {
 		t.Errorf("the late call was not reported anywhere: %s", log)
 	}
+}
+
+// awaitFileContents waits for a file the synthetic harness writes when it has
+// done something, so a test can wait for an event rather than for a duration.
+func awaitFileContents(t *testing.T, path string, within time.Duration) string {
+	t.Helper()
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); {
+		if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
+			return strings.TrimSpace(string(raw))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the harness never recorded an outcome at %s", path)
+	return ""
 }
 
 // A session outlives the call that opened it. Binding the harness process to the
@@ -871,6 +916,43 @@ func TestLegacyAssignmentMigratesOnExplicitResumeOnly(t *testing.T) {
 	if len(continued.Commands) != 1 {
 		t.Errorf("the earlier attempt's command evidence was discarded: %+v", continued.Commands)
 	}
+}
+
+// session opens one assignment's real coding session and hands back the runner
+// driving it, for the cases where the question is what happens between turns
+// rather than how an assignment ends. The caller owns closing it.
+func (h *harness) session(t *testing.T, task string) (*nativeRunner, string) {
+	t.Helper()
+	// Its own container directory, since nothing here starts a container.
+	h.runner.mu.Lock()
+	h.runner.root = t.TempDir()
+	h.runner.mu.Unlock()
+	id := h.insert(t, func(run *storedRun) {
+		run.Run.Status = "running"
+		run.Request.Task = task
+	})
+	toolDir, err := h.broker.toolDirectory(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.broker.snapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &nativeRunner{broker: h.broker, id: id, run: stored}
+	if err = runner.open(t.Context(), toolDir); err != nil {
+		t.Fatalf("the coding session did not open: %v", err)
+	}
+	return runner, id
+}
+
+func (b *Broker) snapshotMust(t *testing.T, id string) storedRun {
+	t.Helper()
+	run, err := b.snapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
 }
 
 // awaitRunning waits for a worker whose session is open and whose turn is live.
