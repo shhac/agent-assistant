@@ -115,10 +115,24 @@ export function explainFailure(agent: Agent): FailureExplanation | null {
     };
   }
 
+  const toolBoundary = {
+    unexpected_native_tool: {
+      headline: "The worker response failed the native-tool safety check",
+      known: "The harness detected an unexpected native tool. This older diagnostic does not distinguish an advertised tool from an attempted call; it does not establish a login or provider outage.",
+    },
+    unexpected_native_tool_catalog: {
+      headline: "Claude exposed tools outside the worker's allowed interface",
+      known: "The CLI advertised a native tool during constrained completion. The harness rejected the response; check CLI tool isolation before resuming.",
+    },
+    unexpected_native_tool_call: {
+      headline: "Claude attempted a tool outside the worker's allowed interface",
+      known: "The harness could not verify that the CLI rejected the tool as unavailable. No application actions from this response were accepted; inspect the integration before resuming.",
+    },
+  }[agent.model_failure_code as "unexpected_native_tool" | "unexpected_native_tool_catalog" | "unexpected_native_tool_call"];
   const evidence = agent.model_failure_evidence;
   return {
-    headline: failureKindPhrase(agent.provider_failure_kind),
-    known: evidencePhrase(evidence),
+    headline: toolBoundary?.headline ?? failureKindPhrase(agent.provider_failure_kind),
+    known: toolBoundary?.known ?? evidencePhrase(evidence),
     unknown:
       agent.model_failure_code || evidence === "typed_envelope"
         ? ""

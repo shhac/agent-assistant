@@ -188,6 +188,10 @@ func failureEvidence(failure *completion.RequestError, kind completion.ErrorKind
 	if failure.Phase == completion.PhaseProcess {
 		return evidenceLocalProcess
 	}
+	switch failure.Code {
+	case "unexpected_native_tool", "unexpected_native_tool_catalog", "unexpected_native_tool_call", "invalid_action_envelope", "malformed_event_json":
+		return evidenceApplication
+	}
 	if kind == completion.ErrorUnknown && failure.Kind != completion.ErrorUnknown {
 		return evidenceUnclassified
 	}

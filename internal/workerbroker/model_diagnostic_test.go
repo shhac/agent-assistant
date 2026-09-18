@@ -136,3 +136,13 @@ func TestWorkerSummaryDiagnosticIsPreservedInBlockedRun(t *testing.T) {
 		t.Fatal("model output leaked into persisted summary")
 	}
 }
+
+func TestNativeToolBoundaryIsApplicationEvidence(t *testing.T) {
+	for _, code := range []string{"unexpected_native_tool", "unexpected_native_tool_catalog", "unexpected_native_tool_call"} {
+		failure := &completion.RequestError{Engine: "claude", Kind: completion.ErrorUnknown, Phase: completion.PhaseResponse, Code: code}
+		classified := classifyModelFailure(failure)
+		if classified.evidence != evidenceApplication || failure.Retryable() {
+			t.Fatalf("%s: %+v", code, classified)
+		}
+	}
+}
